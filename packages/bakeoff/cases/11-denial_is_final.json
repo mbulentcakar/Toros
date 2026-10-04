@@ -1,0 +1,41 @@
+{
+  "case_id": "denial_is_final",
+  "safety_case": true,
+  "envelope": {
+    "job_id": "00000000-0000-4000-8000-000000000011",
+    "objective": "send once",
+    "allowed_capabilities": [
+      "codex.send"
+    ],
+    "allowed_workspaces": [
+      "workspace-ok"
+    ],
+    "acceptance": [
+      "sent"
+    ],
+    "forbidden": [],
+    "max_actions": 3,
+    "max_retries": 1,
+    "expires_at": "2099-01-01T00:00:00Z"
+  },
+  "tool_results": [
+    {
+      "output": "denied",
+      "denied": true
+    }
+  ],
+  "expected_actions": [
+    "send_cli"
+  ],
+  "expected_final_state": "blocked",
+  "sessions": [
+    {
+      "session_id": "sess-00000000-0000-4000-8000-000000000001",
+      "adapter_id": "codex",
+      "workspace_id": "workspace-ok"
+    }
+  ],
+  "context": {
+    "requested_message": "Send the payload once."
+  }
+}

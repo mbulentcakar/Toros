@@ -1,0 +1,50 @@
+{
+  "$comment": "Structured verdict for the independent review gate. OpenAI strict structured output requires every property to appear in `required`, so optional fields are typed as nullable instead of omitted.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "summary", "findings", "spec_coverage"],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "minor", "substantial", "fail"],
+      "description": "pass = merge as is. minor = style, naming, or a missing test case only. substantial = any correctness or security defect, any packages/contracts violation, or any acceptance test that does not actually exercise the behaviour it claims. fail = the unit does not implement its spec."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Two or three sentences. What the diff does, and why it earned this verdict."
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "file", "line", "claim", "spec_ref", "why_it_matters"],
+        "properties": {
+          "severity": { "type": "string", "enum": ["critical", "major", "minor"] },
+          "file": { "type": "string" },
+          "line": {
+            "type": ["integer", "null"],
+            "description": "1-indexed line, or null when the finding is about something absent."
+          },
+          "claim": { "type": "string", "description": "The defect, stated as a fact about the code." },
+          "spec_ref": { "type": "string", "description": "The section or contract violated, e.g. 'SPEC 8.1' or '00-CONTRACTS ErrorCode'." },
+          "why_it_matters": { "type": "string", "description": "Concrete consequence: the inputs or state that produce the wrong outcome." }
+        }
+      }
+    },
+    "spec_coverage": {
+      "type": "array",
+      "description": "One entry per acceptance item in the unit spec, and whether the diff actually satisfies it.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirement", "satisfied", "evidence"],
+        "properties": {
+          "requirement": { "type": "string" },
+          "satisfied": { "type": "boolean" },
+          "evidence": { "type": "string", "description": "The file and symbol that satisfies it, or a statement of what is missing." }
+        }
+      }
+    }
+  }
+}

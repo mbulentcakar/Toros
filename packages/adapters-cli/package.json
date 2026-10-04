@@ -1,0 +1,19 @@
+{
+  "name": "@toros/adapters-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Supervised CLI agent adapters (Claude, Codex): one conversation per session, background exchanges, and per-exchange raw audit.",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": ["dist"],
+  "dependencies": {
+    "@toros/contracts": "file:../contracts"
+  }
+}

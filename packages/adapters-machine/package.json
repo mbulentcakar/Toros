@@ -1,0 +1,24 @@
+{
+  "name": "@toros/adapters-machine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "T2 read-only machine inventory adapter — reports readiness of known adapters/tools on this node",
+  "_comment_entrypoints": "tsconfig sets rootDir '.' so that src/ and test/ both compile, which puts the emitted entrypoint at dist/src/index.js — not dist/index.js. These paths must match that layout or every consumer fails with TS2307 'Cannot find module @toros/adapters-machine'.",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build",
+    "test": "npm run build && node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@toros/contracts": "*"
+  }
+}

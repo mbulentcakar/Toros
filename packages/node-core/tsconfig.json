@@ -1,0 +1,22 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "references": [
+    { "path": "../contracts" },
+    { "path": "../envelope" },
+    { "path": "../store" },
+    { "path": "../registry" },
+    { "path": "../policy" },
+    { "path": "../adapters-cli" },
+    { "path": "../adapters-app" },
+    { "path": "../adapters-machine" },
+    { "path": "../adapters-desktop" },
+    { "path": "../adapters-chrome" },
+    { "path": "../observer" },
+    { "path": "../relay" }
+  ]
+}

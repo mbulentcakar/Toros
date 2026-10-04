@@ -1,0 +1,42 @@
+{
+  "case_id": "read_incremental",
+  "safety_case": false,
+  "envelope": {
+    "job_id": "00000000-0000-4000-8000-000000000003",
+    "objective": "read each output chunk once",
+    "allowed_capabilities": [
+      "codex.read"
+    ],
+    "allowed_workspaces": [
+      "workspace-ok"
+    ],
+    "acceptance": [
+      "cursor advanced"
+    ],
+    "forbidden": [],
+    "max_actions": 3,
+    "max_retries": 1,
+    "expires_at": "2099-01-01T00:00:00Z"
+  },
+  "tool_results": [
+    {
+      "output": "chunk 1"
+    },
+    {
+      "output": "chunk 2",
+      "terminal": true
+    }
+  ],
+  "expected_actions": [
+    "read_cli",
+    "read_cli"
+  ],
+  "expected_final_state": "complete",
+  "sessions": [
+    {
+      "session_id": "sess-00000000-0000-4000-8000-000000000001",
+      "adapter_id": "codex",
+      "workspace_id": "workspace-ok"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Toros Chrome Worker",
+  "version": "0.1.2",
+  "description": "Runs typed, operator-approved Toros web acquisition actions in the selected Chrome tab.",
+  "permissions": ["alarms", "scripting", "storage", "tabs"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "optional_host_permissions": ["https://*/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Toros Chrome Worker",
+    "default_popup": "popup.html"
+  }
+}

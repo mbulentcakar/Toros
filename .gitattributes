@@ -1,0 +1,21 @@
+# Line endings are normalised to LF in the repository.
+#
+# Without this, a file's stored bytes depend on which machine committed it.
+# Implementer units are dispatched into WSL against a Windows checkout: the
+# working tree holds CRLF (core.autocrlf=true on the Windows side), WSL git does
+# not convert on commit, and the blob lands with CRLF where it previously had
+# LF. The result is a whole-file diff for a ten-line change — one unit reported
+# 2136 lines changed when the real number was 328 — and a whole-file conflict on
+# merge, as docs/DEPLOY.md produced.
+#
+# `text=auto` lets git decide what is text, then stores it with LF. Checkouts
+# still get CRLF on Windows, so nothing changes for an editor on this machine.
+* text=auto
+
+# Binary, never converted. Corrupting these is silent.
+*.png binary
+*.ico binary
+*.xlsx binary
+*.xlsm binary
+*.tar.gz binary
+*.db binary

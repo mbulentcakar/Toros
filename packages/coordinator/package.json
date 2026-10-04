@@ -1,0 +1,31 @@
+{
+  "name": "@toros/coordinator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The one-job Hermes coordinator runtime",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "bin": {
+    "hermes": "./dist/src/main.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build",
+    "test": "npm run build && node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@toros/contracts": "*",
+    "@toros/envelope": "*"
+  },
+  "devDependencies": {
+    "@toros/node-core": "*",
+    "@toros/store": "*"
+  }
+}

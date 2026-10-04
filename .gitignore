@@ -1,0 +1,38 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Dependencies and build output
+node_modules/
+target/
+dist/
+build/
+
+# Runtime state.
+#
+# These are ANCHORED with a leading slash on purpose. Unanchored, `relay/`
+# matches at any depth — including `packages/relay`, which silently excluded
+# that whole package from a commit and reported nothing but a hint. Anchoring
+# keeps them meaning "the runtime directory at the repository root".
+*.db
+*.db-shm
+*.db-wal
+/artifacts/
+/relay/
+/logs/
+
+# TypeScript project-references build state
+*.tsbuildinfo
+
+# Dispatch scaffolding installed into worktrees, never part of a slice
+.opencode/
+.workspace-agent/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+

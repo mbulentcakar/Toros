@@ -1,0 +1,30 @@
+[package]
+name = "toros-cockpit"
+version = "0.1.0"
+description = "Toros cockpit shell"
+edition = "2021"
+rust-version = "1.77"
+
+# No [lib] target. The Tauri template ships one for mobile, where the app is
+# built as a library the platform loads; this shell is a desktop binary and has
+# only src/main.rs, so declaring a lib made cargo fail to parse the manifest
+# with "can't find library toros_cockpit_lib".
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+
+# The HTTP client is confined by the command's operation allowlist and fixed
+# loopback URL. The WebView never receives the credentials it uses.
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

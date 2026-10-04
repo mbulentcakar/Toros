@@ -1,0 +1,29 @@
+{
+  "name": "@toros/node-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The loopback-only Toros action authority and Hermes tool surface",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": ["dist"],
+  "dependencies": {
+    "@toros/contracts": "*",
+    "@toros/envelope": "*",
+    "@toros/store": "*",
+    "@toros/registry": "*",
+    "@toros/policy": "*",
+    "@toros/adapters-cli": "*",
+    "@toros/adapters-machine": "*",
+    "@toros/adapters-desktop": "*",
+    "@toros/adapters-app": "*",
+    "@toros/adapters-chrome": "*",
+    "@toros/relay": "*"
+  }
+}

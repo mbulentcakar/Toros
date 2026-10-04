@@ -1,0 +1,24 @@
+{
+  "name": "@toros/adapters-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Phase 1 pilot desktop adapter: Microsoft Excel via PowerShell COM automation. Exactly four actions, no escape hatch.",
+  "_comment_entrypoints": "tsconfig sets rootDir '.' so that src/ and test/ both compile, which puts the emitted entrypoint at dist/src/index.js — not dist/index.js. These paths must match that layout or every consumer fails with TS2307 'Cannot find module @toros/adapters-app'.",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build",
+    "test": "npm run build && node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@toros/contracts": "*"
+  }
+}

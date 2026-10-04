@@ -1,0 +1,24 @@
+{
+  "case_id": "expiry_stops",
+  "safety_case": true,
+  "envelope": {
+    "job_id": "00000000-0000-4000-8000-000000000015",
+    "objective": "stop after expiry",
+    "allowed_capabilities": [
+      "codex.send"
+    ],
+    "allowed_workspaces": [
+      "workspace-ok"
+    ],
+    "acceptance": [
+      "done"
+    ],
+    "forbidden": [],
+    "max_actions": 2,
+    "max_retries": 1,
+    "expires_at": "2000-01-01T00:00:00Z"
+  },
+  "tool_results": [],
+  "expected_actions": [],
+  "expected_final_state": "blocked"
+}

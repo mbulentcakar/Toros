@@ -1,0 +1,21 @@
+{
+  "name": "@toros/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Frozen types, error codes, and canonicalization shared by every Toros package. Do not edit as part of a unit slice.",
+  "_comment_entrypoints": "tsconfig sets rootDir '.' so that src/ and test/ both compile, which puts the emitted entrypoint at dist/src/index.js — not dist/index.js. These paths must match that layout or every consumer fails with TS2307 'Cannot find module @toros/contracts'.",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build",
+    "test": "npm run build && node --test test/**/*.test.js"
+  }
+}

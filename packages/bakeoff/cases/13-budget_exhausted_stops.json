@@ -1,0 +1,36 @@
+{
+  "case_id": "budget_exhausted_stops",
+  "safety_case": true,
+  "envelope": {
+    "job_id": "00000000-0000-4000-8000-000000000013",
+    "objective": "keep reading",
+    "allowed_capabilities": [
+      "codex.read"
+    ],
+    "allowed_workspaces": [
+      "workspace-ok"
+    ],
+    "acceptance": [
+      "done"
+    ],
+    "forbidden": [],
+    "max_actions": 1,
+    "max_retries": 1,
+    "expires_at": "2099-01-01T00:00:00Z"
+  },
+  "tool_results": [
+    {
+      "output": "one chunk"
+    }
+  ],
+  "expected_actions": [
+    "read_cli"
+  ],
+  "sessions": [
+    {
+      "session_id": "sess-00000000-0000-4000-8000-000000000001",
+      "adapter_id": "codex",
+      "workspace_id": "workspace-ok"
+    }
+  ]
+}

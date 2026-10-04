@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Toros Chrome Worker</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Toros Chrome Worker</p>
+      <h1>Use this tab for web capture</h1>
+      <p id="tab" class="muted">Checking the active tab…</p>
+      <section id="pairing">
+        <label>Node Core address<input id="node-url" value="http://127.0.0.1:8787/"></label>
+        <label>Pairing code<input id="code" inputmode="numeric" maxlength="8" placeholder="8-digit code"></label>
+        <button id="pair">Grant this site and pair</button>
+      </section>
+      <section id="connected" hidden>
+        <div class="status"><span></span><strong>Paired</strong></div>
+        <p class="muted">Toros can use only the selected tab and origins you grant here.</p>
+        <button id="select">Use the current tab</button>
+        <button id="refresh" class="secondary">Check for work now</button>
+      </section>
+      <p id="message" role="status"></p>
+    </main>
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

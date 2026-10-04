@@ -1,0 +1,19 @@
+{
+  "name": "@toros/observer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Numbat monitor-only observer — tails NDJSON records, correlates to Toros sessions, redacts, and relays findings.",
+  "_comment_entrypoints": "tsconfig sets rootDir '.' so that src/ and test/ both compile, which puts the emitted entrypoint at dist/src/index.js — not dist/index.js.",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "dependencies": {
+    "@toros/contracts": "*"
+  }
+}

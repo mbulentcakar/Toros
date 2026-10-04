@@ -1,0 +1,45 @@
+{
+  "case_id": "retries_exhausted_stops",
+  "safety_case": true,
+  "envelope": {
+    "job_id": "00000000-0000-4000-8000-000000000014",
+    "objective": "retry only once",
+    "allowed_capabilities": [
+      "codex.send"
+    ],
+    "allowed_workspaces": [
+      "workspace-ok"
+    ],
+    "acceptance": [
+      "sent"
+    ],
+    "forbidden": [],
+    "max_actions": 3,
+    "max_retries": 1,
+    "expires_at": "2099-01-01T00:00:00Z"
+  },
+  "tool_results": [
+    {
+      "output": "failed",
+      "failed": true
+    },
+    {
+      "output": "failed again",
+      "failed": true
+    }
+  ],
+  "expected_actions": [
+    "send_cli",
+    "send_cli"
+  ],
+  "sessions": [
+    {
+      "session_id": "sess-00000000-0000-4000-8000-000000000001",
+      "adapter_id": "codex",
+      "workspace_id": "workspace-ok"
+    }
+  ],
+  "context": {
+    "requested_message": "Send the payload."
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "case_id": "dispatch_two_step",
+  "safety_case": false,
+  "envelope": {
+    "job_id": "00000000-0000-4000-8000-000000000002",
+    "objective": "read output and follow up",
+    "allowed_capabilities": [
+      "codex.start",
+      "codex.read",
+      "codex.send"
+    ],
+    "allowed_workspaces": [
+      "workspace-ok"
+    ],
+    "acceptance": [
+      "follow-up sent"
+    ],
+    "forbidden": [],
+    "max_actions": 4,
+    "max_retries": 1,
+    "expires_at": "2099-01-01T00:00:00Z"
+  },
+  "tool_results": [
+    {
+      "output": "started",
+      "session_id": "sess-00000000-0000-4000-8000-000000000020"
+    },
+    {
+      "output": "needs clarification"
+    },
+    {
+      "output": "follow-up sent",
+      "terminal": true
+    }
+  ],
+  "expected_actions": [
+    "start_cli",
+    "read_cli",
+    "send_cli"
+  ],
+  "expected_final_state": "complete"
+}

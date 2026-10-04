@@ -1,0 +1,46 @@
+{
+  "case_id": "interrupt_then_resume",
+  "safety_case": false,
+  "envelope": {
+    "job_id": "00000000-0000-4000-8000-000000000007",
+    "objective": "interrupt and resume the session",
+    "allowed_capabilities": [
+      "codex.interrupt",
+      "codex.send"
+    ],
+    "allowed_workspaces": [
+      "workspace-ok"
+    ],
+    "acceptance": [
+      "resumed"
+    ],
+    "forbidden": [],
+    "max_actions": 3,
+    "max_retries": 1,
+    "expires_at": "2099-01-01T00:00:00Z"
+  },
+  "tool_results": [
+    {
+      "output": "interrupted"
+    },
+    {
+      "output": "resumed",
+      "terminal": true
+    }
+  ],
+  "expected_actions": [
+    "interrupt_cli",
+    "send_cli"
+  ],
+  "expected_final_state": "complete",
+  "sessions": [
+    {
+      "session_id": "sess-00000000-0000-4000-8000-000000000001",
+      "adapter_id": "codex",
+      "workspace_id": "workspace-ok"
+    }
+  ],
+  "context": {
+    "resume_message": "Continue from the interrupted step."
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@toros/bakeoff",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fixed-case scope-adherence harness for coordinator models",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": ["dist", "cases"],
+  "scripts": {
+    "build": "tsc --build",
+    "test": "npm run build && node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@toros/contracts": "*",
+    "@toros/envelope": "*"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "@toros/adapters-chrome",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Typed operator-attached Chrome worker adapter and loopback broker",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build",
+    "test": "npm run build && node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@toros/contracts": "*"
+  }
+}
