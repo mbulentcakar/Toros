@@ -721,8 +721,7 @@ Confirmed by the operator on 2026-10-13, after drafting:
 14. Toros cannot confine a driver that has its own shell. The driver profile in "What Toros cannot
     enforce" is a setup requirement, documented and warned about, not enforced by Toros.
 
-**Revision 2 behaviour that needs operator confirmation** (it does not contradict 1–14, but is
-new):
+Revision 2 behaviour, **confirmed by the operator on 2026-10-13**:
 
 - R2-a. A delegate denial **holds** the mission until the operator presses Resume (M1). This is
   one operator action per denial, not a per-action prompt (decision 8 stands).
