@@ -14,10 +14,11 @@ Toros should make handoffs observable, resumable, and safe without attempting to
 - A commercial multi-tenant product.
 - General remote desktop or remote shell access.
 - An unrestricted shell, arbitrary filesystem browser, or arbitrary UI clicker for Hermes.
-  Desktop control of an arbitrary application is admitted **only** under spec AS: an
-  operator-issued, task-bound, expiring mission, with every application and every mutating
-  action approved by a second, independent agent, or by the operator for the operator-only
-  tier. An *unapproved* clicker stays a non-goal for every caller, not only Hermes.
+  *Proposed (spec AS):* desktop control of any application Node Core can classify is admitted
+  **only** under spec AS: an operator-issued, task-bound, expiring mission, with every
+  application and every mutating action approved by a second, independent agent, or by the
+  operator for the operator-only tier. An *unapproved* clicker stays a non-goal for every
+  caller, not only Hermes.
 - Replacing GitHub as the canonical source, review, and release history.
 - Automatically committing, pushing, merging, deploying, or marking work accepted.
 - Building a universal workflow engine before the basic relay is proven.
@@ -527,6 +528,10 @@ Deliver:
 - immutable `JobEnvelope` and policy engine;
 - Claude and Codex CLI adapters;
 - exactly one operator-selected desktop application adapter;
+  *proposed amendment (spec AS, not in effect until accepted):* plus the spec AR read-only
+  discovery adapters and the spec AS delegated UI Automation adapter. AS mutation stays disabled on
+  every node until the prerequisites in spec AS have cleared, including AR's adversarial security
+  review and contract amendment A7;
 - initial Hermes structured-tool interface;
 - official Numbat integration in monitor-only mode;
 - local relay capsule creation and import;
@@ -607,11 +612,6 @@ These are candidates after Phase 3, not current scope:
 - disposable-repository UltraSwarm comparison;
 - TRELLIS.2 image-to-3D experiment if JanBot meets its requirements;
 - broader desktop adapter library and a higher-level workflow designer.
-
-**Amendment (proposed 2026-10-13, spec AS).** Phase 1's "exactly one desktop application adapter"
-is extended by spec AR (read-only discovery) and spec AS (delegated UI Automation control). AS
-mutation is not enabled on any node until the prerequisites listed in spec AS have cleared,
-including AR's adversarial security review.
 
 ## 12. Decisions required before implementation
 
