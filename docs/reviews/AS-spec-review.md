@@ -437,3 +437,291 @@ or the operator's acceptance gate.
   no local user paths or credential-shaped values.
 - Docs only: no executable tests were run, and none apply to this review-only change. No passing
   implementation tests or AS acceptance are claimed.
+
+## Re-review (revision 2)
+
+Reviewer: Codex, 2026-10-13. This is a delta review of
+`3a407aeee1d9ccc1d469365fe1bf7251899b2579` and
+`038d28851076492679e205700e0e37ee12fa9b0b`, fetched from `public/spec/desktop-grants`.
+The baseline is revision 1 at `7afe8678c447a639a3f9f1947a52ee3843edf2b8` and the findings above.
+All AS line references in this section refer to the immutable `038d288` version, not the
+revision 1 files still checked out on this review branch. The delta changes only AS, SPEC,
+00-CONTRACTS and V; it contains no implementation changes.
+
+The original verdict and seven-blocker list were posted first as a **comment-only review** on
+[PR #1](https://github.com/mbulentcakar/Toros/pull/1), as requested. GitHub returned review state
+`COMMENTED`. That comment explicitly identifies the revision 1 baseline; it is not a verdict on
+revision 2 merely because GitHub associates the submission with the current PR head.
+
+The fourteen original operator decisions and **R2-a through R2-d are requirements**. In
+particular, operator Resume after delegate denial, operator routing for unrecognized/embedded
+web surfaces, no application launching, and defaults of 200 requests/200 approver calls are
+accepted. `038d288` changes their status to operator-confirmed; it does not add another design
+change. No finding below asks the operator to reconsider those decisions or to add Phase 2
+confinement.
+
+VERDICT: ready after the listed blockers — revision 2 closes six original findings and materially
+improves six others, but target classification, complete replay binding, invalidation and CLI
+retention still leave implementers with unsafe or contradictory choices.
+
+### Disposition of every original finding
+
+“Closed” means closed at the specification level, not implemented, tested or operator-accepted.
+No original finding is wholly untouched; the remaining six are **partly closed**, rather than
+open. Newly introduced issues are distinguished below.
+
+| Finding | Status | Reason at revision 2 |
+|---|---|---|
+| B1 | **partly closed** | Classification now uses process creation time, image/signature/version evidence, integrity, element ownership and ancestry, with conservative unknown handling and Toros precedence (AS 124–210). Renames, elevation and common hosted surfaces are addressed. However, signature plus a broad UI framework is still not proof that a surface lacks embedded terminal/web or unmarked credential controls; the explicit password residual contradicts decision 13. Trusted population of the externally launched cockpit/MCP process registry is also unspecified. See R2-B1 below. |
+| B2 | **partly closed** | The gate table explicitly requires per-call operator decisions for protected reads, quarantine and unconditional omission of values (212–239); this closes standing read authority from an app grant. The approval record still cannot describe the exact bounded read, and gated-read pending/result shapes are absent from the MCP table. See R2-D1. |
+| B3 | **partly closed** | The server-prepared record now binds mission/generation, enrolled driver, job/digest, grant, process and a stated snapshot; AC replays its digest, and execution uses the same resolved object (241–301). The semantic/atomicity limitation is now honestly stated and is accepted as a limit of generic UIA. Runtime-id reuse plus an identical snapshot remains an identity hole; redaction introduces another equality hole, and read parameters remain outside the record. See R2-B3, R2-D1 and R2-D2. |
+| B4 | **partly closed** | Generation checks, a desktop lock, late-verdict rejection, audit-before-dispatch, Job Objects and uncertain-outcome handling address most lifecycle omissions (303–340). But invalidation after dispatch and before the UIA pattern call has no specified cancellation/recheck, and crash recovery of an executing audit record is not defined. The new Job Object mechanism also needs a safe creation/assignment sequence. See R2-B4 and R2-D4. |
+| B5 | **closed** | The original log-before-secret-refusal problem is closed by validation/scanning before persistence, publication, files or prompts, digest-only rejection, screen/verdict/error sanitization and a pinned AG prerequisite (342–366, 573–584). Logging admitted values in full preserves decision 9. The newly introduced enrollment nonce needs explicit coverage too (R2-D5); that is a new credential surface, not a reopening of the original event-order defect. |
+| B6 | **partly closed** | A dedicated runner replaces the ordinary session writer; clean working/config directories, identity/version/model pins, no-tool requirements, bounded completed exchanges and real-CLI verification are specified (368–399, 593, 663–671). The runner's own file ban does not explicitly suppress the CLIs' automatic session/transcript persistence, and test 37 searches only selected filenames under one root. See R2-B6. |
+| B7 | **closed** | A7 is now a definite, architect-owned AS0 prerequisite, with the event union, new `E_APPROVAL_DENIED`, delegated approval semantics and the complete unchanged-type inventory recorded in 00-CONTRACTS §10 A7 and AS 487–521/590. `ApprovalBinding` remains unchanged because the prepared record is digested. The new error-table wording has a separate compatibility defect (R2-D6), but the formerly missing amendment is present. |
+| M1 | **closed** | R2-a makes denial hold deterministic until logged operator Resume; R2-d fixes both default budgets at 200. Counts include failed/rejected admissions, reads and actions; exhaustion ends the mission, one request is in flight, and denial history is capped without silent loss (415–427). No further model decision can override a held mission. |
+| M2 | **closed** | Mission generation/envelope binding, an OS-derived desktop key, one machine-wide desktop Core, one act mission per key, enrollment nonce, scoped lookups, listed-image revalidation and earliest-bound expiry are explicit (70–122). Operator expiry overrides and `any_not_denied` remain bounded by grants and classification. Enrollment reset should be made explicit in the invalidation rules when completing R2-B4/R2-D5, but the original missing ownership/lifetime design is supplied. |
+| M3 | **closed** | Credentials are route-separated, protocol revision and handshake/tools are pinned, mapping/identity are fixed, frames/outstanding ids/waits are bounded, Core enforces bypass calls, and Core alone triggers execution independently of idempotent waiters (48–51, 429–468). Zero dependencies is credible for the stated subset. Gated-read result framing still needs the R2-D1 correction. |
+| M4 | **partly closed** | Explicit V overrides, no launching (R2-c), no control values, an adapter API, controlled fault fixtures and 48 observable cases replace the inconsistent inherited tests (523–554, 598–689). However, capability names conflict with the actual registry (R2-D3), and the native-adapter rule is narrowed to registered adapters while claiming V's stronger rule still stands. See R2-M4. |
+| N1 | **closed** | The proposed Phase 1 addition now sits at the controlling §10 deliverable; the misplaced §11 amendment is removed. V's note and AS's introduction explicitly make supersession conditional on AS acceptance. |
+
+### Remaining original blockers and major
+
+#### R2-B1 — blocker — supported frameworks do not establish protected-surface identity
+
+**Sections:** AS Classification, 155–178, 180–204; Appendix A decision 13 and R2-b.
+
+**Failure:** a signed WinForms/WPF application hosts its own terminal widget or an unlabelled
+credential field with `IsPassword=false`. It meets the complete delegate predicate at 201–204;
+its signer, framework and window class need not identify the embedded function. A normal
+non-pattern password passes the scanner. Warning the approver about the stated residual at
+176–178 leaves the absolute prohibition dependent on model judgement. R2-b requires all embedded
+web content to go to the operator too, not only surfaces reporting Chrome/WebView2 identities.
+Separately, an identity registry is not sufficient until Node knows which externally started
+cockpit/MCP processes to register: `mission_enroll {}` over loopback supplies no specified
+OS-verified process-registration mechanism. An unregistered hosted cockpit window can therefore
+miss the absolute family test.
+
+**Smallest change:** distinguish verified protected-surface classification from a merely
+recognized framework. Specify supported application/provider profiles or equivalent positive
+evidence for delegated surfaces, including credential-entry protection and hosted content;
+unknown hosting remains operator-only and uncertain credential entry remains refused. Give the
+Toros registry a trusted OS-observed population/lifecycle rule before the operator UI or an
+enrolled MCP process becomes targetable. Do not trust caller-supplied pid or `FrameworkId` as
+proof. Add an unlabelled false-password fixture, a same-process custom terminal/web host and
+pre-registration cockpit-child tests. The original operator decisions require closing these
+paths; the new residual paragraph does not authorize an exception to decision 13.
+
+#### R2-B3 — blocker — runtime-id reuse is acknowledged but still assumed not to happen
+
+**Sections:** AS Approval record, 274–290; acceptance 21–22.
+
+**Failure:** the original element is destroyed and another element in the same live process
+reuses its runtime id and all enumerated properties. Process creation time and snapshot equality
+are unchanged, so every specified execution check passes. This is exactly the case for which
+[Microsoft says runtime ids can be reused](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.automationelement.getruntimeid).
+The assertion at 288–290 that an identical replacement has a new id does not follow. Likewise,
+two different selected items can have the same name; `selection_context` stores names only, so
+changing between them need not change that snapshot. These are identity failures within the
+enumerated target, not a demand to guarantee hidden semantic effects.
+
+**Smallest change:** retain and validate the actual element's live instance/lifetime or introduce
+a supported-provider generation/lifecycle guard that invalidates approvals on destruction or
+replacement; if continuity cannot be established, refuse. Bind selection context to item
+identity as well as labels. Add same-process reused-id/identical-property and duplicate-selection-
+name fixtures. Keep the stated final-check/UIA-call residual window, but remove claims that a
+runtime id plus equality alone proves continuity.
+
+#### R2-B4 — blocker — dispatch is earlier than the irreversible UIA operation
+
+**Sections:** AS Request lifecycle, 311–340; MCP execution, 461–465; acceptance 26–30.
+
+**Failure:** dispatch the worker, pause it during process hashing/selector resolution, then revoke,
+expire or lock the mission. Invalidation voids only requests not yet `executing` and explicitly
+kills only approvers. The worker later calls the UIA pattern with an invalidated approval: the
+worker checks its snapshot and tier, but not a live mission generation/expiry. Treating dispatch
+as started does not make a not-yet-issued UIA call irreversible. Allowing a call already issued
+to return is reasonable; permitting a new call after invalidation is the remaining gap. On hard
+Core death the pre-dispatch audit remains, but no surviving process can record the promised
+`outcome_uncertain`; restart currently supplies no reconciliation rule. “Revocation is the only
+cancellation” also conflicts with hold/expiry/lock/job-end invalidation unless expressly scoped
+to an MCP client's disconnect.
+
+**Smallest change:** cancel/reap dispatched workers that have not issued their pattern, and add a
+live generation/expiry permission check at the final worker-ready boundary under the shared
+ordering rule. Define the last-check/call residual explicitly; only an already-issued call gets
+the complete-or-uncertain treatment. Cover automatic denial/uncertainty holds and enrollment
+reset in the invalidation table. At restart, reconcile durable executing-without-final-result
+records as uncertain without replaying them or restoring authority. Test invalidation with the
+worker paused before its pattern and Core death between dispatch and result persistence.
+
+#### R2-B6 — blocker — CLI-owned persistence is outside the runner's filename test
+
+**Sections:** AS Approver profile, 376–399; acceptance 37.
+
+**Failure:** the dedicated runner writes no `exchange-N.jsonl` or prompt file, but the CLI saves
+its own session transcript in its config home. A per-CLI home persists across decisions and
+deleting the clean working directory does not clear it. Test 37 can pass while a differently
+named session/rollout/history file retains screen content and the prompt. The requirement to
+retain only verdict metadata should cover the subprocess as well as the runner.
+
+**Smallest change:** explicitly require disabling CLI-native session/prompt/history/debug
+retention before process start, with fail-closed profile verification if the pinned version
+cannot do it. Search every profile-controlled storage location by synthetic prompt content on
+success, crash, timeout and cancellation, not just by `exchange-*` filenames. The current
+[Claude CLI reference](https://code.claude.com/docs/en/cli-reference) documents a separate
+session-persistence switch, and the
+[Codex exec source](https://github.com/openai/codex/blob/main/codex-rs/exec/src/cli.rs) has a
+separate `ephemeral` option; an isolated home or read-only permission mode does not imply either.
+These are evidence of the distinction, not a claim that the node's eventual pinned versions
+have already passed the required profile check.
+
+#### R2-M4 — major — registered native adapter is weaker than V's inherited preference
+
+**Sections:** AS Native adapter preference, 206–210; Relationship to V, 536–540; V Objective.
+
+**Failure:** an application has a real native automation interface but no registered Toros
+adapter. The new admission rule refuses only when a **registered** adapter covers it, so it
+permits UIA; V says such an application must get its own adapter instead, and AS explicitly
+claims that rule remains. Two implementations can make opposite admission decisions.
+
+**Smallest change:** explicitly retain the native-interface rule and refuse/reroute known native-
+automation applications even when their adapter is not installed; specify the supported
+application/catalog evidence used for that decision. Do not silently weaken it under the word
+“registered”. This does not ask AS to implement another integration.
+
+### Issues newly introduced by revision 2
+
+#### R2-D1 — blocker — the canonical approval record omits executable read parameters
+
+**Sections:** AS Approval record, 243–273; MCP table, 453–459; adapter API, 545–550. Affects B2/B3.
+
+**Failure:** approve a bounded `inspect_tree` read at depth 1, then run depth 8 through the separate
+`UiaWorkerRequest.input`. The record contains no read depth, find filters, element-count bounds
+or complete read input. Its digest therefore cannot bind those choices; alternatively, a replay
+of the record alone cannot reconstruct them at all. The API expressly carries both a record and
+an independent `input` without requiring equality. App admission also requires the universal
+record's `grant_id` and element snapshot before a grant exists, without defining that variant.
+Protected read tools promise only read output, whereas operator approval needs a pending request
+id usable with `desktop_await`.
+
+**Smallest change:** define discriminated admission/read/mutation record schemas. Include the
+complete normalized action input and effective bounds in the record before hashing; derive the
+worker input exclusively from it, or assert exact equality. Define the pre-grant admission
+identity without an invented live grant. Give gated reads an explicit pending/denied/result
+union with request ids. Test altered depth/filter/bounds and exact reconstruction on replay.
+
+#### R2-D2 — blocker — redaction turns distinct snapshots into the same approved snapshot
+
+**Sections:** AS Approval record, 253–290; Secrets and sanitization, 356–360. Affects B3.
+
+**Failure:** a selected item or window name contains a secret-shaped string; the record stores
+its redacted form. Change that item/name to a different string of the same secret-pattern kind
+while keeping the control instance and other state fixed. Execution recomputes the same
+redaction marker, so “every field” compares equal and the approval remains valid despite changed
+enumerated state. Redaction is deliberately many-to-one, not a state-identity function.
+
+**Smallest change:** keep the display record sanitized while binding comparison to a separate
+server-derived commitment to the raw observed state, preferably keyed where low-entropy secret
+state could otherwise be guessed. Include that commitment in the approved canonical object and
+compare it before the UIA call without persisting raw content. A simpler safe rule is to refuse
+actions whose required state comparison would depend on redacted fields. Add two-different-inputs/
+same-redaction fixtures; do not solve this by logging or showing the secret.
+
+#### R2-D3 — major — the envelope capability namespace does not match the adapter id
+
+**Sections:** AS Mission scope, 98–100; adapter API, 552–553; current registry registration.
+
+**Failure:** the mission/envelope lists the required `desktop.invoke`, but the new adapter is
+`desktop_uia`. The registry constructs capabilities as `<manifest.id>.<actionId>`
+(`packages/registry/src/index.ts`, registration), so it registers `desktop_uia.invoke` and
+policy denies the spec's capability. Reusing id `desktop` instead would collide with the
+existing AR desktop adapter. An implementer may work around this by skipping the registry or
+adding an unspecified alias, defeating the claimed contract fit.
+
+**Smallest change:** publish one mapping of MCP names, Node routes, adapter/action ids and actual
+envelope capability ids. Retain AR's `desktop.state` separately and use the registered
+`desktop_uia.*` ids for AS UIA actions, or explicitly specify a registry-compatible alternative.
+Test exact registration/allowlist/receipt/approval capability equality; no bypass or silent alias.
+
+#### R2-D4 — major — Job Object membership must precede child execution
+
+**Sections:** AS Child lifetime, 327–330; AS1–AS3 ownership; acceptance 29. Affects B4.
+
+**Failure:** implement `spawn`, then attach the child to the Job Object. Kill Core between those
+steps: the unassigned worker survives and may still invoke UIA. A child inheriting the last job
+handle can also defeat the intended kill-on-owner-death behaviour. Testing only a child already
+running inside the job misses both startup/handle-lifetime cases.
+
+**Smallest change:** require association before any child code can act, using inherited job
+membership or suspended creation/assignment/resume, with assignment failure refusing execution,
+no breakaway and no child-held lifetime handle. Specify the reviewed native/PowerShell bridge
+and its owning slice: the ordinary Node child-process adapter does not itself expose the required
+Win32 job-handle operations. Microsoft's
+[Job Objects documentation](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)
+distinguishes creation from process assignment; the
+[job-limit flags](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_limit_information)
+define kill-on-last-handle-close, and the
+[process flags](https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags)
+provide suspended creation. Add parent-death tests at each startup boundary, including assignment
+failure and handle inheritance. This is a concrete mechanism for the already-required boundary,
+not a request for a new remote workflow or platform.
+
+#### R2-D5 — major — the new enrollment credential is missing from the explicit secret inventory
+
+**Sections:** AS Driver enrollment, 115–122; known-token detection, 349–351; acceptance 33.
+
+**Failure:** a direct authenticated Node client enrolls and receives the random 256-bit nonce.
+It submits that unprefixed nonce as an otherwise ordinary typed value or reason. A scanner
+implemented from the explicit token/operator/agent list has no match; the value enters the
+full-value audit, disclosing the second credential to audit readers. Keeping the nonce out of
+MCP tool results does not protect the direct-route path that AS explicitly supports.
+
+**Smallest change:** explicitly include live and recently invalidated enrollment nonces, plus
+other still-sensitive Core-issued run credentials, in known-secret detection at every audit
+boundary. Scope reset/rotation to generation invalidation, replace the enrolled credential
+atomically, and keep the raw nonce out of events, errors and the cockpit. Add direct-route nonce
+echo and reset/old-nonce regression cases, using synthetic credentials only.
+
+#### R2-D6 — major — the exclusive error table contradicts the inherited policy/AC contract
+
+**Sections:** AS Error mapping, 502–516; D normative decision order; AC acceptance 3–4.
+
+**Failure:** AS says “No other code may be used”, but the ordinary pipeline must still emit
+`E_JOB_TERMINAL`, `E_ENVELOPE_DIGEST_MISMATCH`, `E_RETRIES_EXHAUSTED`, `E_WORKSPACE_DENIED` and other
+existing first-denial codes omitted from the table. It also maps an expired approval to
+`E_EXPIRED`, while `ApprovalVerifier.consume`/AC classify an expired approval as
+`E_APPROVAL_INVALID`. Following either document violates the other and can encourage skipping
+the ordinary policy path or translating away its audit meaning.
+
+**Smallest change:** scope the AS table to new mission/classifier preconditions and preserve all
+ordinary policy/adapter codes and their precedence, or explicitly enumerate an intentional
+contract amendment across D/AC and consumers. Distinguish expired mission/job from expired
+approval. Add contract-level assertions for the exact codes; A7's new denial code alone does not
+amend these existing meanings.
+
+### Re-review verification and handoff
+
+- First publication: `gh pr review 1 -R mbulentcakar/Toros --comment --body-file <temporary-body>`
+  returned exit 0; `gh pr view 1 -R mbulentcakar/Toros --json headRefOid,reviews` confirmed the
+  revision 1 verdict/blocker list with state `COMMENTED`.
+- Target refresh: `git fetch public spec/desktop-grants` returned exit 0;
+  `git log --oneline -5 public/spec/desktop-grants` and `git rev-parse 038d288` confirmed the two
+  requested commits and head `038d28851076492679e205700e0e37ee12fa9b0b`.
+- Delta inspection: `git diff 7afe867..038d288 --name-only` listed precisely the four spec files;
+  `git diff 7afe867..038d288 -- packages apps` was empty. Read the complete revised AS from
+  `git show 038d288:docs/specs/AS-delegated-desktop-control.md`, all other changed documents, and
+  `git diff 3a407ae..038d288 -- docs/specs/AS-delegated-desktop-control.md`.
+- Rechecked the live frozen contracts, registry capability construction, policy decision order
+  and replay behaviour. Primary references above verify runtime-id reuse, CLI-native retention
+  controls and the separate Job Object creation/assignment operations. No model exchanges,
+  desktop actions or implementation tests were executed for this docs-only review.
+- Review-only integrity: `git diff --check` returned exit 0 and `git diff --name-only` listed only
+  `docs/reviews/AS-spec-review.md`. Prefix comparison confirmed the existing brief and findings
+  are unchanged. All twelve disposition rows are present: six closed, six partly closed. An
+  added-text scan found no local user paths or credential-shaped values. No spec, package or
+  application file is edited; publication uses the existing `review/as-spec` branch.
+
+Next owner: the spec author resolves the six partly closed findings and the introduced issues;
+the operator retains acceptance authority. The implementation review/MCP/adversarial gates and
+AR's independent adversarial review remain separate. This delta review grants none of them.
