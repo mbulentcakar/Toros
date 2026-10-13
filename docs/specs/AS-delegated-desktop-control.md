@@ -347,11 +347,19 @@ questions. A denial is final.
 4. Any approval is void after 24 hours unless otherwise specified, and is bound to a specific task
    mission.
 5. Agents act with their own scoped credentials, never the operator token.
-6. The hard-deny targets can be approved by the operator personally so the task can continue.
-   (This spec keeps two narrow exceptions absolute: Toros's own processes and secret entry. See
-   "Two deny tiers" for why.)
+6. The hard-deny targets can be approved by the operator personally so the task can continue,
+   with the two absolute exceptions confirmed in 13.
 7. Both per-app and per-action approval.
 8. A real-time, timestamped log is the operator's visibility; no live per-action prompt.
 9. Typed values are logged in full; secret-pattern values are refused.
 10. MCP is the driver's interface.
 11. Spec PR first; prerequisites before mutation is enabled.
+
+Confirmed by the operator on 2026-10-13, after drafting:
+
+12. The approver runs one-shot, launched by Node Core per request, rather than as a second live
+    session. The cost of one model call per decision is accepted.
+13. Two targets stay absolute, outside even the operator's per-action approval: Toros's own
+    processes, and typing into password fields or typing any secret-pattern value.
+14. Toros cannot confine a driver that has its own shell. The driver profile in "What Toros cannot
+    enforce" is a setup requirement, documented and warned about, not enforced by Toros.
