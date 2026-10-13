@@ -14,6 +14,10 @@ Toros should make handoffs observable, resumable, and safe without attempting to
 - A commercial multi-tenant product.
 - General remote desktop or remote shell access.
 - An unrestricted shell, arbitrary filesystem browser, or arbitrary UI clicker for Hermes.
+  Desktop control of an arbitrary application is admitted **only** under spec AS: an
+  operator-issued, task-bound, expiring mission, with every application and every mutating
+  action approved by a second, independent agent, or by the operator for the operator-only
+  tier. An *unapproved* clicker stays a non-goal for every caller, not only Hermes.
 - Replacing GitHub as the canonical source, review, and release history.
 - Automatically committing, pushing, merging, deploying, or marking work accepted.
 - Building a universal workflow engine before the basic relay is proven.
@@ -51,6 +55,11 @@ Node Core (policy authority) <----> Tauri cockpit
 ### 4.1 Tauri cockpit
 
 The UI displays jobs, sessions, approvals, activity, checkpoints, relay state, and security findings. It does not hold policy authority and does not give Hermes a privileged UI backdoor.
+
+Under spec AS the cockpit is also where the operator issues and revokes desktop-control
+missions, approves operator-only desktop requests, and watches the real-time desktop-control log.
+It authorizes; it never executes UI automation itself, and no Toros process, the cockpit included,
+is ever a permitted UI Automation target.
 
 ### 4.2 Node Core
 
@@ -159,6 +168,12 @@ The loopback service also has a separate **operator** surface authenticated by t
 Hermes tool: the coordinator cannot read monitoring findings or use them as policy input. This
 separation satisfies criterion 6 without widening the capability surface above.
 
+Spec AS adds a third, separate surface: a local stdio **MCP server** for a Claude or Codex
+*driver* session, authenticated by that agent's own token (distinct from `token` and
+`operator_token`). It offers mission-scoped desktop reads and *requests* for app access and UI
+actions. It has no approve tool; approvals come from the other agent, run one-shot by Node Core,
+or from the operator. It is not a Hermes tool and does not widen the list above.
+
 `job_complete` is named for the coordinator's intent, not for the resulting state. It
 transitions the work item to **`proposed`** (§7) and never to `accepted`. There is no tool,
 argument, or tool sequence by which Hermes can reach `accepted`; that transition exists only
@@ -210,6 +225,10 @@ be worse than the gap.
 - path containment with resolved-path checks;
 - secret-pattern filtering before relay creation;
 - human approval gates for configured high-impact actions;
+- delegated approval (spec AS): within an operator-issued desktop mission, a second agent that is
+  never the requester may approve one application or one action at a time. It runs one-shot with
+  no shared context, and anything short of an explicit approve is a deny. Operator-only and
+  absolute deny tiers are classified by Node Core before any agent is asked;
 - append-only receipts for request, decision, execution, and result;
 - envelope-digest binding on every action (§5);
 - no credentials in model context or relay capsules.
@@ -588,6 +607,11 @@ These are candidates after Phase 3, not current scope:
 - disposable-repository UltraSwarm comparison;
 - TRELLIS.2 image-to-3D experiment if JanBot meets its requirements;
 - broader desktop adapter library and a higher-level workflow designer.
+
+**Amendment (proposed 2026-10-13, spec AS).** Phase 1's "exactly one desktop application adapter"
+is extended by spec AR (read-only discovery) and spec AS (delegated UI Automation control). AS
+mutation is not enabled on any node until the prerequisites listed in spec AS have cleared,
+including AR's adversarial security review.
 
 ## 12. Decisions required before implementation
 

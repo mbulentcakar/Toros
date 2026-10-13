@@ -2,6 +2,11 @@
 
 **Read `00-CONTRACTS.md` first.** It is short and it is binding.
 
+**Status update (2026-10-13): the target-binding model below — one adapter instance per
+operator-configured application — is superseded by spec AS (mission grants with cross-agent
+approval). The six actions, selector rules, bans, automation mechanism, and acceptance tests
+remain in force and are inherited by AS.**
+
 **Status: proposed. Not accepted, and out of Phase 1 scope.** SPEC §10 Phase 1 says *exactly
 one* operator-selected desktop adapter, and that is Excel (spec F). This unit cannot be built
 until SPEC is amended to admit it. This document is the proposal that amendment would ratify,
