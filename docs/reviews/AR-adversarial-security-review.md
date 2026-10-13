@@ -4,6 +4,37 @@
 (deepseek implemented these slices; grok did the code reviews — using either here defeats the
 independence the lineage rule exists for). Run against a checkout of `main` at or after `fb3701c`.
 
+> **Dispatch update, 2026-10-13. Read this first.**
+>
+> - **Reviewer:** Codex (GPT-5.6, the adversary lane). Use Gemini 3 if Codex is busy.
+> - **Repository and baseline:** the public repo `mbulentcakar/Toros`, `main` at `2847726` or
+>   later. That is a single squashed commit, so the commit hashes and PR numbers in this brief
+>   (`fb3701c`, `228ce68`, `a9597e8`, #19–#21) exist only in the earlier private history. The code
+>   they name is all present at `2847726`. Use the file paths, not the hashes.
+> - **Why now:** spec AS (PR mbulentcakar/Toros#1) builds clicking and typing on top of exactly
+>   this surface, and lists this review as a hard prerequisite. Until the findings below are
+>   filled in, AS's mutating actions cannot be enabled, and neither can this surface in
+>   production. Nobody has run this review yet; the findings section has been empty since T4.
+> - **Where to run it:** on a **native Windows 11 machine with an unlocked interactive desktop**.
+>   Read the code anywhere, but every exploit claim about `probe.ts` or UI Automation behaviour
+>   must be demonstrated live, or the finding must be labelled `unverified (static only)`. A
+>   sandbox or Linux run cannot exercise UI Automation.
+> - **Use benign targets only:** Notepad, Calculator, and windows you create yourself. Do not
+>   inspect the operator's real applications, mail, or documents, and do not paste anything they
+>   contain into findings.
+> - **Additional surface (9):** for each finding, say whether it would be **inherited by spec
+>   AS**. For example, a scope escape in `desktop.inspect` becomes a scope escape for an approved
+>   click. Mark those `AS-inherited`; they decide whether AS can proceed.
+> - **Deliverable mechanics:** append the report below the line at the end of this file. Commit on
+>   branch `review/ar-adversarial` (it already holds this update), push it, and open a PR into
+>   `main` titled `review(AR): adversarial security review`. Do not fix code in the same PR. Each
+>   fix gets its own slice after triage.
+> - **Verification to record in the PR:** `npm ci`, `npx tsc --build`, and
+>   `node --test packages/adapters-desktop/dist/test/*.test.js` run natively, with the
+>   pass/fail/skip counts. A skip is a finding.
+> - **Constraints:** public repository. No secrets, tokens, local user paths, hostnames, or
+>   screenshots of real desktops in anything you commit. One agent per working tree.
+
 **This is a SECURITY review, not a code review.** Functional correctness and the obvious code-level
 issues were covered by the grok reviews on PRs #19/#20/#21. Assume the code does what it says; your
 job is to break it. Think like an attacker who holds a **valid but minimal** job envelope (they can
