@@ -725,3 +725,214 @@ amend these existing meanings.
 Next owner: the spec author resolves the six partly closed findings and the introduced issues;
 the operator retains acceptance authority. The implementation review/MCP/adversarial gates and
 AR's independent adversarial review remain separate. This delta review grants none of them.
+
+## Re-review (revision 3)
+
+Reviewer: Codex, 2026-10-14. Delta reviewed: `038d28851076492679e205700e0e37ee12fa9b0b` →
+`da02d1a91d846db61cd62c1fa56c1a9fd1ec09df`, fetched from `public/spec/desktop-grants`.
+The baseline is **Re-review (revision 2)** above. This revision changes AS and the proposed A7
+event-kind inventory only; there is no implementation delta. AS line references below refer to
+the immutable `da02d1a` document, read through Git, rather than the older spec checkout on this
+review branch.
+
+All Appendix A decisions are requirements, including R2-a–R2-d and **R3-a**. The strict native-
+evidence typing rule, refusal of typing without that evidence, and operator-only actions on
+elements without a native handle are accepted. This review does not ask for broader delegation,
+an exception to decision 13, another agent role, or Phase 2 confinement.
+
+VERDICT: ready after the listed blockers — seven revision 2 findings are closed and four are
+partly closed, but classification and continuity still overclaim their evidence, the go-token
+protocol does not establish the stated cancellation boundary, and new password/read-rollout
+contradictions must be corrected before implementation dispatch.
+
+### Disposition of every revision 2 finding
+
+“Closed” means resolved in the written design; it does not claim implementation, native test
+evidence, AR remediation, or operator acceptance. No finding is wholly untouched/open.
+
+| Finding | Status | Reason at revision 3 |
+|---|---|---|
+| R2-B1 | **partly closed** | AS 130–259 replaces framework recognition with native class/style evidence, narrows typing as required by R3-a, withholds unsupported actions from delegation, and specifies OS-based cockpit/MCP registry population. The former unmarked-field residual is withdrawn. However, a same-process terminal assembled from genuine `Edit`/`Button` controls still satisfies the delegate predicate, so the claim that every custom terminal/web host is excluded does not follow. See R3-B1; the affirmative password veto regression is new, R3-N1. |
+| R2-B3 | **partly closed** | AS 367–403 retains live element/selection objects, removes runtime-id lookup, subscribes before preparation and checks native ownership, commitment and tier. Duplicate selection labels are now bound to live items. Subscription acceptance and absence of received events still do not establish reliable lifetime continuity, and `IsWindow`/same thread/process do not defeat recycled handles. See R3-B3. |
+| R2-B4 | **partly closed** | AS 405–452 adds dispatched/ready/issued states, a ready/go handshake, all invalidation causes, enrollment reset and crash reconciliation. This closes the long preparation-before-permission gap and the missing restart disposition. It still defines `issued` as the actual UIA call while durably recording it before sending a 250 ms go token; invalidation/Core death can occur before that call. See R3-B4. |
+| R2-B6 | **partly closed** | AS 538–558 explicitly disables runner and CLI persistence before start, fails closed on unsupported versions and searches all profile-controlled locations by content. The substantive retention requirement is fixed. Canary verification can run after the mandatory per-decision wipe and therefore pass despite a prohibited write; test 37 has the same ambiguity. The remaining issue is verification ordering, ranked major below. |
+| R2-M4 | **closed** | AS 261–269 retains the native-interface preference whether or not an adapter is installed and specifies a reviewed signer/product catalog, refusal code and installed/missing-route detail. Acceptance 54 covers both installed and absent adapters. AS does not need to implement the missing native integration. |
+| R2-D1 | **closed** | AS 307–350 provides admission/read/mutation variants, no pre-existing grant in admission, complete normalized read input and effective bounds. Every worker call is derived from the record, with no independent executable input. AS 302–305/619 supplies pending and final result framing for gated reads; acceptance 58 asserts exact depth/replay binding. |
+| R2-D2 | **closed** | AS 353–365 compares a mission-keyed HMAC of raw observed state, rather than sanitized display strings. The commitment is included in the canonical record; raw state/key are not persisted. Different secrets with the same display redaction now mismatch, with acceptance 59. This closes the equality defect without exposing low-entropy secret state through an unkeyed hash. |
+| R2-D3 | **closed** | AS 98–101/621–639 defines the exact MCP/route/registered-capability mapping, uses `desktop_uia.*` for AS and retains AR's `desktop.state`. It forbids aliases and uses the same id in envelope, policy, receipt, binding and record; acceptance 64 verifies it. |
+| R2-D4 | **closed** | AS 454–476 assigns the fixed PowerShell/C# supervisor to AS1, creates children suspended, assigns/registers before resume, terminates on assignment failure, forbids breakaway and prevents job-handle inheritance. Acceptance 62 covers startup boundaries. The original spawn-before-assignment and last-handle-inheritance defects are closed. The separate claim that a previously issued go token cannot act during parent-death detection is not true; it is covered by the remaining R3-B4 boundary issue. |
+| R2-D5 | **closed** | AS 117–125/485–494 introduces the detectable `tdn_` nonce format, explicit live/recent-invalidated nonce detection, other live Core credentials, digest-only past-nonce storage and atomic generation/nonce reset. The pattern also detects older formatted nonces. Acceptance 63 covers direct-route credential echoes and invalidated/past enrollment credentials. |
+| R2-D6 | **closed** | AS 684–702 preserves ordinary policy codes and precedence, limits its table to AS-specific conditions, and distinguishes expired approvals (`E_APPROVAL_INVALID`) from mission/job expiry. Acceptance 65 states those assertions. A separate new scheduling ambiguity about where atomic consumption happens is R3-N2; the formerly exclusive error table is fixed. |
+
+### Remaining findings
+
+#### R3-B1 — blocker — ordinary native controls can still host an operator-only function
+
+**Sections:** AS Operator-only/Positive evidence, 221–259; acceptance 51; Appendix A R2-b/R3-a.
+
+**Failure:** a signed application implements a terminal with a genuine native `Edit` input,
+`Button` command control and `Static` output under its own frame. No separate console process,
+console class or non-native child is required. All classes are in the delegate set and its frame
+is expressly admitted by 250; it need not match a known shell image. A delegate can therefore
+approve command entry and invocation even though terminal actions are operator-only. The
+assertion at 255–257 that custom terminal/web hosts must have an excluded class or lack handles
+does not follow from the predicate. R3-a's native-edit requirement is necessary for typing; it
+does not turn every genuine edit control into a verified non-terminal context.
+
+**Smallest change:** define how the enclosing function is positively classified in addition to
+the individual native control. Unsupported terminal/web hosting contexts remain operator-only;
+do not grant a function classification merely by admitting its top-level frame. Use verified
+supported surface/context profiles or equivalent deterministic evidence, and add a same-process
+fixture built from actual allowlisted native controls. Preserve the chosen strict typing rule;
+this correction concerns the already-required terminal/web tier, not broader typing authority.
+
+#### R3-B3 — blocker — an accepted event subscription is not a continuity guarantee
+
+**Sections:** AS Element continuity, 374–397; acceptance 55–57.
+
+**Failure:** the provider accepts subscriptions but omits or delays an invalidating event while
+an element/window is destroyed and replaced with matching state. The worker treats “no event
+received” as continuity. A recycled native handle can still pass `IsWindow` and same-thread/
+process checks; holding a process handle protects process identity, not its child windows'
+lifetimes. A retained UIA wrapper must not be assumed to pin an external HWND's lifetime.
+Microsoft explicitly warns that
+[providers need not raise all events](https://learn.microsoft.com/en-us/dotnet/framework/ui-automation/ui-automation-events-for-clients)
+and that [window handles can be recycled](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-iswindow).
+The raw-state HMAC detects differing state, but not an identical replacement or an unobserved
+change-and-return. This is a missing lifetime proof, not the already-disclosed final-check/call
+race or a demand to bind hidden semantic effects.
+
+**Smallest change:** specify what establishes the supported provider/native object's lifetime
+continuity beyond successful subscription, including callback synchronization and destruction/
+reuse handling. When the worker cannot establish it, refuse with `no_continuity` as already
+required. Add fixtures that accept subscriptions but suppress/delay notifications, and same-
+thread native-handle reuse. Test that a stale retained object cannot silently rebind; do not
+limit acceptance to providers that voluntarily emit the expected invalidation callback.
+
+#### R3-B4 — blocker — a durable issue intention is still confused with an issued UIA call
+
+**Sections:** AS Lifecycle 413–449 and supervisor gap 473–475; acceptance 60–62.
+
+**Failure:** Core appends `issued`, sends a go token, and the worker pauses before receiving it or
+before calling the pattern. Revoke/expiry/lock then arrives. The event says `issued`, so the
+written rule assumes the call has already happened and permits completion, although no call has
+been made. The token remains usable for up to 250 ms; its deadline is not explicitly clamped to
+mission/job/approval expiry. Likewise, Core can die after sending it but before the supervisor
+detects death: the token was issued while Core was live and can still be used during that gap.
+“Only a live Core can issue a token” does not revoke an already-issued token. The snapshot/tier
+checks occur before the worker blocks, and the protocol does not require their recheck after
+receiving permission. Tests 60–62 stop before delivery or after the asserted `issued` point,
+leaving this exact interval untested.
+
+**Smallest change:** distinguish durable dispatch/issue intention, authorization commit, and
+actual pattern issuance. Give the worker final permission/deadline/generation and state checks
+immediately at the call boundary, with explicit cancellation/liveness handling for a received
+but unused token. Bind permission to this record/generation and cap it by effective expiry.
+State the unavoidable final-check/call and parent-death detection residual accurately instead
+of claiming that a preceding log append proves execution. Recovery may conservatively report
+an intended-but-unconfirmed call as uncertain; it must not assert the call occurred or retry it.
+Add pauses after log append, after token send/receipt, and before the pattern, testing revocation,
+expiry and parent death at each point. The ready handshake is useful and should be retained.
+
+#### R3-B6 — major — cleanup can erase evidence before the retention canary examines it
+
+**Sections:** AS Approver profile, 538–555; acceptance 37.
+
+**Failure:** a misconfigured CLI writes its canary transcript, then the runner performs the
+mandatory “after every decision” wipe. The subsequent canary-content search is clean, so the
+profile passes even though the no-persistence requirement was violated. Searching more names
+and locations does not fix this ordering. The requirement to disable persistence is now clear;
+this is the remaining weakness in the verification intended to prove it.
+
+**Smallest change:** inspect/monitor the profile-controlled storage before any cleanup can
+erase evidence, then wipe regardless of the check's outcome. Add a deliberately persisting fake
+CLI as a negative control: it must fail the profile even if cleanup leaves no file afterward.
+Exercise success, crash, timeout and cancellation. Preserve the no-retention-before-start
+requirement and the real pinned-CLI checks; cleanup is recovery, not proof that nothing was
+written.
+
+### Issues introduced or exposed by revision 3
+
+#### R3-N1 — blocker — the native allow rule drops an affirmative password veto
+
+**Sections:** AS Secret entry 199–212, password reads 232–233, read names 289–293.
+
+**Failure:** a native edit has no `ES_PASSWORD` style or password character, a neutral name/id,
+and no known credential ancestor, but its UIA provider reports `IsPassword=true`. It passes all
+seven newly exhaustive `set_value` conditions: the old UIA-true veto, including ancestor flags,
+is absent. Native evidence is needed to defeat a false negative; it must not erase a positive
+password indication. The read tier still treats the same element as a password, so the two
+paths disagree. Separately, “every other element's name ... unless the operator approves” can
+be read as releasing even a positively identified password element's name, contradicting the
+explicit “existence, never its name or value” rule. An ordinary password need not match AG.
+
+**Smallest change:** make any positive own/ancestor password indication an unconditional typing
+veto, alongside all native R3-a requirements. Explicitly separate unknown-evidence names, whose
+reads may be gated, from known password names/values, which remain suppressed after operator
+approval. Add native-plain/UIA-password-true, password-ancestor and operator-approved password-
+name fixtures. This enforces decision 13 and the specified read omissions without relaxing R3-a.
+
+#### R3-N2 — major — the new ready boundary has no unambiguous single approval spend
+
+**Sections:** AS 428–438/684–689; D rule 12 and 00-CONTRACTS A4; live policy/action pipeline.
+
+**Failure:** the ready-stage checklist includes `ApprovalVerifier.consume` but calls it “on
+dispatch only”. The new state machine places `dispatched` before `ready`. AS also requires the
+ordinary policy to run first, and that policy already consumes an approval atomically at rule
+12 (`packages/policy/src/index.ts`); the pipeline calls it before reaching the adapter. An
+implementer consuming at both places denies every valid replay as spent. Another implementer
+may skip the ordinary gate to make the later checklist work, or never revalidate policy after
+waiting. The new protocol needs one defined spend point, not two plausible readings.
+
+**Smallest change:** provide one normative pipeline sequence showing preparation, approval,
+worker checks, final ordinary policy decision/atomic consumption, audit and permission. Identify
+exactly one call to `consume` and how ordinary policy is rechecked at the final boundary without
+a second spend. If the existing pipeline/port semantics must change, assign that work and amend
+the appropriate contract/spec deliberately. Test one valid execution, duplicate permission/
+replay and invalidation between preparation and the single spend.
+
+#### R3-N3 — blocker — read-mode rollout bypasses its newly explicit AR foundation
+
+**Sections:** AS Prerequisites 760–772 and `desktop_state` mapping; referenced AR remediation gate.
+
+**Failure:** fulfill AG, A7, the approver profile, code review and MCP review, then ship a `look`
+mission exactly as line 772 permits. Prerequisite 1 is excluded, although lines 762–764 say the
+classification/read design assumes AR F2/F3 and `desktop_state` calls the AR `desktop.state`
+capability. The known discovery name-disclosure and identity/pipeline problems can therefore
+remain enabled through AS's read surface. The referenced
+[AR remediation plan PR #4](https://github.com/mbulentcakar/Toros/pull/4) expressly keeps desktop
+discovery disabled until F1–F4 merge and native re-review clears them; it is a plan, not a fix.
+
+**Smallest change:** make the cleared AR foundation a prerequisite for every AS mode that exposes
+AR desktop discovery/inspection, including `look`. If a narrower mode is intended before that
+gate, explicitly exclude the affected AR routes and establish its independent read boundary;
+do not imply that look-only operation remediates an underlying read vulnerability. Add a startup/
+route test that neither mode exposes the affected capability before the dependency gate clears.
+This checks AS's new integration and does not re-review or claim to fix AR itself.
+
+### Verification and disposition
+
+- Target fetch performed with `git fetch public spec/desktop-grants`; `git log --oneline -4
+  public/spec/desktop-grants` and `git rev-parse da02d1a` confirmed the requested head. A live
+  `gh pr view 1 -R mbulentcakar/Toros --json headRefOid,state` recheck still showed `da02d1a`.
+- Read the complete `git diff 038d288..da02d1a` for AS and 00-CONTRACTS, including the revised
+  acceptance cases and R3-a. The changed-file list contains only those two specifications;
+  `packages/` and `apps/` have no delta.
+- Rechecked the existing policy's atomic consume and the action pipeline's policy-before-adapter
+  order. Read-only GitHub checks of PRs #3/#4 and `gh pr diff 4 -R mbulentcakar/Toros` confirmed
+  the referenced AR review/remediation gate. Neither those PRs nor their implementation are
+  accepted by this review.
+- Primary Microsoft documentation linked above supports the specific event-delivery and recycled-
+  handle limitations. The review's failure paths are design analysis, not claimed live exploit
+  demonstrations.
+- Documentation-only review: no executable tests, CLI model exchanges or desktop actions were
+  run; none apply to this append-only change. No AS acceptance test pass is claimed.
+- Integrity checks: `git diff --check` returned exit 0; `git diff --name-only` listed only
+  `docs/reviews/AS-spec-review.md`. Prefix comparison confirmed all prior brief/review content is
+  unchanged. The disposition check found all eleven distinct requested findings: seven closed,
+  four partly closed. An added-text scan found no local user paths or credential-shaped values.
+
+Next owner: the spec author closes R3-B1/B3/B4, corrects the R3-B6 verification ordering and the
+three new issues. The seven closed revision 2 findings stay closed; no reversal of the accepted
+operator decisions is requested. The operator retains acceptance authority, and AR/AS native,
+code, MCP and adversarial gates remain outstanding.
