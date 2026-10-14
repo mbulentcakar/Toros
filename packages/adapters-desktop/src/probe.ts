@@ -1,7 +1,9 @@
-import { execFile, type ChildProcess } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promises as fsPromises } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+import { ErrorCode, TorosError } from '@toros/contracts';
 
 import { parseScriptJson } from './json.js';
 import type { RawControl, RawWindow, UiaProbe } from './adapter.js';
@@ -119,16 +121,63 @@ function powershellPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
 
+/** Captured stdout/stderr ceiling for the PowerShell child (execFile.maxBuffer). */
+const MAX_BUFFER_BYTES = 1024 * 1024;
+
+/** output.json ceiling read back from the probe before it is parsed. */
+const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+
+/** The part of `ChildProcess` runPowerShell relies on, so a test seam never needs a real child. */
+export interface ProbeChild {
+  readonly kill: () => void;
+}
+
+/** execFile-like spawn shape, injectable so tests never spawn PowerShell. */
+export type ProbeSpawn = (
+  file: string,
+  args: readonly string[],
+  options: { readonly shell: false; readonly windowsHide: boolean; readonly timeout: number; readonly maxBuffer: number },
+  callback: (error: Error | null, stdout: string, stderr: string) => void,
+) => ProbeChild;
+
+/** Remove a probe temp dir, logging a failure once with the basename only. */
+async function removeProbeDir(dir: string): Promise<void> {
+  try {
+    await fsPromises.rm(dir, { recursive: true, force: true });
+  } catch (removalErr: unknown) {
+    // A failed removal is a hygiene problem, not a probe failure: the action's
+    // result stands. Log once, naming only the basename — the full path can
+    // contain a machine-specific root and must not reach the log.
+    console.error(`desktop probe cleanup failed: ${path.basename(dir)}`, removalErr instanceof Error ? removalErr.message : String(removalErr));
+  }
+}
+
 /**
  * Run PowerShell with the fixed script and JSON input, returning the parsed output.
  * The temp dir holds the script + input.json PowerShell reads, so it must survive
  * until the child exits — cleanup happens only in `done` (completion / timeout /
- * abort), never in a synchronous finally.
+ * abort), never in a synchronous finally — and the promise settles only after the
+ * removal completes.
+ *
+ * `spawn` is injectable for tests; the default is the real `execFile`.
  */
-function runPowerShell(input: Record<string, unknown>, timeoutMs: number, signal: AbortSignal): Promise<Record<string, unknown>> {
+export function runPowerShell(
+  input: Record<string, unknown>,
+  timeoutMs: number,
+  signal: AbortSignal,
+  spawn: ProbeSpawn = execFile,
+): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     void (async () => {
-      let dir: string;
+      // A signal that is already aborted means the action is over before it
+      // began. Refuse before creating the temp directory or spawning anything,
+      // so a pre-aborted probe cannot leave a directory behind or hold a
+      // process slot (AR-07).
+      if (signal.aborted) {
+        reject(new Error('desktop probe cancelled'));
+        return;
+      }
+      let dir: string | undefined;
       let scriptPath: string;
       let outPath: string;
       try {
@@ -138,40 +187,57 @@ function runPowerShell(input: Record<string, unknown>, timeoutMs: number, signal
         await fsPromises.writeFile(scriptPath, DESKTOP_UIA_PS1, 'utf8');
         await fsPromises.writeFile(path.join(dir, 'input.json'), JSON.stringify(input), 'utf8');
       } catch (setupErr: unknown) {
+        if (dir !== undefined) await removeProbeDir(dir);
         reject(setupErr);
         return;
       }
 
       let settled = false;
-      let child: ChildProcess | undefined;
-      const cleanup = (): void => { fsPromises.rm(dir, { recursive: true, force: true }).catch(() => {}); };
-      const done = (err: Error | null, value?: Record<string, unknown>): void => {
+      let child: ProbeChild | undefined;
+      const cleanup = (): Promise<void> => removeProbeDir(dir);
+      const done = async (err: Error | null, value?: Record<string, unknown>): Promise<void> => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         signal.removeEventListener?.('abort', onAbort);
         try { child?.kill(); } catch { /* already gone */ }
-        cleanup();
+        // Await the removal: the promise must not settle while the temp dir
+        // still exists, and a removal error never changes the action's result.
+        await cleanup();
         if (err) reject(err); else resolve(value!);
       };
 
-      const timer = setTimeout(() => done(new Error(`desktop probe timed out after ${timeoutMs}ms`)), timeoutMs);
-      const onAbort = (): void => done(new Error('desktop probe cancelled'));
+      const timer = setTimeout(() => { void done(new Error(`desktop probe timed out after ${timeoutMs}ms`)); }, timeoutMs);
+      const onAbort = (): void => { void done(new Error('desktop probe cancelled')); };
       signal.addEventListener?.('abort', onAbort, { once: true });
 
-      child = execFile(
+      child = spawn(
         powershellPath(),
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
-        { shell: false, windowsHide: true, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 },
+        { shell: false, windowsHide: true, timeout: timeoutMs, maxBuffer: MAX_BUFFER_BYTES },
         (err, stdout, stderr) => {
           if (settled) return;
           if (err) {
-            done(new Error(`powershell exited with error: ${String(err)} stdout=${stdout.slice(0, 500)} stderr=${stderr.slice(0, 500)}`));
+            void done(new Error(`powershell exited with error: ${String(err)} stdout=${stdout.slice(0, 500)} stderr=${stderr.slice(0, 500)}`));
             return;
           }
-          fsPromises.readFile(outPath, 'utf8')
-            .then((text) => { done(null, parseScriptJson(text) as Record<string, unknown>); })
-            .catch((readErr: unknown) => { done(new Error(`failed to read probe output: ${String(readErr)}`)); });
+          void (async () => {
+            try {
+              // Stat before reading: an oversized output is rejected by size,
+              // never read into memory (AR-07). The code is E_OUTPUT_LIMIT so
+              // the adapter surfaces it as the terminate-outcome code instead
+              // of a generic adapter failure.
+              const stat = await fsPromises.stat(outPath);
+              if (stat.size > MAX_OUTPUT_BYTES) {
+                void done(new TorosError(ErrorCode.E_OUTPUT_LIMIT, `desktop probe output exceeded ${MAX_OUTPUT_BYTES} bytes`));
+                return;
+              }
+              const text = await fsPromises.readFile(outPath, 'utf8');
+              await done(null, parseScriptJson(text) as Record<string, unknown>);
+            } catch (readErr: unknown) {
+              await done(new Error(`failed to read probe output: ${String(readErr)}`));
+            }
+          })();
         },
       );
     })();

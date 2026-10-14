@@ -248,6 +248,19 @@ export function createActionPipeline(deps: {
       // keeps an unknown capability inside the audit pipeline.
       const { adapter, actionId: resolvedActionId } = getPolicyRegistryEntry(capability);
       actionId = resolvedActionId;
+      // The workspace is resolved BEFORE the budget is spent (AR-06). A
+      // pathless action with no workspace used to fail here — after the
+      // increment, after action.started, and after a `running` receipt — which
+      // consumed budget and left a false in-flight audit record forever. A
+      // failure that happens before the adapter runs must cost nothing and be
+      // written down once, already closed.
+      const workspace = deps.workspaces.find((candidate) => candidate.id === sessionWorkspaceId);
+      if (workspace === undefined) {
+        receipt = { ...receipt, ended_at: now(), outcome: 'failed' };
+        await store.putReceipt(receipt);
+        await store.appendEvent({ node_id: deps.node_id, job_id: jobId, kind: 'action.finished', payload: { receipt_id: receiptId, outcome: receipt.outcome, error: ErrorCode.E_WORKSPACE_DENIED } });
+        throw toros(ErrorCode.E_WORKSPACE_DENIED, 'Unknown workspace');
+      }
       // Pipeline order, normative (G-node-core): spend the budget at step 7,
       // THEN record the start at step 8.
       //
@@ -261,9 +274,32 @@ export function createActionPipeline(deps: {
       // Still before the adapter runs — a crash or a hung adapter must not
       // leave an action that spent budget with no record of it.
       await store.putReceipt(receipt);
-      const workspace = deps.workspaces.find((candidate) => candidate.id === sessionWorkspaceId);
-      if (workspace === undefined) throw toros(ErrorCode.E_WORKSPACE_DENIED, 'Unknown workspace');
-      const context: AdapterContext = { job_id: jobId, session_id: sessionId, workspace, correlation_id: receiptId, signal: new AbortController().signal };
+      // Core-level timeout (AR-07). One controller per action; its signal is
+      // handed to the adapter, and the adapter call races a timer armed with
+      // the action's OWN ceiling: ActionSchema.timeout_ms, else the manifest
+      // default. On timeout the controller aborts, the run fails with
+      // E_TIMEOUT (receipt `terminated`), and a late adapter result cannot
+      // overwrite the already-closed receipt. Wiring a job-cancellation hook
+      // (E_CANCELLED) would land here; the pipeline has no such hook today, so
+      // one is not invented.
+      const controller = new AbortController();
+      const timeoutMs = actionSchema?.timeout_ms ?? adapter.manifest.default_timeout_ms;
+      const timedOut = toros(ErrorCode.E_TIMEOUT, `The action exceeded its ${timeoutMs}ms timeout`);
+      async function withinTimeout<T>(work: () => Promise<T>): Promise<T> {
+        let timer: NodeJS.Timeout | undefined;
+        try {
+          return await Promise.race([
+            work(),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => {
+                controller.abort();
+                reject(timedOut);
+              }, timeoutMs);
+            }),
+          ]);
+        } finally { if (timer !== undefined) clearTimeout(timer); }
+      }
+      const context: AdapterContext = { job_id: jobId, session_id: sessionId, workspace, correlation_id: receiptId, signal: controller.signal };
       // Hand the adapter the SAME path policy approved, not the string the
       // caller wrote.
       //
@@ -279,9 +315,15 @@ export function createActionPipeline(deps: {
       const executedArgs = actionSchema === null ? actionArgs : resolvePathArgs(actionArgs, actionSchema, workspace.root);
       let result: ActionResult;
       let adapterFields: Readonly<Record<string, JsonValue>> = {};
+      // One closing path for the `running` receipt: success closes it
+      // `succeeded`, and ANY throw from this point on — adapter error,
+      // Core-level timeout, cancellation, or a store failure while recording
+      // the session or its artifacts — closes it `failed`/`terminated` before
+      // the error propagates. A receipt never stays `running` after this call
+      // returns or throws.
       try {
         if (tool === 'start_cli') {
-          const startedSession = await sessionAdapter(adapter).start({ ...context, session_id: receiptId });
+          const startedSession = await withinTimeout(() => sessionAdapter(adapter).start({ ...context, session_id: receiptId }));
           await store.createSession({ session_id: receiptId, job_id: jobId, adapter_id: adapter.manifest.id, workspace_id: workspace.id, pid: startedSession.pid, started_at: started });
           // Index it for correlation before anything the child does can be
           // observed. The adapter named its working directory after this same
@@ -297,7 +339,7 @@ export function createActionPipeline(deps: {
           }
           result = { output: '', truncated: false, artifacts: [], receipt_extra: {} };
         } else {
-          result = await adapter.invoke(actionId, executedArgs, context);
+          result = await withinTimeout(() => adapter.invoke(actionId, executedArgs, context));
           // stop_cli killed the process and left the session row untouched, so
           // persisted state kept showing a live pid and a null stopped_at —
           // across restarts. The lifecycle has to be recorded where it is read
@@ -308,6 +350,35 @@ export function createActionPipeline(deps: {
           }
         }
         adapterFields = declaredAdapterFields(adapter, result);
+        const exchangeState = adapterFields['exchange_state'];
+        const exchangeError = adapterFields['exchange_error'];
+        if (tool === 'read_cli' && sessionId !== null) {
+          const cursor = result.receipt_extra['bytes_read'];
+          if (typeof cursor === 'number' && Number.isInteger(cursor) && cursor >= 0) await store.setReadCursor(sessionId, cursor);
+        }
+        if (sessionId !== null && sessionAdapterId !== null && typeof exchangeState === 'string' && exchangeState !== 'running' && exchangeState !== 'idle') {
+          await settleCliExchange(store, jobId, sessionId, sessionAdapterId, exchangeState, exchangeError, adapterFields);
+        }
+        const artifactRefs: string[] = [];
+        for (const artifact of result.artifacts) { const id = randomUUID(); artifactRefs.push(id); await store.putArtifact({ ...artifact, artifact_id: id, job_id: jobId, created_at: now() }); }
+        const response = {
+          ...(tool === 'read_cli' && typeof adapterFields['bytes_read'] === 'number' ? { cursor: adapterFields['bytes_read'] } : {}),
+          output: result.output, artifacts: artifactRefs, receipt_id: receiptId,
+          ...(typeof exchangeState === 'string' ? { exchange_state: exchangeState, exchange_error: typeof exchangeError === 'string' ? exchangeError : null } : {}),
+        };
+        if (tool === 'send_cli' && exchangeState === 'running') {
+          // The one deliberate exception to "never return a `running` receipt":
+          // an exchange that is still in flight is settled later by the next
+          // read_cli (see settleCliExchange), so the receipt stays open on
+          // purpose.
+          receipt = { ...receipt, artifact_refs: artifactRefs, adapter_fields: adapterFields };
+          await store.putReceipt(receipt);
+          return response;
+        }
+        receipt = { ...receipt, ended_at: now(), outcome: 'succeeded', artifact_refs: artifactRefs, adapter_fields: adapterFields };
+        await store.putReceipt(receipt);
+        await store.appendEvent({ node_id: deps.node_id, job_id: jobId, kind: 'action.finished', payload: { receipt_id: receiptId, outcome: receipt.outcome, actions_used: spent.actions_used } });
+        return response;
       } catch (error: unknown) {
         const failed = error instanceof TorosError ? error : toros(ErrorCode.E_ADAPTER_FAILURE, 'The adapter failed');
         receipt = { ...receipt, ended_at: now(), outcome: failed.code === ErrorCode.E_TIMEOUT || failed.code === ErrorCode.E_CANCELLED || failed.code === ErrorCode.E_OUTPUT_LIMIT ? 'terminated' : 'failed' };
@@ -315,31 +386,6 @@ export function createActionPipeline(deps: {
         await store.appendEvent({ node_id: deps.node_id, job_id: jobId, kind: 'action.finished', payload: { receipt_id: receiptId, outcome: receipt.outcome, error: failed.code } });
         throw failed;
       }
-      const exchangeState = adapterFields['exchange_state'];
-      const exchangeError = adapterFields['exchange_error'];
-      if (tool === 'read_cli' && sessionId !== null) {
-        const cursor = result.receipt_extra['bytes_read'];
-        if (typeof cursor === 'number' && Number.isInteger(cursor) && cursor >= 0) await store.setReadCursor(sessionId, cursor);
-      }
-      if (sessionId !== null && sessionAdapterId !== null && typeof exchangeState === 'string' && exchangeState !== 'running' && exchangeState !== 'idle') {
-        await settleCliExchange(store, jobId, sessionId, sessionAdapterId, exchangeState, exchangeError, adapterFields);
-      }
-      const artifactRefs: string[] = [];
-      for (const artifact of result.artifacts) { const id = randomUUID(); artifactRefs.push(id); await store.putArtifact({ ...artifact, artifact_id: id, job_id: jobId, created_at: now() }); }
-      const response = {
-        ...(tool === 'read_cli' && typeof adapterFields['bytes_read'] === 'number' ? { cursor: adapterFields['bytes_read'] } : {}),
-        output: result.output, artifacts: artifactRefs, receipt_id: receiptId,
-        ...(typeof exchangeState === 'string' ? { exchange_state: exchangeState, exchange_error: typeof exchangeError === 'string' ? exchangeError : null } : {}),
-      };
-      if (tool === 'send_cli' && exchangeState === 'running') {
-        receipt = { ...receipt, artifact_refs: artifactRefs, adapter_fields: adapterFields };
-        await store.putReceipt(receipt);
-        return response;
-      }
-      receipt = { ...receipt, ended_at: now(), outcome: 'succeeded', artifact_refs: artifactRefs, adapter_fields: adapterFields };
-      await store.putReceipt(receipt);
-      await store.appendEvent({ node_id: deps.node_id, job_id: jobId, kind: 'action.finished', payload: { receipt_id: receiptId, outcome: receipt.outcome, actions_used: spent.actions_used } });
-      return response;
     } finally { locks.delete(jobId); }
   }
 
