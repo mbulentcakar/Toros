@@ -4,24 +4,40 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { parseScriptJson } from './json.js';
-import type { RawControl, RawWindow, UiaProbe } from './adapter.js';
+import type { UiaProbe } from './adapter.js';
+
+/** Raw data from the OS layer — native handles, real titles. Never leaves the adapter as-is. */
+export interface RawWindow {
+  readonly native_handle: string;
+  readonly title?: string;
+  readonly process_name: string;
+  readonly z_order: number;
+  readonly foreground: boolean;
+}
+
+export interface RawControl {
+  readonly native_id: string;
+  readonly control_type: string;
+  readonly automation_id?: string;
+  readonly enabled: boolean;
+  readonly patterns: readonly string[];
+}
 
 /**
  * The fixed, parameter-free PowerShell script that drives read-only UIA discovery.
  *
  * Every input is read as *data* from `input.json` in the script's own directory;
- * no value is interpolated into this text. Names/titles are untrusted application
- * content — they travel as JSON values, never as script source. The script reads
- * control METADATA only (type, name, enabled, supported patterns) — never a
- * ValuePattern value.
+ * no value is interpolated into this text. Titles come from GetWindowText on the
+ * native handle (never UIA Name). The script reads control METADATA only
+ * (type, automation_id, enabled, supported patterns) — never a ValuePattern value
+ * and never UIA Name.
  *
- * Live-validated on a real Windows 11 desktop 2026-09-16: enumerate returns real
- * process names + foreground; inspect walks the ControlView tree (RuntimeId cycle
- * guard, depth-bounded, document pre-order); the locked/secure desktop is detected
- * via OpenInputDesktop. Electron/Chromium apps that do not build an accessibility
- * tree legitimately return zero controls.
+ * Live-validated on a real Windows 11 desktop: enumerate returns real
+ * process names + foreground + native window text titles; inspect walks the
+ * ControlView tree (RuntimeId cycle guard, depth-bounded, document pre-order);
+ * the locked/secure desktop is detected via OpenInputDesktop.
  */
-const DESKTOP_UIA_PS1 = `# toros-desktop-uia.ps1 — fixed, parameter-free. Inputs via input.json; nothing is interpolated.
+export const DESKTOP_UIA_PS1 = `# toros-desktop-uia.ps1 — fixed, parameter-free. Inputs via input.json; nothing is interpolated.
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -33,11 +49,21 @@ public class TorosNative {
   [DllImport("user32.dll")] public static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
   [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr h);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern bool GetUserObjectInformation(IntPtr h, int index, StringBuilder pv, uint n, out uint need);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
   public static string InputDesktopName() {
     IntPtr d = OpenInputDesktop(0, false, 0x0001);
     if (d == IntPtr.Zero) return null;
     try { var sb = new StringBuilder(256); uint need; if (GetUserObjectInformation(d, 2, sb, 256, out need)) return sb.ToString(); return null; }
     finally { CloseDesktop(d); }
+  }
+  public static string GetWindowText(IntPtr hWnd) {
+    if (hWnd == IntPtr.Zero) return null;
+    var sb = new StringBuilder(512);
+    int len = GetWindowText(hWnd, sb, 512);
+    if (len <= 0) return string.Empty;
+    string s = sb.ToString();
+    if (s.Length > 256) return s.Substring(0, 256);
+    return s;
   }
 }
 "@
@@ -55,55 +81,85 @@ try {
 
   if ([string]$req.action -eq 'enumerate_windows') {
     $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)
-    $els = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)
+    $walker = New-Object System.Windows.Automation.TreeWalker($cond)
+    $maxw = [int]$req.max_windows
+    if ($maxw -le 0) { $maxw = [int]::MaxValue }
+    $ws = New-Object 'System.Collections.Generic.List[object]'
+    $truncated = $false
+    $z = 0
     $fg = [TorosNative]::GetForegroundWindow().ToInt64()
-    $ws = New-Object 'System.Collections.Generic.List[object]'; $z = 0
-    foreach ($el in $els) {
-      $hwnd = [int64]$el.Current.NativeWindowHandle
-      $rid = ($el.GetRuntimeId() | ForEach-Object { [string]$_ }) -join ','
+    $c = $null; try { $c = $walker.GetFirstChild($root) } catch { }
+    while ($null -ne $c) {
+      if ($ws.Count -ge $maxw) { $truncated = $true; break }
+      $hwnd = [int64]$c.Current.NativeWindowHandle
+      $rid = ($c.GetRuntimeId() | ForEach-Object { [string]$_ }) -join ','
       $nh = if ($hwnd -ne 0) { [string]$hwnd } else { 'rid:' + $rid }
-      $pn = ''; try { $pn = [string](Get-Process -Id $el.Current.ProcessId -ErrorAction Stop).ProcessName } catch { }
-      [void]$ws.Add(@{ native_handle=$nh; title=[string]$el.Current.Name; process_name=$pn; z_order=$z; foreground=($hwnd -ne 0 -and $hwnd -eq $fg) })
+      $pn = ''; try { $pn = [string](Get-Process -Id $c.Current.ProcessId -ErrorAction Stop).ProcessName } catch { }
+      $w = @{ native_handle=$nh; process_name=$pn; z_order=$z; foreground=($hwnd -ne 0 -and $hwnd -eq $fg) }
+      if ($hwnd -ne 0) {
+        $wt = [TorosNative]::GetWindowText([IntPtr]$hwnd)
+        if ($null -ne $wt) { $w['title'] = $wt }
+      }
+      [void]$ws.Add($w)
       $z++
+      try { $c = $walker.GetNextSibling($c) } catch { $c = $null }
     }
-    Emit @{ session_state='active'; windows=$ws.ToArray() }
+    Emit @{ session_state='active'; windows=$ws.ToArray(); truncated=$truncated }
   }
   elseif ([string]$req.action -eq 'inspect_window') {
     $want = [string]$req.native_handle
     $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)
-    $tops = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)
+    $walker = New-Object System.Windows.Automation.TreeWalker($cond)
     $target = $null
-    foreach ($el in $tops) {
-      $hwnd = [int64]$el.Current.NativeWindowHandle
-      $rid = ($el.GetRuntimeId() | ForEach-Object { [string]$_ }) -join ','
+    $c = $null; try { $c = $walker.GetFirstChild($root) } catch { }
+    while ($null -ne $c) {
+      $hwnd = [int64]$c.Current.NativeWindowHandle
+      $rid = ($c.GetRuntimeId() | ForEach-Object { [string]$_ }) -join ','
       $nh = if ($hwnd -ne 0) { [string]$hwnd } else { 'rid:' + $rid }
-      if ($nh -eq $want) { $target = $el; break }
+      if ($nh -eq $want) { $target = $c; break }
+      try { $c = $walker.GetNextSibling($c) } catch { $c = $null }
     }
     if ($null -eq $target) { Emit @{ closed = $true }; return }
     $pn = ''; try { $pn = [string](Get-Process -Id $target.Current.ProcessId -ErrorAction Stop).ProcessName } catch { }
     $depth = [int]$req.depth; $maxc = [int]$req.max_controls
-    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    if ($maxc -le 0) { $maxc = [int]::MaxValue }
+    $cwalker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
     $controls = New-Object 'System.Collections.Generic.List[object]'
     $seen = New-Object 'System.Collections.Generic.HashSet[string]'
     $truncated = $false
     $stack = New-Object 'System.Collections.Generic.Stack[object]'
-    $stack.Push(@($target, 0))
-    while ($stack.Count -gt 0) {
-      $p = $stack.Pop(); $el = $p[0]; $d = [int]$p[1]
-      $rid = ($el.GetRuntimeId() | ForEach-Object { [string]$_ }) -join ','
-      if (-not $seen.Add($rid)) { continue }
-      if ($d -ge 1) {
-        if ($controls.Count -ge $maxc) { $truncated = $true; break }
+    $curr = $null; try { $curr = $cwalker.GetFirstChild($target) } catch { }
+    $d = 1
+    while ($null -ne $curr) {
+      if ($controls.Count -ge $maxc) { $truncated = $true; break }
+      $rid = ($curr.GetRuntimeId() | ForEach-Object { [string]$_ }) -join ','
+      if ($seen.Add($rid)) {
         $pats = New-Object 'System.Collections.Generic.List[string]'
-        try { foreach ($pt in $el.GetSupportedPatterns()) { [void]$pats.Add([string]$pt.ProgrammaticName) } } catch { }
-        [void]$controls.Add(@{ native_id=$rid; control_type=[string]$el.Current.ControlType.ProgrammaticName; name=[string]$el.Current.Name; enabled=[bool]$el.Current.IsEnabled; patterns=$pats.ToArray() })
+        try { foreach ($pt in $curr.GetSupportedPatterns()) { [void]$pats.Add([string]$pt.ProgrammaticName) } } catch { }
+        $aid = ''; try { $aid = [string]$curr.Current.AutomationId } catch { }
+        $ctrl = @{ native_id=$rid; control_type=[string]$curr.Current.ControlType.ProgrammaticName; enabled=[bool]$curr.Current.IsEnabled; patterns=$pats.ToArray() }
+        if (-not [string]::IsNullOrEmpty($aid)) { $ctrl['automation_id'] = $aid }
+        [void]$controls.Add($ctrl)
+
+        $child = $null
+        if ($d -lt $depth) {
+          try { $child = $cwalker.GetFirstChild($curr) } catch { }
+        }
+        if ($null -ne $child) {
+          $stack.Push($curr)
+          $curr = $child
+          $d++
+          continue
+        }
       }
-      if ($d -lt $depth) {
-        $kids = New-Object 'System.Collections.Generic.List[object]'
-        $c = $null; try { $c = $walker.GetFirstChild($el) } catch { }
-        while ($null -ne $c) { [void]$kids.Add($c); try { $c = $walker.GetNextSibling($c) } catch { $c = $null } }
-        for ($i = $kids.Count - 1; $i -ge 0; $i--) { $stack.Push(@($kids[$i], ($d + 1))) }
+      $next = $null
+      try { $next = $cwalker.GetNextSibling($curr) } catch { }
+      while ($null -eq $next -and $stack.Count -gt 0) {
+        $curr = $stack.Pop()
+        $d--
+        try { $next = $cwalker.GetNextSibling($curr) } catch { }
       }
+      $curr = $next
     }
     Emit @{ closed=$false; process_name=$pn; controls=$controls.ToArray(); truncated=$truncated }
   }
@@ -186,11 +242,30 @@ export function createPowerShellUiaProbe(options: { timeout_ms: number }): UiaPr
   const timeoutMs = options.timeout_ms;
 
   return {
-    async enumerateWindows(sessionScope: string, signal: AbortSignal): Promise<
-      | { readonly session_state: 'active'; readonly windows: readonly RawWindow[] }
+    async enumerateWindows(
+      sessionScope: string,
+      optsOrSignal?: { max_windows?: number } | AbortSignal,
+      maybeSignal?: AbortSignal,
+    ): Promise<
+      | { readonly session_state: 'active'; readonly windows: readonly RawWindow[]; readonly truncated: boolean }
       | { readonly session_state: 'locked' | 'disconnected' }
     > {
-      const output = await runPowerShell({ action: 'enumerate_windows', session_scope: sessionScope }, timeoutMs, signal);
+      let maxWindows = 200;
+      let signal: AbortSignal;
+      if (optsOrSignal instanceof AbortSignal) {
+        signal = optsOrSignal;
+      } else {
+        if (optsOrSignal && typeof optsOrSignal.max_windows === 'number') {
+          maxWindows = optsOrSignal.max_windows;
+        }
+        signal = maybeSignal!;
+      }
+
+      const output = await runPowerShell(
+        { action: 'enumerate_windows', session_scope: sessionScope, max_windows: maxWindows },
+        timeoutMs,
+        signal,
+      );
 
       const sessionState = output['session_state'];
       if (sessionState === 'locked' || sessionState === 'disconnected') {
@@ -203,13 +278,14 @@ export function createPowerShellUiaProbe(options: { timeout_ms: number }): UiaPr
       const rawWindows = (output['windows'] as Array<Record<string, unknown>> | undefined) ?? [];
       const windows: RawWindow[] = rawWindows.map((w) => ({
         native_handle: typeof w['native_handle'] === 'string' ? w['native_handle'] : String(w['native_handle'] ?? ''),
-        title: typeof w['title'] === 'string' ? w['title'] : String(w['title'] ?? ''),
+        ...(typeof w['title'] === 'string' ? { title: w['title'].slice(0, 256) } : {}),
         process_name: typeof w['process_name'] === 'string' ? w['process_name'] : String(w['process_name'] ?? ''),
         z_order: typeof w['z_order'] === 'number' ? w['z_order'] : Number(w['z_order'] ?? 0),
         foreground: w['foreground'] === true,
       }));
+      const truncated = output['truncated'] === true;
 
-      return { session_state: 'active', windows };
+      return { session_state: 'active', windows, truncated };
     },
 
     async inspectWindow(nativeHandle: string, opts: { depth: number; max_controls: number }, signal: AbortSignal): Promise<
@@ -236,7 +312,9 @@ export function createPowerShellUiaProbe(options: { timeout_ms: number }): UiaPr
       const controls: RawControl[] = rawControls.map((c) => ({
         native_id: typeof c['native_id'] === 'string' ? c['native_id'] : String(c['native_id'] ?? ''),
         control_type: typeof c['control_type'] === 'string' ? c['control_type'] : String(c['control_type'] ?? ''),
-        name: typeof c['name'] === 'string' ? c['name'] : String(c['name'] ?? ''),
+        ...(typeof c['automation_id'] === 'string' && c['automation_id'].length > 0
+          ? { automation_id: c['automation_id'] }
+          : {}),
         enabled: c['enabled'] === true,
         patterns: Array.isArray(c['patterns']) ? (c['patterns'] as readonly string[]) : [],
       }));

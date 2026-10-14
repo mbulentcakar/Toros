@@ -14,27 +14,17 @@ import type {
 // Seam — the PowerShell/UIA layer, injectable for testability
 // ---------------------------------------------------------------------------
 
-/** Raw data from the OS layer — native handles, real titles. Never leaves the adapter as-is. */
-export interface RawWindow {
-  readonly native_handle: string;
-  readonly title: string;
-  readonly process_name: string;
-  readonly z_order: number;
-  readonly foreground: boolean;
-}
-
-export interface RawControl {
-  readonly native_id: string;
-  readonly control_type: string;
-  readonly name: string;
-  readonly enabled: boolean;
-  readonly patterns: readonly string[];
-}
+export type { RawWindow, RawControl } from './probe.js';
+import type { RawWindow, RawControl } from './probe.js';
 
 export interface UiaProbe {
   /** Enumerate top-level windows in the given interactive session. */
-  enumerateWindows(sessionScope: string, signal: AbortSignal): Promise<
-    | { readonly session_state: 'active'; readonly windows: readonly RawWindow[] }
+  enumerateWindows(
+    sessionScope: string,
+    opts: { max_windows: number },
+    signal: AbortSignal,
+  ): Promise<
+    | { readonly session_state: 'active'; readonly windows: readonly RawWindow[]; readonly truncated?: boolean }
     | { readonly session_state: 'locked' | 'disconnected' }
   >;
   /**
@@ -47,6 +37,15 @@ export interface UiaProbe {
     | { readonly closed: true }
     | { readonly closed: false; readonly process_name: string; readonly controls: readonly RawControl[]; readonly truncated: boolean }
   >;
+}
+
+/**
+ * 1–128 printable ASCII characters (0x20 to 0x7E inclusive).
+ */
+export function isValidAutomationId(id: unknown): id is string {
+  if (typeof id !== 'string') return false;
+  if (id.length < 1 || id.length > 128) return false;
+  return /^[\x20-\x7E]+$/.test(id);
 }
 
 /**
@@ -175,9 +174,9 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
   interface PublicControl {
     control_id: string;
     type: string;
+    automation_id?: string;
     enabled: boolean;
     patterns: readonly string[];
-    name?: string;
   }
 
   const adapter: Adapter = {
@@ -217,7 +216,11 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
   ): Promise<ActionResult> {
     const sessionScope = typeof args['session_scope'] === 'string' ? args['session_scope'] : 'default';
 
-    const result = await options.probe.enumerateWindows(sessionScope, ctx.signal);
+    const result = await options.probe.enumerateWindows(
+      sessionScope,
+      { max_windows: options.max_windows },
+      ctx.signal,
+    );
 
     if (result.session_state === 'locked' || result.session_state === 'disconnected') {
       // No window list for unavailable sessions. No enumeration stored.
@@ -241,14 +244,12 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
     const idMap = new Map<string, EnumerationEntry>();
 
     const windows: PublicWindow[] = [];
-    let truncated = false;
     const maxWindows = options.max_windows;
 
     for (let i = 0; i < result.windows.length; i++) {
       const raw = result.windows[i]!;
 
       if (windows.length >= maxWindows) {
-        truncated = true;
         break;
       }
 
@@ -269,13 +270,15 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
         app_in_scope: appInScope,
       };
 
-      // title is included ONLY when app_in_scope is true
-      if (appInScope) {
-        publicWindow.title = raw.title;
+      // title is included ONLY when app_in_scope is true and raw.title is present
+      if (appInScope && typeof raw.title === 'string') {
+        publicWindow.title = raw.title.slice(0, 256);
       }
 
       windows.push(publicWindow);
     }
+
+    const truncated = ('truncated' in result && result.truncated === true) || result.windows.length > windows.length;
 
     currentEnumeration = { freshness_token: freshnessToken, windows: idMap };
 
@@ -376,13 +379,15 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
       return makeInspectResult('unavailable', output, 0, false, depth);
     }
 
-    // Filter (substring over type/name) BEFORE paginating.
+    // Filter (substring over type and automation_id only) BEFORE paginating.
     let filtered = probeResult.controls;
     if (controlFilter.length > 0) {
       const filterLower = controlFilter.toLowerCase();
       filtered = filtered.filter((c) =>
         c.control_type.toLowerCase().includes(filterLower) ||
-        c.name.toLowerCase().includes(filterLower),
+        (typeof c.automation_id === 'string' &&
+          isValidAutomationId(c.automation_id) &&
+          c.automation_id.toLowerCase().includes(filterLower)),
       );
     }
 
@@ -395,14 +400,17 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
     const truncated = probeResult.truncated || morePages;
     const nextPage = morePages ? page + 1 : undefined;
 
-    // Map to public controls — never include a value; name allowed (window is in scope).
-    const publicControls: PublicControl[] = pageSlice.map((raw) => ({
-      control_id: randomUUID(),
-      type: raw.control_type,
-      enabled: raw.enabled,
-      patterns: raw.patterns,
-      name: raw.name,
-    }));
+    // Map to public controls — structure only, never a value, never a name.
+    const publicControls: PublicControl[] = pageSlice.map((raw) => {
+      const hasValidId = isValidAutomationId(raw.automation_id);
+      return {
+        control_id: randomUUID(),
+        type: raw.control_type,
+        ...(hasValidId ? { automation_id: raw.automation_id } : {}),
+        enabled: raw.enabled,
+        patterns: raw.patterns,
+      };
+    });
 
     const output = JSON.stringify({
       status: 'ok' as InspectStatus,

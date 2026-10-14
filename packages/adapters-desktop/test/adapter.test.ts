@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import {
   createDesktopAdapter,
@@ -7,6 +9,7 @@ import {
   type RawWindow,
   type RawControl,
 } from '../src/adapter.js';
+import { DESKTOP_UIA_PS1 } from '../src/probe.js';
 
 import type { AdapterContext, JsonValue } from '@toros/contracts';
 
@@ -26,9 +29,16 @@ function makeFakeProbe(
   inspectProcessName: string = 'NOTEPAD.EXE',
 ): UiaProbe {
   return {
-    async enumerateWindows(_sessionScope: string, _signal: AbortSignal) {
+    async enumerateWindows(
+      _sessionScope: string,
+      optsOrSignal?: { max_windows: number } | AbortSignal,
+      _maybeSignal?: AbortSignal,
+    ) {
       if (sessionState === 'active') {
-        return { session_state: 'active', windows };
+        const opts = optsOrSignal && typeof optsOrSignal === 'object' && 'max_windows' in optsOrSignal ? optsOrSignal : undefined;
+        const maxw = opts?.max_windows ?? windows.length;
+        const isTruncated = truncated || windows.length > maxw;
+        return { session_state: 'active', windows: windows.slice(0, maxw), truncated: isTruncated };
       }
       return { session_state: sessionState };
     },
@@ -84,21 +94,21 @@ const rawControls: RawControl[] = [
   {
     native_id: 'c1',
     control_type: 'Button',
-    name: 'OK',
+    automation_id: 'btn-ok',
     enabled: true,
     patterns: ['Invoke'],
   },
   {
     native_id: 'c2',
     control_type: 'Edit',
-    name: 'Document text',
+    automation_id: 'txt-doc',
     enabled: true,
     patterns: ['Value', 'Text'],
   },
   {
     native_id: 'c3',
     control_type: 'CheckBox',
-    name: 'Enable feature',
+    automation_id: 'chk-feature',
     enabled: true,
     patterns: ['Toggle'],
   },
@@ -230,20 +240,24 @@ describe('desktop.inspect', () => {
     const controls = body.controls as Array<Record<string, unknown>>;
     assert.strictEqual(controls.length, 3);
 
-    // Check first control — opaque id, name present, NO value
+    // Check first control — opaque id, automation_id present, NO name, NO value
     const c0 = controls[0]!;
     assert.ok(typeof c0.control_id === 'string' && c0.control_id.length > 0);
     assert.notStrictEqual(c0.control_id, 'c1'); // NOT the native id
     assert.strictEqual(c0.type, 'Button');
     assert.strictEqual(c0.enabled, true);
-    assert.strictEqual(c0.name, 'OK');
-    assert.strictEqual(c0.value, undefined); // NEVER a value field
+    assert.strictEqual(c0.automation_id, 'btn-ok');
+    assert.strictEqual((c0 as Record<string, unknown>).name, undefined); // NEVER a name field
+    assert.strictEqual((c0 as Record<string, unknown>).value, undefined); // NEVER a value field
+    assert.deepStrictEqual(Object.keys(c0).sort(), ['automation_id', 'control_id', 'enabled', 'patterns', 'type'].sort());
 
     // Check second control
     const c1 = controls[1]!;
     assert.strictEqual(c1.type, 'Edit');
-    assert.strictEqual(c1.name, 'Document text');
-    assert.strictEqual(c1.value, undefined); // NEVER a value field
+    assert.strictEqual(c1.automation_id, 'txt-doc');
+    assert.strictEqual((c1 as Record<string, unknown>).name, undefined); // NEVER a name field
+    assert.strictEqual((c1 as Record<string, unknown>).value, undefined); // NEVER a value field
+    assert.deepStrictEqual(Object.keys(c1).sort(), ['automation_id', 'control_id', 'enabled', 'patterns', 'type'].sort());
 
     // receipt_extra
     assert.strictEqual(inspectResult.receipt_extra.status, 'ok');
@@ -374,7 +388,7 @@ describe('desktop.inspect', () => {
   it('closed window returns status=unavailable', async () => {
     // Fake probe that returns closed:true for inspectWindow
     const probe: UiaProbe = {
-      async enumerateWindows(_sessionScope: string, _signal: AbortSignal) {
+      async enumerateWindows(_sessionScope: string, _opts: { max_windows: number }, _signal: AbortSignal) {
         return { session_state: 'active', windows: [rawExcelWindow] };
       },
       async inspectWindow(
@@ -418,10 +432,10 @@ describe('desktop.inspect', () => {
   it('adapter paginates the probe controls: truncated + next_page, filter before paging', async () => {
     // The probe returns the full document-order list; the ADAPTER filters then paginates.
     const manyControls: RawControl[] = [
-      { native_id: 'c1', control_type: 'Button', name: 'B1', enabled: true, patterns: [] },
-      { native_id: 'c2', control_type: 'Edit', name: 'E1', enabled: true, patterns: [] },
-      { native_id: 'c3', control_type: 'Button', name: 'B2', enabled: true, patterns: [] },
-      { native_id: 'c4', control_type: 'Button', name: 'B3', enabled: true, patterns: [] },
+      { native_id: 'c1', control_type: 'Button', automation_id: 'B1', enabled: true, patterns: [] },
+      { native_id: 'c2', control_type: 'Edit', automation_id: 'E1', enabled: true, patterns: [] },
+      { native_id: 'c3', control_type: 'Button', automation_id: 'B2', enabled: true, patterns: [] },
+      { native_id: 'c4', control_type: 'Button', automation_id: 'B3', enabled: true, patterns: [] },
     ];
     const probe = makeFakeProbe([rawExcelWindow], 'active', manyControls, false, false);
     const adapter = createDesktopAdapter({
@@ -456,7 +470,7 @@ describe('desktop.inspect', () => {
   it('max_controls is passed to the probe', async () => {
     let seenMax = -1;
     const probe: UiaProbe = {
-      async enumerateWindows(_s: string, _sig: AbortSignal) { return { session_state: 'active', windows: [rawExcelWindow] }; },
+      async enumerateWindows(_s: string, _opts: { max_windows: number }, _sig: AbortSignal) { return { session_state: 'active', windows: [rawExcelWindow] }; },
       async inspectWindow(_nh: string, opts: { depth: number; max_controls: number }, _sig: AbortSignal) {
         seenMax = opts.max_controls;
         return { closed: false, process_name: inScopeApp, controls: [], truncated: true };
@@ -475,10 +489,10 @@ describe('desktop.inspect', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Test 8: control_filter narrows by type/name
+  // Test 8: control_filter narrows by type/automation_id only, never name
   // ---------------------------------------------------------------------------
 
-  it('control_filter narrows by type and name', async () => {
+  it('control_filter narrows by type and automation_id only, never name', async () => {
     const probe = makeFakeProbe([rawExcelWindow], 'active', rawControls);
     const adapter = createDesktopAdapter({
       node_platform: 'win32',
@@ -507,16 +521,162 @@ describe('desktop.inspect', () => {
     assert.strictEqual(c1.length, 1);
     assert.strictEqual(c1[0]!.type, 'Button');
 
-    // Filter by name substring: "Document" should match the Edit control
+    // Filter by automation_id substring: "doc" should match Edit with automation_id 'txt-doc'
     const r2 = await adapter.invoke('inspect', {
       window_id: wid,
       freshness_token: ft,
-      control_filter: 'Document',
+      control_filter: 'doc',
     }, fakeContext());
     const b2 = JSON.parse(r2.output) as Record<string, unknown>;
     const c2 = b2.controls as Array<Record<string, unknown>>;
     assert.strictEqual(c2.length, 1);
     assert.strictEqual(c2[0]!.type, 'Edit');
+
+    // Filter by canary string that would have been a control name: matches nothing
+    const r3 = await adapter.invoke('inspect', {
+      window_id: wid,
+      freshness_token: ft,
+      control_filter: 'CANARY_NAME_NEVER_MATCHES',
+    }, fakeContext());
+    const b3 = JSON.parse(r3.output) as Record<string, unknown>;
+    const c3 = b3.controls as Array<Record<string, unknown>>;
+    assert.strictEqual(c3.length, 0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Static test (Acceptance 2)
+  // ---------------------------------------------------------------------------
+
+  it('static test: DESKTOP_UIA_PS1 contains no Current.Name and no NameProperty', () => {
+    assert.ok(!DESKTOP_UIA_PS1.includes('Current.Name'), 'DESKTOP_UIA_PS1 must not contain Current.Name');
+    assert.ok(!DESKTOP_UIA_PS1.includes('NameProperty'), 'DESKTOP_UIA_PS1 must not contain NameProperty');
+
+    const probeFile = path.resolve(import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname), '../src/probe.ts');
+    if (fs.existsSync(probeFile)) {
+      const probeSource = fs.readFileSync(probeFile, 'utf8');
+      const scriptMatch = probeSource.match(/export const DESKTOP_UIA_PS1 = `([\s\S]*?)`;/);
+      assert.ok(scriptMatch, 'DESKTOP_UIA_PS1 declaration found in probe.ts');
+      assert.ok(!scriptMatch[1]!.includes('Current.Name'), 'probe.ts script body must not contain Current.Name');
+      assert.ok(!scriptMatch[1]!.includes('NameProperty'), 'probe.ts script body must not contain NameProperty');
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Key count and automation_id validation (Acceptance 3)
+  // ---------------------------------------------------------------------------
+
+  it('control output objects contain exactly the five keys; over-long or non-ASCII automation_id is omitted', async () => {
+    const variedControls: RawControl[] = [
+      // 1. Valid 1-128 ASCII -> included (5 keys)
+      { native_id: 'v1', control_type: 'Button', automation_id: 'btn-1', enabled: true, patterns: [] },
+      // 2. Over-long (>128 chars) -> omitted (4 keys)
+      { native_id: 'v2', control_type: 'Button', automation_id: 'a'.repeat(129), enabled: true, patterns: [] },
+      // 3. Non-ASCII characters -> omitted (4 keys)
+      { native_id: 'v3', control_type: 'Button', automation_id: 'btn_ü_test', enabled: true, patterns: [] },
+      // 4. Control chars (newline) -> omitted (4 keys)
+      { native_id: 'v4', control_type: 'Button', automation_id: 'btn\nnewline', enabled: true, patterns: [] },
+      // 5. Empty string -> omitted (4 keys)
+      { native_id: 'v5', control_type: 'Button', automation_id: '', enabled: true, patterns: [] },
+      // 6. Undefined -> omitted (4 keys)
+      { native_id: 'v6', control_type: 'Button', enabled: true, patterns: [] },
+    ];
+    const probe = makeFakeProbe([rawExcelWindow], 'active', variedControls);
+    const adapter = createDesktopAdapter({
+      node_platform: 'win32',
+      authorized_apps: [inScopeApp],
+      probe,
+      max_windows: 200,
+      max_controls: 2000,
+      timeout_ms: 30_000,
+    });
+    const sr = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
+    const ft = (JSON.parse(sr.output) as Record<string, unknown>).freshness_token as string;
+    const wid = ((JSON.parse(sr.output) as Record<string, unknown>).windows as Array<Record<string, unknown>>)[0]!.window_id as string;
+
+    const r = await adapter.invoke('inspect', { window_id: wid, freshness_token: ft }, fakeContext());
+    const controls = (JSON.parse(r.output) as Record<string, unknown>).controls as Array<Record<string, unknown>>;
+    assert.strictEqual(controls.length, 6);
+
+    // v1: valid automation_id -> exactly 5 keys: control_id, type, automation_id, enabled, patterns
+    assert.strictEqual(controls[0]!.automation_id, 'btn-1');
+    assert.deepStrictEqual(Object.keys(controls[0]!).sort(), ['automation_id', 'control_id', 'enabled', 'patterns', 'type'].sort());
+    assert.strictEqual((controls[0]! as Record<string, unknown>).name, undefined);
+
+    // v2: over-long -> automation_id omitted, exactly 4 keys
+    assert.strictEqual(controls[1]!.automation_id, undefined);
+    assert.deepStrictEqual(Object.keys(controls[1]!).sort(), ['control_id', 'enabled', 'patterns', 'type'].sort());
+
+    // v3: non-ASCII -> automation_id omitted, exactly 4 keys
+    assert.strictEqual(controls[2]!.automation_id, undefined);
+    assert.deepStrictEqual(Object.keys(controls[2]!).sort(), ['control_id', 'enabled', 'patterns', 'type'].sort());
+
+    // v4: control char -> omitted, exactly 4 keys
+    assert.strictEqual(controls[3]!.automation_id, undefined);
+    assert.deepStrictEqual(Object.keys(controls[3]!).sort(), ['control_id', 'enabled', 'patterns', 'type'].sort());
+
+    // v5: empty -> omitted, exactly 4 keys
+    assert.strictEqual(controls[4]!.automation_id, undefined);
+    assert.deepStrictEqual(Object.keys(controls[4]!).sort(), ['control_id', 'enabled', 'patterns', 'type'].sort());
+
+    // v6: undefined -> omitted, exactly 4 keys
+    assert.strictEqual(controls[5]!.automation_id, undefined);
+    assert.deepStrictEqual(Object.keys(controls[5]!).sort(), ['control_id', 'enabled', 'patterns', 'type'].sort());
+  });
+
+  // ---------------------------------------------------------------------------
+  // Window title truncation and source (Acceptance 5)
+  // ---------------------------------------------------------------------------
+
+  it('window title equals native window text truncated to 256; out-of-scope window has no title; window without native handle has no title', async () => {
+    const longTitle = 'W'.repeat(300);
+    const inScopeLongWindow: RawWindow = {
+      native_handle: '111',
+      title: longTitle,
+      process_name: inScopeApp,
+      z_order: 0,
+      foreground: true,
+    };
+    const outScopeWindow: RawWindow = {
+      native_handle: '222',
+      title: 'Should Be Hidden',
+      process_name: outScopeApp,
+      z_order: 1,
+      foreground: false,
+    };
+    const noHandleWindow: RawWindow = {
+      native_handle: 'rid:1,2,3',
+      // no native handle -> title is undefined
+      process_name: inScopeApp,
+      z_order: 2,
+      foreground: false,
+    };
+
+    const probe = makeFakeProbe([inScopeLongWindow, outScopeWindow, noHandleWindow]);
+    const adapter = createDesktopAdapter({
+      node_platform: 'win32',
+      authorized_apps: [inScopeApp],
+      probe,
+      max_windows: 200,
+      max_controls: 2000,
+      timeout_ms: 30_000,
+    });
+
+    const result = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
+    const body = JSON.parse(result.output) as Record<string, unknown>;
+    const windows = body.windows as Array<Record<string, unknown>>;
+
+    // Window 0: in scope, long title -> truncated to 256
+    assert.strictEqual(windows[0]!.app_in_scope, true);
+    assert.strictEqual(windows[0]!.title, 'W'.repeat(256));
+    assert.strictEqual((windows[0]!.title as string).length, 256);
+
+    // Window 1: out of scope -> no title
+    assert.strictEqual(windows[1]!.app_in_scope, false);
+    assert.strictEqual(windows[1]!.title, undefined);
+
+    // Window 2: in scope but no native handle (title undefined) -> title undefined
+    assert.strictEqual(windows[2]!.app_in_scope, true);
+    assert.strictEqual(windows[2]!.title, undefined);
   });
 
   // ---------------------------------------------------------------------------
