@@ -116,12 +116,16 @@ and why it must be the only one.
 `operator_token` is required for the cockpit's findings view even when no capabilities require
 approval, because findings deliberately live on the operator surface rather than `/tools`.
 
-Whenever `operator_token` is set — gated or not — it must be at least 32 characters and different
-from `token`. Node Core refuses to start otherwise, even with nothing gated, and the start-up
-error names the rule: `operator_token must be at least 32 characters…` or `operator_token must
-differ from token…`. This is unconditional because a short or shared operator bearer is a gate the
-ordinary bearer can open; it is rejected at start-up rather than the first time an approval is
-needed.
+Whenever `operator_token` is set — gated or not — it must be at least 32 characters, different
+from `token`, and, like `token`, contain only printable ASCII (`0x21`–`0x7E`): no spaces, tabs,
+line breaks or other whitespace, and no leading or trailing whitespace. Node Core refuses to start
+otherwise, even with nothing gated, and the start-up error names the rule: `… must contain only
+printable ASCII characters (0x21–0x7E) …`, `operator_token must be at least 32 characters…`, or
+`operator_token must differ from token…`. The shape rule is checked first because HTTP strips
+surrounding whitespace from a bearer header, so a token that differed from another only by
+whitespace would be indistinguishable on the wire. This is unconditional because a short or shared
+operator bearer is a gate the ordinary bearer can open; it is rejected at start-up rather than the
+first time an approval is needed.
 
 `coordinator_entry` is optional. Node Core verifies that the file exists once at startup and
 refuses to start if it is missing or misconfigured, naming the path in the error.

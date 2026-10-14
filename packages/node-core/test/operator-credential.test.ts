@@ -186,18 +186,56 @@ test('tokens differing only by case are treated as distinct', async (t) => {
   assert.equal((await post(port, '/operator/jobs', {}, caseOperatorToken)).status, 200);
 });
 
-test('tokens differing only by trailing whitespace are treated as distinct', async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), 'toros-cred-space-'));
-  const wsToken = 'OperatorCredentialWhitespaceProbe0123456';
-  const wsOperatorToken = 'OperatorCredentialWhitespaceProbe0123456 ';
-  const core = makeCore(dir, { token: wsToken, operatorToken: wsOperatorToken, approvalRequired: [] });
+test('a token containing whitespace refuses to start and names the shape rule', async (t) => {
+  const bad = [
+    `${nodeToken} `,                                  // trailing space
+    ` ${nodeToken}`,                                  // leading space
+    'node-token with-inner-space-1234567890',         // inner space
+    `${nodeToken}\t`,                                 // tab
+    `${nodeToken}\n`,                                 // line break
+  ];
+  for (const value of bad) {
+    const dir = await mkdtemp(join(tmpdir(), 'toros-cred-token-shape-'));
+    const core = makeCore(dir, { token: value, approvalRequired: [] });
+    t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+    await assert.rejects(
+      core.start(),
+      (error: unknown) => error instanceof Error && /printable ASCII/.test(error.message),
+      `token ${JSON.stringify(value)}`,
+    );
+  }
+});
+
+test('an operator token containing whitespace refuses to start and names the shape rule', async (t) => {
+  const bad = [
+    `${operatorToken} `,                                  // trailing space
+    ` ${operatorToken}`,                                  // leading space
+    'operator-token for-operator-credential-suite-9999',  // inner space
+    `${operatorToken}\t`,                                 // tab
+    `${operatorToken}\n`,                                 // line break
+  ];
+  for (const value of bad) {
+    const dir = await mkdtemp(join(tmpdir(), 'toros-cred-op-shape-'));
+    const core = makeCore(dir, { token: nodeToken, operatorToken: value, approvalRequired: [] });
+    t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+    await assert.rejects(
+      core.start(),
+      (error: unknown) => error instanceof Error && /printable ASCII/.test(error.message),
+      `operator_token ${JSON.stringify(value)}`,
+    );
+  }
+});
+
+test('token = B + " " with operator_token = B refuses to start (round-2 regression)', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'toros-cred-regression-'));
+  // B is a deliberately synthetic ASCII string longer than 32 characters.
+  const B = 'operator-regression-probe-0123456789-abcdef';
+  const core = makeCore(dir, { token: `${B} `, operatorToken: B, approvalRequired: [] });
   t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
-  // Equality is exact-string, not trimmed: a token that differs from `token`
-  // only by a trailing space is distinct, so this must start rather than
-  // refuse. (The HTTP header boundary itself trims trailing whitespace, so the
-  // distinctness pin lives at start-up rather than on the wire.)
-  const { port } = await core.start();
-  assert.ok(port > 0);
+  // The trailing space is exactly what HTTP would strip before a comparison,
+  // so this must refuse to start before the operator surface can ever answer
+  // 200 to the ordinary bearer.
+  await assert.rejects(core.start(), (error: unknown) => error instanceof Error && /printable ASCII/.test(error.message));
 });
 
 test('a live advisory run credential is refused by the operator surface', async (t) => {

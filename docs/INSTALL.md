@@ -62,9 +62,14 @@ the `adapters` block with the executables orientation reported, `coordinator_ena
 for now. Restrict the file to your account (`icacls ... /inheritance:r /grant:r "%USERNAME%:RW"`).
 `orient` validates the result. Field reference: [DEPLOY.md §2](DEPLOY.md).
 
-If you set `operator_token`, it must be at least 32 characters and different from `token`; Node
-Core refuses to start otherwise even when no capability is gated, naming the rule at start-up
-(`operator_token must be at least 32 characters…` / `operator_token must differ from token…`).
+If you set `operator_token`, it must be at least 32 characters and different from `token`, and both
+`token` and `operator_token` must contain only printable ASCII (`0x21`–`0x7E`) — no spaces, tabs,
+line breaks or other whitespace, and no leading or trailing whitespace. Node Core refuses to start
+otherwise even when no capability is gated, naming the rule at start-up (`… must contain only
+printable ASCII characters (0x21–0x7E) …` / `operator_token must be at least 32 characters…` /
+`operator_token must differ from token…`). The shape rule is checked first because HTTP strips
+surrounding whitespace from a bearer header, so a token that differed from another only by
+whitespace would be indistinguishable on the wire.
 
 TODO: a complete minimal `config.json` for a tool node, with every field explained in one line.
 
