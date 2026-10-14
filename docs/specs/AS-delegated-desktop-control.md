@@ -2,7 +2,10 @@
 
 **Read `00-CONTRACTS.md` first.** It is short and it is binding.
 
-**Status: proposed, revision 3 (2026-10-13). Not accepted.** Revision 2 answered the independent
+**Status: proposed, revision 4 (2026-10-14). Not accepted.** Revision 4 answers the re-review of
+revision 3 (R3-B1, R3-B3, R3-B4, R3-B6, R3-N1–N3): delegation is limited to reviewed surface
+profiles (operator decision R4-a), and the lifecycle, spend point, retention check, password veto
+and AR gate are corrected. Earlier: revision 2 answered the independent
 spec review (`docs/reviews/AS-spec-review.md`, PR mbulentcakar/Toros#2): blockers B1–B7, majors
 M1–M4, minor N1. Revision 3 answers the re-review of revision 2: R2-B1, R2-B3, R2-B4, R2-B6,
 R2-M4 and R2-D1 … R2-D6. It also rebases on the AR remediation plan (`docs/reviews/AR-remediation-plan.md`,
@@ -26,9 +29,11 @@ layers of authorization, none of which is the driving model:
    what nobody may approve, and records every request, decision, and result in a real-time,
    timestamped log.
 
-"Any application" means any application **whose surface Node Core can classify** (B1). Surfaces it
-cannot classify go to the operator; surfaces it cannot classify safely are refused. AS does not
-claim universal coverage of arbitrary UI Automation providers.
+**Reach, stated plainly (R4-a).** The driver may *request* actions in any application. The
+**approver** may approve only inside apps, surfaces and controls declared by a **reviewed surface
+profile**. Everything else goes to the **operator**, and absolute targets are refused for everyone.
+Generic UI Automation cannot prove what an arbitrary control does, or that it is still the same
+control, so AS does not pretend that an agent can judge that.
 
 ## Why the boundary moves
 
@@ -161,8 +166,9 @@ just a signed application on a known framework (operator choice (a), 2026-10-13)
 
 1. **Absolute** wins over everything.
 2. **Operator-only** wins over delegate.
-3. **Delegate** applies only where the positive-evidence rules below are met.
-4. **Unrecognized or missing positive evidence** → operator-only.
+3. **Delegate** applies only to an app, surface and control matched by a reviewed surface profile
+   (below).
+4. **Anything unprofiled** → operator-only.
 5. **Unobtainable** evidence (access denied, process gone, integrity or native read fails) →
    refused.
 
@@ -200,6 +206,10 @@ Toros process that started before registration.
   safe. Revision 2's "residual risk" paragraph is withdrawn: an unmarked credential field is not
   an exception to decision 13, and it is not left to the approver's judgment. `set_value` is
   permitted (to either tier) **only** when every one of these holds:
+  0. **no positive password indication anywhere** (R3-N1): neither the element nor any ancestor
+     reports UIA `IsPassword = true`, native `ES_PASSWORD`, or a nonzero `EM_GETPASSWORDCHAR`.
+     **Any** one of these is an unconditional veto. Native evidence can expose a lying provider; it
+     never cancels a positive password signal from either source;
   1. the element has a native window handle;
   2. its native class is a plain text-entry class: Win32 `Edit`, `RichEdit20W`, `RICHEDIT50W`, or
      a WinForms class whose native base is one of these;
@@ -229,34 +239,83 @@ Toros process that started before registration.
 - **Credential and security surfaces:** `CredentialUIBroker`, `LogonUI`, Windows Security, the
   Settings app's account pages, and password-manager images listed in config (by image hash or
   signer plus product name).
-- **Any read that would return an element marked as a password** by UIA *or* by native style (its
-  existence, never its name or value).
-- **Everything without positive evidence** (precedence rule 4).
+- **Any read that would return an element positively identified as a password** (by UIA, native
+  style, or password character): its **existence** only. Its name and value are **never** released,
+  not even to an operator-approved read (R3-N1).
+- **Everything unprofiled** (precedence rule 4).
 
 Config can **add** to this tier. It cannot remove a built-in entry.
 
-### Positive evidence: the only way to reach delegate
+### Surface profiles: the only way to reach delegate (R3-B1, operator decision R4-a)
 
-A request reaches the delegate tier only if all of these hold:
+Revision 3 tried to prove a control's *function* from native evidence about the control itself.
+The re-review showed this cannot work: a signed app can build a terminal from genuine `Edit` and
+`Button` controls, and nothing in Windows says "this is a terminal". **Function is not
+observable through generic UI Automation.** So revision 4 stops inferring it. A function is
+**declared in a reviewed profile**, and the approver may approve only what a profile declares.
 
-- **The process** has verifiable identity: a valid Authenticode signature with version metadata,
-  or an image hash the operator listed in config. It runs at medium integrity or lower.
-- **The target element and every ancestor up to the top-level window** have native window handles
-  whose native classes are all in the **delegable class set**:
-  - Win32 common controls: `Button`, `Edit`, `RichEdit20W`, `RICHEDIT50W`, `ComboBox`,
-    `ComboBoxEx32`, `ListBox`, `SysListView32`, `SysTreeView32`, `SysTabControl32`, `msctls_*`,
-    `ToolbarWindow32`, `#32770` dialogs, `#32768` menus, and `Static`;
-  - WinForms classes whose native base is one of these;
-  - plus the application's own top-level frame class, recorded at admission.
-- **No absolute or operator-only evidence** appears anywhere on that chain.
+**A surface profile** is a TypeScript data module under
+`packages/adapters-uia/src/profiles/<profile_id>.ts`. It is static data, never fetched or
+generated at runtime, and changed only by a reviewed PR. Each profile has:
 
-An element **without a native window handle** (WPF, XAML and custom-drawn content) can be **read**
-at the delegate tier when its nearest native ancestor qualifies, but **actions on it are
-operator-only**. Its embedded function cannot be established natively. This closes R2-B1's
-signed-app-hosts-a-terminal and hosts-a-web-view cases: those hosts are either a non-delegable
-native class or a provider without native handles, so they never reach delegate.
+```ts
+export const profile: SurfaceProfile = {
+  profile_id: 'notepad', version: 1,
+  app: { signer: 'Microsoft Windows', product: 'Microsoft® Windows® Operating System',
+         original_filename: 'NOTEPAD.EXE', file_version: { min: '…', max: '…' } },
+  surfaces: [{
+    surface_id: 'save_dialog',
+    root: { native_class: '#32770', automation_id: null, title_role: 'save_as' },
+    context: [ /* selector paths whose state defines what an action here means */ ],
+    controls: [
+      { control_id: 'file_name', selector: [ … ], function: 'Type the file name to save as',
+        actions: ['set_value'], typing: true },
+      { control_id: 'save', selector: [ … ], function: 'Confirm Save',
+        actions: ['invoke'], typing: false },
+    ],
+  }],
+  review: { reviewed_by: '…', fixture_test: 'profiles/notepad.test.ts' },
+};
+```
 
-The delegable class set is code, reviewed with AS2, and extendable only by a spec change.
+- **Matching.** An app matches a profile only on OS evidence: signer, product,
+  `OriginalFilename`, and a file version in range. A **surface** matches only when its root
+  native class and automation id match, **and** every `context` path resolves. A **control**
+  matches only when its full selector resolves inside a matched surface, and its native class and
+  control type equal the profile's.
+- **Delegate tier = profiled and nothing else.** The approver may decide:
+  - app admission, only for an app that matches a profile;
+  - delegate reads, only within matched surfaces;
+  - an action, only on a matched control listing that action.
+
+  Every other window, surface and control **of any app** is **operator-only**, profiled apps
+  included. Absolute rules still win. A custom terminal built from ordinary controls has no
+  profile, so it never reaches the approver.
+- **What a profile may not declare.** The review checklist rejects any profile control whose
+  function is:
+  - executing commands or scripts;
+  - sending a message or payment outside the machine;
+  - changing credentials, accounts or security settings;
+  - installing software;
+  - deleting data without a recycle step.
+
+  Those stay operator-only by construction. A profile also may not cover any operator-only or
+  absolute surface (shells, browsers, embedded web, credential surfaces).
+- **The approver sees the declared function** (`function`, `surface_id`, `profile_id@version`)
+  in the record, next to the observed state. It judges whether that declared function serves the
+  mission objective. It is no longer asked to infer function from screen text.
+- **Typing (R3-a, R3-N1 kept).** A profile control may set `typing: true` only if it is a native
+  plain edit that passes every secret-entry rule. Those rules are checked live at every request,
+  and a profile cannot override them.
+- **Every profile ships with a native fixture test.** It launches the real app, matches every
+  surface and control, and proves that a non-matching look-alike surface is **not** matched. The
+  initial profiles are `notepad` and `calculator`, which the acceptance tests use. More profiles
+  are separate reviewed slices, at the operator's request.
+
+**Operator approvals outside profiles.** The operator may still approve any non-absolute action on
+an unprofiled surface (decision 6). The approval card states plainly that **for unprofiled
+controls Toros can bind only the observed state, not the control's identity or function**
+(R3-B3, below). The operator accepts that residual by approving. The approver never sees these.
 
 ### Native-interface preference (R2-M4)
 
@@ -274,10 +333,10 @@ An app grant is a **prerequisite**, never a substitute, for operator-tier approv
 
 | Request | Delegate tier | Operator-only tier | Absolute |
 |---|---|---|---|
-| App admission (`desktop_request_app`) | approver decides | operator decides; admits the app **only**, no reads or actions | refused |
+| App admission (`desktop_request_app`) | approver decides, **profiled app only** | operator decides; admits the app **only**, no reads or actions | refused |
 | `list_windows` | under grant, no per-call gate | operator, per call | refused |
-| `find`, `inspect_tree` | under grant; every returned element is classified (below) | operator, per call | element omitted |
-| `invoke`, `set_value`, `select` | approver, per action | operator, per action | refused |
+| `find`, `inspect_tree` | under grant, **inside a matched profile surface**; every returned element is classified (below) | operator, per call | element omitted |
+| `invoke`, `set_value`, `select` | approver, per action, **only on a matched profile control listing that action** | operator, per action | refused |
 
 **Per-element filtering on reads.** Every element a read would return is classified. Delegate
 elements are returned. Operator-only elements are **quarantined**, returned only as
@@ -289,8 +348,9 @@ neighbourhood.
 **No read ever returns a control value** (Spec AR's rule, kept). **Names are returned only where
 native evidence shows the element is not a password surface** (AR-01, remediation F2). That means
 an element with a native handle whose class and style pass the secret-entry checks. Every other
-element's name is withheld (`"name": null, "name_withheld": "no_native_evidence"`) unless the
-operator approves that exact read. The read output is:
+element's name is withheld (`"name": null, "name_withheld": "no_native_evidence"`). The operator
+may release such names by approving that exact read, **except** for elements positively
+identified as passwords, whose names are never released (R3-N1). The read output is:
 
 ```jsonc
 { "control_ref": "opaque, mission-scoped", "control_type": "Button", "automation_id": "≤128",
@@ -332,6 +392,9 @@ assembled from driver input. The record is a **discriminated union** on `kind` (
 
 // kind = "mutation"
 { "grant_id": "…", "process": { … },
+  "profile": { "profile_id": "notepad", "version": 1, "surface_id": "save_dialog",
+               "control_id": "save", "function": "Confirm Save" } | null,   // null = unprofiled, operator tier
+
   "action": "invoke" | "set_value" | "select",
   "input": { "selector": [ /* Spec V path */ ], "value": "…" /* set_value only, post-scan */ },
   "target": {
@@ -364,92 +427,145 @@ assembled from driver input. The record is a **discriminated union** on `kind` (
   audit log who tries to guess low-entropy values. At execution the worker recomputes the
   commitment from the live raw state. A mismatch is `E_APPROVAL_INVALID`.
 
-### Element continuity (R2-B3)
+### Element continuity (R2-B3, R3-B3)
 
-Runtime-id equality plus property equality does **not** prove that an element is the same one: UIA
-runtime ids can be reused after an element is destroyed
-([AutomationElement.GetRuntimeId](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.automationelement.getruntimeid)).
-Revision 3 drops that claim and requires a **live continuity guard**:
+Revision 3 relied on UIA events to prove a control was not replaced. The re-review is right that
+this proves nothing. Providers need not raise every event
+([UIA events for clients](https://learn.microsoft.com/en-us/dotnet/framework/ui-automation/ui-automation-events-for-clients)),
+and window handles are recycled ([IsWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-iswindow)).
+**Generic UI Automation cannot prove that a control is the same object over time.** Revision 4
+stops claiming it and changes what an approval binds to.
 
-- **One long-lived automation worker per grant**, inside the job (below). It resolves the target
-  when the record is prepared and **keeps that live element object** until execution or
-  invalidation. Execution calls the pattern on **that same object**. There is no second
-  resolution and no runtime-id lookup.
-- **Before the record is prepared**, the worker subscribes to:
-  - UIA `StructureChanged` on the element's parent and on each `selection_context` container;
-  - `AutomationPropertyChanged` on the element (name, enabled, value, selection).
+- **On a profiled control (delegate tier), an approval binds to a declared function in an
+  observed context, not to an object instance.** The profile declares that, within a matched
+  surface, the control at that selector performs that function. The record commits to:
+  - the profile id and version;
+  - the surface's `context` paths;
+  - the control's selector;
+  - the keyed `state_commitment` (R2-D2) over the raw state of the control, its ancestors and
+    every context path.
 
-  Any child removal, invalidation, or change to a bound property **invalidates the record**. If
-  the provider will not accept the subscription, continuity cannot be established, and the action
-  is refused (`E_APPROVAL_INVALID`, detail `no_continuity`) for **every** tier.
-- **Native handle continuity:** where the element has a native window handle, the worker also
-  confirms the handle still belongs to the same thread and process, and that the window still
-  exists (`IsWindow`). It holds a reference to the window's owning process for the grant's
-  lifetime, so the pid cannot be recycled while the grant lives.
-- **Selection items are bound by identity** (R2-B3): their live element objects are held and
-  subscribed, as well as their index and label. Two items with the same label are distinct.
-- **At the worker-ready boundary** (lifecycle, below) the worker revalidates:
-  1. process image hash;
-  2. continuity (no invalidating event received);
-  3. `state_commitment`;
-  4. tier, reclassified.
+  At execution the worker re-resolves the selector inside a re-matched surface and recomputes
+  the commitment. If the profile still matches and the commitment is equal, then an
+  indistinguishable replacement, or a change-and-return, is **by the profile's reviewed claim the
+  same function in the same context**. Clicking it is the approved action, so instance identity
+  is not required. If anything differs, the request is `E_APPROVAL_INVALID`.
+- **Events are an early invalidation signal only.** The worker still holds the live element and
+  subscribes, as in revision 3, and any received removal or property change invalidates at once.
+  But **the absence of an event is never treated as evidence**. Correctness rests on re-matching
+  and the commitment, never on a missing callback.
+- **Native handles** are checked only as additional mismatch evidence: the same class, owning
+  thread and process, and `IsWindow`. A match is never treated as proof of identity.
+- **On an unprofiled control (operator tier only)**, the same re-resolution, commitment and
+  event checks run, but no function claim exists. The binding is therefore **observed state
+  only**. The operator's approval card says so, and test 66 pins that this wording appears.
+- **Selection** is bound by the selected items' committed state (label, index, automation id,
+  and their context paths), with live objects held for early invalidation only.
 
-  Only then does it wait for the go token.
+**What AS does not promise.** A window of milliseconds remains between the final check and the
+pattern call. State outside the profile's `context` paths, or outside the observed snapshot for
+unprofiled controls, is not covered. A profile whose declared function is wrong is a profile
+defect, and is caught by its review and its native fixture test, not at runtime.
 
-**What AS does not promise.** A window of milliseconds remains between the last check and the
-pattern call. State the snapshot does not enumerate (for example which account is active, when
-nothing on screen shows it) is not covered. AS binds the action to the enumerated, continuously
-watched snapshot only, never to the semantic effect. The approver prompt says so and tells the
-approver to deny when the effect depends on state the record does not show.
-
-## Request lifecycle and invalidation (B4, R2-B4, R2-D4)
+## Request lifecycle and invalidation (B4, R2-B4, R3-B4, R3-N2)
 
 ```text
-received → validated → classified → awaiting_decision → approved → dispatched → ready → issued → executed
-   │           │            │               │               │           │          │        └→ outcome_uncertain
-   └→ rejected └→ refused   └→ refused      └→ denied       └→ invalidated (any of these, before `issued`)
+received → validated → classified → awaiting_decision → approved → replayed → policy_allowed
+  → worker_ready → authorized → [pattern call] → reported → executed | outcome_uncertain | outcome_unknown
 ```
 
-**`issued` is the only irreversible point.** It is the instant the worker calls the UIA pattern.
-Everything before it can be cancelled with no effect.
+The states, kept distinct as R3-B4 asks:
 
-- **Invalidation causes.** Each of these bumps the mission generation, voids every app grant, and
-  invalidates every request not yet `issued`:
-  - operator revoke, Hold or Stop all;
-  - mission, job or approval expiry;
-  - the job reaching a terminal state;
-  - **automatic holds**, on a delegate denial (M1) or an `outcome_uncertain`;
-  - enrollment reset;
-  - session lock or disconnect;
-  - audit-write failure;
-  - Node Core restart.
+- **`authorized`** is a durable **permission**: Node Core has granted this one record, at this
+  generation, a go token. It is **not** a claim that any call happened.
+- **The pattern call** is the only irreversible point. Nothing records it in advance.
+- **`reported`** means the worker sent `called` (immediately after the pattern returned or threw)
+  and then its result.
 
-  A verdict arriving for an old generation is recorded and **inert**.
-- **Go token at the worker-ready boundary** (R2-B4). A dispatched worker performs its checks
-  (above), then reports `ready` and **blocks**. Under the per-desktop execution lock, Node Core
-  rechecks:
-  - caller and enrollment;
-  - mission state, generation and effective expiry;
-  - job state and envelope digest;
-  - grant and process;
-  - tier;
-  - `ApprovalVerifier.consume` (on dispatch only, single-use).
+Anything before the pattern call can be cancelled with no effect.
 
-  It then appends the `issued` event **durably** and sends the worker a single-use go token valid
-  for 250 ms. The worker calls the pattern only on receiving it. Invalidation takes the same lock.
-  So it either lands before the go token, in which case Node Core kills the worker and the action
-  never happens, or after `issued`, in which case the call has been made and completes or ends
-  `outcome_uncertain`.
-- **Restart reconciliation** (R2-B4). At start, Node Core scans for requests whose last durable
-  event is `issued` without a final result, and appends `desktop.outcome_uncertain`
-  (`reconciled: true`). It replays nothing and restores no authority. Requests that never reached
-  `issued` are recorded as `invalidated` (cause `restart`).
-- **Audit-write ordering.** `received`, `decided`, `dispatched` and `issued` are durably appended
-  before the step they describe. A failed append before `issued` refuses the action. A failed
-  append after it ends every mission on the node and is shown in the cockpit.
-- **MCP disconnect never cancels** anything; only the invalidation causes above do.
-- **Locked or disconnected session:** an invalidation like the others. The mission survives,
-  and new grants are needed after unlock.
+### The single spend point (R3-N2)
+
+There is exactly **one** call to `ApprovalVerifier.consume`: **policy rule 12 in the ordinary
+pipeline**, when Node Core replays the approved record (spec AC). The normative sequence:
+
+1. **Request:** build the record → ordinary policy runs → `E_APPROVAL_REQUIRED` creates the
+   pending approval (existing behaviour).
+2. **Decision:** the approver or operator decides. An approve marks the approval granted.
+3. **Replay:** Node Core replays the record through the ordinary pipeline. Policy rules 1–11
+   re-run, and rule 12 **consumes** the approval (the single spend). This is the full ordinary
+   recheck after the wait, so nothing is skipped. A denial here ends the request with the
+   ordinary code.
+4. **Adapter:** the pipeline invokes the AS adapter with the record. The adapter starts or uses
+   the grant's worker. The worker re-matches and recomputes the commitment, then reports
+   `worker_ready`.
+5. **Final mission gate:** the adapter calls a Node-provided **mission gate**. This is AS-specific,
+   not policy: it neither reads nor caches a policy decision, so 00-CONTRACTS §7 holds. Under the
+   per-desktop lock, the gate checks:
+   - caller and enrollment;
+   - mission state and generation;
+   - effective expiry;
+   - job state;
+   - grant and process;
+   - tier, reclassified.
+
+   It **does not consume anything**. If the checks pass, it appends `authorized` and returns a go
+   token:
+   - bound to the record digest and the generation;
+   - single-use;
+   - with a deadline of `min(now + 250 ms, effective expiry)`.
+6. **Worker:** on receiving the token, the worker checks its deadline and generation, re-runs the
+   commitment check, then makes the pattern call and reports.
+
+A failure at step 4 or 5 happens **after** the spend, so the approval stays spent. The request
+ends `invalidated`, and a retry needs a new request and a new decision. That is deliberate: an
+approval is never reusable.
+
+### Invalidation
+
+**Causes:**
+- operator revoke, Hold or Stop all;
+- mission or job expiry;
+- the job reaching a terminal state;
+- the automatic holds: a delegate denial, `outcome_uncertain` or `outcome_unknown`;
+- enrollment reset;
+- session lock or disconnect;
+- audit-write failure;
+- Node Core restart.
+
+**Each one** bumps the generation, voids every grant, and does the following under the
+per-desktop lock:
+- requests not yet `authorized` → `invalidated`, worker killed;
+- `authorized` but not yet `reported` → Node Core sends the worker **abort**, then kills it. If
+  the worker reports `called` anyway, the request ends `outcome_uncertain`; otherwise it ends
+  `invalidated` (abort won).
+
+A late verdict for an old generation is recorded and inert.
+
+### Restart reconciliation
+
+At start, every request whose last durable event is `authorized` without `reported` is recorded
+as **`outcome_unknown`** (reconciled): the call may or may not have happened. Toros neither claims
+the call occurred nor retries it. Requests that never reached `authorized` are recorded
+`invalidated` (cause `restart`).
+
+### Stated residuals (R3-B4)
+
+- **Final check to pattern call:** microseconds to milliseconds in which a change cannot be
+  detected.
+- **Core death:** after Node Core sends a go token and dies, the worker can still use that token
+  until its deadline (≤ 250 ms) or until it notices the death, whichever is first. Workers watch
+  their stdin pipe from Node Core and abort the moment it closes. The supervisor kills the job
+  within milliseconds of Core's death. A call in that gap is reconciled as `outcome_unknown`.
+
+### Other rules
+
+- **Audit-write ordering:** `received`, `decided`, `policy_allowed` and `authorized` are durable
+  before the step they permit. A failed append before `authorized` refuses the request; a failed
+  append after it ends every mission on the node.
+- **MCP disconnect never cancels** a request; only the invalidation causes above do.
+- **Locked or disconnected session:** an invalidation like the others. The mission survives, and
+  new grants are needed after unlock.
 
 ### Child lifetime: the job supervisor (R2-D4)
 
@@ -471,8 +587,9 @@ The ordinary Node child-process API cannot create a process inside a Job Object.
   **If assignment fails, the child is terminated while still suspended**, and the action is
   refused. Children inherit no job handle. No child code runs outside the job.
 - **Gap, stated:** between Node Core's death and the supervisor noticing it, a few milliseconds
-  pass. No child can act in that gap, because a UIA call needs a go token that only a live Node
-  Core can issue.
+  pass. A worker that already holds an unexpired go token could use it in that gap. This is the
+  "Core death" residual in the lifecycle section, reconciled as `outcome_unknown`. Workers also
+  abort when their stdin pipe from Node Core closes.
 - Owned by AS1 (`packages/node-core/src/job-supervisor*.ts`) and reviewed with it.
 
 ## Secrets and sanitization (B5)
@@ -543,16 +660,23 @@ dedicated **approver runner** in `adapters-cli`, reviewed as part of AS. Its req
   ([CLI reference](https://code.claude.com/docs/en/cli-reference)); Codex has an `ephemeral` mode
   ([exec source](https://github.com/openai/codex/blob/main/codex-rs/exec/src/cli.rs)). An isolated
   home or a read-only mode does not imply either.
-  - **Per-decision wipe:** after every decision (success, deny, crash, timeout or cancel), the
-    runner deletes everything in the dedicated config home except the authentication material,
-    then restores the minimal config from a template held by Node Core.
+  - **Inspect before cleanup** (R3-B6). After the CLI process has exited (or been killed), and
+    **before** anything is deleted, the runner lists every profile-controlled location. Any file
+    other than the authentication material and the template config is a retention violation. On
+    canary runs, the runner also searches those locations by canary content. **A violation marks
+    the profile failed and the approver unavailable**, so every request is denied until the
+    operator re-verifies.
+  - **Per-decision wipe, after inspection, always:** after every decision (success, deny, crash,
+    timeout or cancel) and after inspection, whatever its result, the runner deletes everything in
+    the dedicated config home except the authentication material and restores the minimal config
+    from a template held by Node Core. Cleanup is recovery, never evidence.
   - **Fail closed:** if the pinned CLI version cannot disable its own persistence, the profile
     check fails and the approver is **unavailable**, so every request is denied.
   - **Canary verification:** at mission start, and after any CLI version change, the runner runs
     one decision on a synthetic canary record. It then searches **every** location the profile
     controls (config home, working directory, the CLI's temp dirs and `%LOCALAPPDATA%`
-    subfolders named in the finding doc) **by canary content, not by filename**. Any hit fails
-    the profile.
+    subfolders named in the finding doc) **by canary content, not by filename, before the wipe**.
+    Any hit fails the profile.
 - **Verified against both real CLIs** at the pinned versions. The exact flags that realise this
   profile are recorded in `docs/finding-approver-profile.md` during AS3, because CLI flags drift
   between versions and the requirement, not the flag list, is normative.
@@ -656,8 +780,8 @@ Decision 8: a log, live, with timestamps. The cockpit **Desktop control** view:
   budget left, and state. Buttons: **Revoke**, **Hold**, **Resume** (when held), and **Reset
   enrollment**.
 - **A stream, newest first:** millisecond UTC timestamps rendered in local time. Each line shows
-  the request id, stage (`received`, `rejected`, `classified`, `decided`, `dispatched`, `issued`,
-  `executed`, `outcome_uncertain`, `invalidated`), the actor, the tier, the target summary, and the typed value
+  the request id, stage (`received`, `rejected`, `classified`, `decided`, `policy_allowed`, `authorized`,
+  `reported`, `executed`, `outcome_uncertain`, `outcome_unknown`, `invalidated`), the actor, the tier, the target summary, and the typed value
   for an admitted `set_value`.
 - **Operator-tier requests** appear in the stream with **Approve** and **Deny** buttons and the full
   record, and also in the existing approvals panel (spec T).
@@ -673,9 +797,9 @@ The stream is a view over the hash-chained event log (§8.1). There is no second
   revoked | expired | job_terminal | restart | budget | audit_failure | stop_all);
 - `mission.invalidated` (generation bump; payload: cause);
 - `desktop.request_received`, `desktop.request_rejected`, `desktop.request_classified`,
-  `desktop.request_dispatched`, `desktop.request_issued`, `desktop.request_invalidated`;
+  `desktop.request_authorized`, `desktop.request_reported`, `desktop.request_invalidated`;
 - `desktop.app_granted`, `desktop.app_denied`;
-- `desktop.outcome_uncertain`.
+- `desktop.outcome_uncertain`, `desktop.outcome_unknown`.
 
 Action-level decisions continue to use `approval.requested`/`approval.resolved` (payload gains
 `decided_by: operator | agent:claude | agent:codex`, `tier`, `record_digest`, and the
@@ -769,7 +893,11 @@ not claim it.
 5. Independent code review, independent MCP review (workspace invariant 3), and a third-lineage
    adversarial review of the implementation.
 
-`look` missions may ship once 2–4 and the code and MCP reviews in 5 are done. `act` needs all five.
+Prerequisite 1 gates **every** mode (R3-N3). `look` missions use AR's `desktop.state` and the
+same read path, so neither `look` nor `act` routes are mounted until the AR gate clears. A Node
+Core configuration flag (`desktop_control.ar_gate_cleared`), set by the operator only after the
+native re-review, controls mounting. `look` may then ship once 2–4 and the code and MCP reviews
+in 5 are done. `act` needs all five, plus at least one reviewed surface profile for delegation.
 
 ## Delivery slices
 
@@ -777,7 +905,8 @@ not claim it.
 |---|---|---|
 | AS0 | contract amendment A7 (architect only, all consumers in one diff) | `packages/contracts/**`, affected consumers, `docs/specs/00-CONTRACTS.md` |
 | AS1 | missions, enrollment, generations, execution lock and go token, budgets, hold, restart reconciliation, job supervisor, identity registry, operator routes, events | `packages/node-core/src/**` + tests |
-| AS2 | classifier with native evidence, delegable class set, native catalog, long-lived continuity worker, record build, commitment and execution check | `packages/adapters-uia/**` |
+| AS2 | classifier with native evidence, surface-profile matcher, native catalog, per-grant worker, record build, commitment, mission-gate handshake and execution check | `packages/adapters-uia/**` (except `src/profiles/**`) |
+| AS2p | the initial surface profiles `notepad` and `calculator`, each with its native fixture test; later profiles are one reviewed slice each | `packages/adapters-uia/src/profiles/**`, `packages/adapters-uia/test/profiles/**` |
 | AS3 | approver runner and profile; profile finding doc | `packages/adapters-cli/src/approver*.ts` + tests, `docs/finding-approver-profile.md` |
 | AS4 | `packages/mcp-desktop` | `packages/mcp-desktop/**` |
 | AS5 | cockpit Desktop control view | `apps/cockpit/**` |
@@ -837,7 +966,7 @@ verdicts. Real Notepad and Calculator are used for smoke tests under a real miss
 **Lifecycle (B4)**
 26. Revoke while awaiting a verdict: the late `approve` is inert and the action never starts.
 27. Revoke after approval, before dispatch: the action never starts.
-28. Revoke after `issued`: the action completes or lands in `outcome_uncertain`; no retry occurs.
+28. Revoke after `authorized`: the worker is aborted; it ends `invalidated` if it had not called, `outcome_uncertain` if it reports `called`; no retry occurs.
 29. Killing Node Core kills the approver and worker children (Job Object).
 30. Event-store failure before dispatch → refused; failure after → desktop control ends on the node.
 
@@ -887,16 +1016,17 @@ verdicts. Real Notepad and Calculator are used for smoke tests under a real miss
 53. An enrolled MCP server's process and ancestry are absolute targets.
 54. A catalogued native-interface app → admission refused with `E_CAP_NOT_ALLOWED`, whether or not
     its adapter is installed.
-55. A fixture destroys the target and creates a new one that reuses its runtime id and every
-    property → the continuity guard invalidates the record (`E_APPROVAL_INVALID`).
+55. *(Superseded by 70, revision 4.)* A destroyed-and-recreated target with identical state is
+    governed by the profile rule. A received removal event still invalidates at once.
 56. Switching between two selection items with the same label → invalidated.
-57. A provider refusing event subscription → `E_APPROVAL_INVALID`, detail `no_continuity`.
+57. A provider refusing event subscription → no early invalidation is available; correctness still
+    rests on re-matching and the commitment, and the record notes `events: unavailable`.
 58. An approved read at depth 1 cannot run at depth 8; the replayed call equals the record exactly.
 59. Two different screen strings with the same redaction marker → commitment mismatch, refused.
 60. Invalidation while the worker is paused before `ready`, and while it waits for the go token →
     the worker is killed and the pattern is never called.
-61. Node Core killed between `issued` and the result → at restart, `outcome_uncertain` with
-    `reconciled: true`; nothing is replayed.
+61. Node Core killed after `authorized` and before `reported` → at restart, `outcome_unknown` with
+    `reconciled: true`; Toros does not claim the call happened and replays nothing.
 62. Node Core killed at each child-start boundary (suspended, assigned, registered) → no child runs
     outside the job; an assignment failure terminates the suspended child.
 63. A direct-route request whose value or reason contains a live, an invalidated, or a past
@@ -906,6 +1036,34 @@ verdicts. Real Notepad and Calculator are used for smoke tests under a real miss
 65. Ordinary pipeline denials (`E_JOB_TERMINAL`, `E_ENVELOPE_DIGEST_MISMATCH`, …) keep their codes
     and precedence for AS requests; an expired approval → `E_APPROVAL_INVALID`, an expired mission
     → `E_EXPIRED`.
+
+**Revision 4 (R3 findings, profiles)**
+66. An operator-approval card for an unprofiled control states that only observed state, not
+    identity or function, is bound.
+67. A same-process "terminal" fixture built from genuine `Edit`, `Button` and `Static` controls in
+    a signed app → no profile matches; admission and actions go to the operator, never the
+    approver.
+68. A look-alike surface (same classes, a different context path) does not match a profile.
+69. A profile declaring a forbidden function (command execution, external send, credential
+    change) fails the profile review test and is not loaded.
+70. A provider that accepts subscriptions but suppresses or delays events, with the control
+    replaced by an identical one → on a profiled control the action proceeds as the declared
+    function (commitment equal); on an unprofiled control it proceeds only under operator
+    approval with the residual stated. A stale retained object is never used without re-matching.
+71. Same-thread native-handle reuse with different state → commitment mismatch, refused.
+72. Pauses after `authorized` is appended, after the token is sent, after it is received, and
+    immediately before the pattern call, each combined with revoke, expiry and Core death → no
+    call after an abort is delivered; Core death → `outcome_unknown` at restart; the token's
+    deadline never exceeds effective expiry.
+73. Exactly one `consume` per executed action: a duplicate token, a replay after execution and an
+    invalidation between replay and the gate each fail, and the approval is never spent twice.
+74. A native-plain edit whose provider reports `IsPassword = true`, or that has a password
+    ancestor → `set_value` refused.
+75. An operator-approved read never releases the name of a positively identified password element.
+76. A fake CLI that writes a transcript, then exits, crashes, times out or is cancelled → the
+    pre-wipe inspection fails the profile, even though the wipe leaves no file afterwards.
+77. With `desktop_control.ar_gate_cleared` unset, neither `look` nor `act` desktop routes are
+    mounted.
 
 ## Out of scope
 
@@ -956,3 +1114,11 @@ Revision 3, **chosen by the operator on 2026-10-13**:
   native evidence proves is a plain, non-password edit control. Text fields without native
   evidence are refused for everyone (decision 13), and actions on elements without a native
   handle are operator-only. Delegation is narrower; decision 13 holds without exceptions.
+
+Revision 4, **chosen by the operator on 2026-10-14**:
+
+- R4-a. **The approver approves only inside reviewed surface profiles.** Generic UI Automation
+  cannot prove a control's function or its identity over time (R3-B1, R3-B3). So delegation is
+  limited to apps, surfaces and controls that a reviewed profile declares. Everything
+  unprofiled goes to the operator, who may approve it with the observed-state-only residual
+  stated on the approval card.
