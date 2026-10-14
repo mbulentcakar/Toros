@@ -13,15 +13,16 @@ needed before re-review, but does not block on its own.
 | Slice | Findings | Change, in one line | Packages | AS-inherited |
 |---|---|---|---|---|
 | **F1 — credential separation** | AR-03 | Require a strong `operator_token` distinct from `token` whenever the operator surface is mounted, not only when a capability is gated. | `node-core` | yes |
-| **F2 — no UIA `Name` in discovery** | AR-01 | Stop returning generic UIA `Name` from `desktop.state`/`desktop.inspect`; return structure only (type, automation id, patterns, enabled). Any later name exposure must be per-app and fail-closed. | `adapters-desktop`, spec AR | yes |
+| **F2 — no UIA `Name` in discovery** | AR-01, AR-07 (script side) | Never read UIA `Name` for controls; structure only (type, automation id, patterns, enabled); window titles from native window text; bound enumeration inside the PowerShell script. Brief: `AR-F2-brief.md`. | `adapters-desktop` (script + adapter), spec AR | yes |
 | **F3 — bound identity and scope** | AR-02, AR-04, AR-05, AR-10 | Policy sees the resolved app identity, so envelope `forbidden` and scope apply. Verify the requested OS session. Bind handles to the minting job and caller, single-use, with issuance time. Replace basename identity with image path, hash and signer. | `adapters-desktop`, `policy`, `node-core` | yes |
-| **F4 — pipeline integrity** | AR-06, AR-07 | Resolve workspace before budget spend and close every started receipt on any error. Core-level timeout and abort race on every adapter call. Honour pre-aborted signals. Bound field and serialized output size. Await temp cleanup. | `node-core`, `adapters-desktop` | yes |
+| **F4 — pipeline integrity** | AR-06, AR-07 (Core + `runPowerShell`) | Resolve workspace before budget spend and close every started receipt on any error. Core-level timeout and abort race on every adapter call. Honour pre-aborted signals. Bound field and serialized output size. Await temp cleanup. | `node-core`, `adapters-desktop` | yes |
 | **F5 — inventory and manifest honesty** | AR-08, AR-09, AR-11 | Probe only local fixed paths, never UNC entries from `PATH`. Filter inventory to the job's allowlist, with an `unauthorized` state. Declare the probe's temp-file use in the manifest. | `adapters-machine`, `adapters-desktop` | AR-11 only |
 
 ## Ordering and ownership
 
 - **F1 first.** It is small and closes a High finding on its own.
-- **F2 and F4 next, in parallel.** They touch different code paths.
+- **F2 and F4 next, in parallel.** Both touch `probe.ts`, split by region: F2 owns the embedded
+  script and raw types, F4 owns the `runPowerShell` wrapper. Briefs: `AR-F2-brief.md`, `AR-F4-brief.md`.
 - **F3 after F2,** since both edit the probe.
 - **F5 any time.**
 - **Lanes (per `fleet/lanes.toml`):** an implementer from the deputy pool writes each slice; Codex

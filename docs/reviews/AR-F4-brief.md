@@ -1,0 +1,116 @@
+# AR-F4 — action pipeline integrity: receipts, Core-level timeout, probe wrapper (implementation brief)
+
+**Read `docs/specs/00-CONTRACTS.md` first.** `packages/contracts` is frozen and untouched here.
+
+**Lane:** implementer from the deputy pool (sandboxed `deputize`); code review by Codex; the native
+re-review after F1–F4 by a third lineage. The implementer is never the reviewer.
+
+## Goal
+
+1. Budget is never spent on an action that cannot start.
+2. Every receipt that reaches `running` is always closed.
+3. Node Core itself enforces each action's timeout and cancellation.
+4. The desktop probe wrapper honours an already-aborted signal, bounds its output, and finishes
+   its cleanup before returning.
+
+## Why
+
+- **AR-06 (Medium):** `packages/node-core/src/action-pipeline.ts` calls
+  `store.incrementActionsUsed`, appends `action.started` and writes a `running` receipt, and
+  **then** looks up the workspace. A missing workspace throws `E_WORKSPACE_DENIED` outside the
+  adapter `try`/`catch`. Budget is spent, and the receipt stays `running` forever with no
+  `ended_at` and no `action.finished`.
+- **AR-07 (Medium):** the pipeline gives the adapter `new AbortController().signal`, which nothing
+  ever aborts, and it does not race `adapter.invoke` against the declared timeout. In
+  `packages/adapters-desktop/src/probe.ts`, `runPowerShell` registers an abort listener without
+  first checking `signal.aborted`. The review showed a pre-aborted probe still returning data.
+  Its cleanup (`fsPromises.rm`) is fire-and-forget with errors swallowed, and `maxBuffer` is
+  64 MiB with no limit on the output file.
+
+Both findings are `AS-inherited`: spec AS (PR mbulentcakar/Toros#1) runs through this pipeline.
+
+## In scope
+
+- `packages/node-core/src/action-pipeline.ts`.
+- `packages/adapters-desktop/src/probe.ts`: **the TypeScript `runPowerShell` function only.** The
+  embedded PowerShell script and the raw types belong to F2; do not edit them.
+- `packages/node-core/test/**` and `packages/adapters-desktop/test/**`: new and updated tests.
+
+## Out of scope
+
+- The PowerShell script string, `adapter.ts` in adapters-desktop, and name or identity handling
+  (F2, F3).
+- `packages/adapters-machine/**` (AR-08 is F5).
+- `packages/contracts/**`, `packages/policy/**`, the HTTP layer, `apps/**`.
+
+## Required behaviour
+
+**Pipeline (`action-pipeline.ts`)**
+
+1. Resolve the workspace (and anything else that can fail before the adapter runs) **before**
+   `incrementActionsUsed` and before `action.started`. If it fails, no budget is spent. The
+   receipt is written once with `ended_at` set and outcome `failed`, `action.finished` records
+   the error code, and the error is thrown with its existing code (`E_WORKSPACE_DENIED`).
+2. After `action.started`, **every** exit path closes the receipt: success, adapter error,
+   timeout, cancellation, and an exception thrown by pipeline code itself (for example a store
+   failure while recording a session). Use one `try`/`finally`-style closing path. A receipt may
+   end `failed` or `terminated`, but never stays `running` after the call returns or throws.
+3. **Core-level timeout.** Per action, create an `AbortController`. Arm a timer for the action's
+   timeout: `ActionSchema.timeout_ms`, else the manifest's `default_timeout_ms`. Pass its
+   signal in `AdapterContext`, and race `adapter.invoke` (and `start` for `start_cli`) against
+   it.
+   - **On timeout:** abort the signal and fail with `E_TIMEOUT` (outcome `terminated`). A late
+     adapter result is ignored and cannot overwrite the closed receipt.
+   - **On success or failure:** clear the timer.
+   - **Job cancellation:** if the pipeline already has a hook for the job being cancelled, wire
+     it to the same controller (`E_CANCELLED`). If it has none, do not invent one; say so in the
+     PR.
+
+**Probe wrapper (`runPowerShell` only)**
+
+4. If `signal.aborted` is already true on entry, reject immediately (cancelled), before creating
+   the temp directory or spawning anything.
+5. **Output bound:** `maxBuffer` at most 1 MiB. Before reading `output.json`, `stat` it; over
+   4 MiB → reject with an output-limit error that the adapter maps to `E_OUTPUT_LIMIT`. Never
+   read an oversized file into memory.
+6. **Cleanup is awaited:** resolve or reject only after the temp directory removal completes. A
+   removal error is logged once with the directory's basename only, and does not change the
+   action's result.
+
+## Acceptance
+
+1. A pathless action without `workspace_id` → `E_WORKSPACE_DENIED`; `actions_used` is unchanged;
+   the receipt has `ended_at` and outcome `failed`; `action.finished` exists; no `running` receipt
+   remains.
+2. A store failure injected after `action.started` → the receipt is closed (`failed`) and the
+   error propagates.
+3. A fixture adapter that never resolves → `E_TIMEOUT` at the declared timeout, receipt
+   `terminated`, and the adapter's signal is observed aborted. A late resolution does not change
+   the receipt.
+4. A fixture adapter that resolves quickly → no timer left armed (the test process exits
+   promptly).
+5. `runPowerShell` with a pre-aborted signal → rejects without spawning (assert that no child
+   process and no temp directory were created).
+6. An output file over the limit → output-limit error, mapped to `E_OUTPUT_LIMIT`, file never
+   read whole.
+7. After every probe outcome (success, timeout, abort, error), the temp directory no longer
+   exists **when the promise settles**.
+8. The full suite passes natively with **zero skips**.
+
+## Verify (native Windows, record counts in the PR)
+
+```
+npm ci
+npx tsc --build
+node --test packages/node-core/dist/test/*.test.js packages/adapters-desktop/dist/test/*.test.js
+npm test
+```
+
+## Constraints
+
+- Worktree `_worktrees/Toros-f4-pipeline-integrity`, branch `fix/ar-f4-pipeline-integrity` from
+  `public/main`. One agent per worktree.
+- F2 runs in parallel and edits a different region of `probe.ts`. If a merge conflict appears,
+  the second PR to merge rebases; resolve by region, never by dropping the other slice's change.
+- Public repository: no secrets, local paths or hostnames.
+- One PR into `main`, titled `fix(node-core): AR-F4 pipeline integrity`. Do not merge it.
