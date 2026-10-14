@@ -936,3 +936,131 @@ Next owner: the spec author closes R3-B1/B3/B4, corrects the R3-B6 verification 
 three new issues. The seven closed revision 2 findings stay closed; no reversal of the accepted
 operator decisions is requested. The operator retains acceptance authority, and AR/AS native,
 code, MCP and adversarial gates remain outstanding.
+
+## Re-review (revision 4)
+
+Reviewer: Codex, 2026-10-14. Delta reviewed: `da02d1a91d846db61cd62c1fa56c1a9fd1ec09df` →
+`a411be950bdf1dd37b077d8db68abeb9898d3d9f`, fetched from `public/spec/desktop-grants`.
+The baseline is **Re-review (revision 3)** above. Only AS changes in this revision; no code or
+other contract/specification document changes. All AS line references below refer to the
+immutable `a411be9` document, inspected through Git rather than the older local spec checkout.
+
+All Appendix A decisions remain requirements, including R3-a and **R4-a**. R4-a deliberately
+changes the binding: the delegate approves reviewed profile functions in committed contexts;
+unprofiled actions go to the operator with the observed-state-only limitation stated. This
+review accepts that choice and does not demand generic UIA instance proof or wider delegation.
+
+VERDICT: ready after the listed blockers — six revision 3 findings are closed and one is partly
+closed; missing worker reports still cannot prove cancellation prevented an effect, and the A7
+event inventory must be synchronized with the revised lifecycle before implementation.
+
+### Disposition of every revision 3 finding
+
+“Closed” means closed in the specification under the operator's requirements, not implemented,
+native-tested or accepted. None of the seven findings is wholly untouched/open.
+
+| Finding | Status | Reason at revision 4 |
+|---|---|---|
+| R3-B1 | **closed** | AS 248–318 replaces inference from ordinary native controls with static, reviewed app/surface/control profiles. Only listed actions on matched controls can reach the delegate; unprofiled controls in a profiled app still go to the operator, and prohibited functions cannot be profiled. Acceptance 67 covers the native-control terminal counterexample. R4-a authorizes this narrower boundary. The new profile predicate/schema ambiguity is recorded separately as R4-N2. |
+| R3-B3 | **closed** | AS 430–467 explicitly abandons object-instance proof. A profiled approval binds the declared function, selector, profile version and committed context; execution re-matches and recomputes the raw-state commitment. Events and native handles supply mismatch evidence only. Identical replacement is intentionally equivalent under the reviewed profile claim, while unprofiled approval cards disclose state-only binding. Tests 66/70/71 reflect that changed contract. This closes the previous overclaim under R4-a, without pretending missed events prove continuity. |
+| R3-B4 | **partly closed** | AS 469–590 distinguishes durable authorization from the actual call, clamps the single-use record/generation-bound token to effective expiry, rechecks state on receipt, aborts authorized workers and honestly describes the final-check/Core-death residuals. Restart uses `outcome_unknown` without claiming execution. However, live invalidation still treats no `called` report as proof that abort won, even though the worker reports only after the call returns/throws and may be killed first. See R4-B4. |
+| R3-B6 | **closed** | AS 663–684 mandates inspection before deletion on every decision outcome, marks a violating profile unavailable, and performs the canary-content search before wiping. Test 76 deliberately uses a persisting fake CLI across exit/crash/timeout/cancel. Cleanup is expressly recovery, so the former cleanup-before-proof ambiguity is removed. |
+| R3-N1 | **closed** | AS 209–212 makes any own/ancestor UIA-password, native password style or nonzero password character an unconditional typing veto, in addition to all R3-a native requirements. AS 242–244/348–353 makes password names/values unreleasable even after operator approval. Tests 74/75 cover both regressions. |
+| R3-N2 | **closed** | AS 487–522 places the only approval spend at ordinary policy rule 12 during exact-record replay. The later Node-owned mission gate performs no consume; later failures leave the approval spent and require a new decision. Test 73 covers duplicate permission, replay and invalidation between spend and the gate. The sequence preserves ordinary policy rechecking without a second spend. |
+| R3-N3 | **closed** | AS 896–900 applies the AR prerequisite to both modes and mounts neither look nor act desktop routes until the operator's AR-cleared flag is set after native re-review. Test 77 checks the unset condition. The read-mode exemption is gone; this review does not itself clear the AR gate. |
+
+### Remaining finding
+
+#### R4-B4 — blocker — absence of a worker report does not prove that abort prevented the call
+
+**Sections:** AS `reported` definition 482–483, Invalidation 536–541; acceptance 28/72.
+
+**Failure:** the worker calls the UIA pattern and an external effect occurs. Before the call
+returns, or between its return and sending `called`, the session locks or Core revokes the
+mission, causing the worker to be killed. Core receives no report. The specified rule therefore
+records `invalidated` with
+“abort won”, although execution may have happened. A crash or lost report produces the same
+ambiguity. This path also avoids the hold attached to uncertain/unknown outcomes. The restart
+rule correctly treats a missing post-authorization result as unknown, but live invalidation
+does not. The newly honest final-check/death residuals are accepted; the defect is the false
+certainty in the audit and resulting recovery state.
+
+**Smallest change:** reserve `invalidated`/no-effect for work known not to have received usable
+permission, or for an explicit worker acknowledgement proving it aborted before the pattern.
+Once authorization might have reached the worker, kill/timeout/crash/report loss without that
+proof must end `outcome_unknown` or `outcome_uncertain`, hold any still-live mission and never
+retry automatically; an ended mission still needs the accurate outcome. Apply the same rule
+during live cancellation and restart. Add tests that pause
+after the pattern's observable effect but before return/report, then revoke/kill, and assert an
+unknown/uncertain result and hold rather than “abort won”. Do not fix this by logging a call in
+advance; revision 4 correctly distinguishes intention from execution.
+
+### Issues introduced by revision 4
+
+#### R4-N1 — blocker — the binding A7 amendment still specifies the previous lifecycle events
+
+**Sections:** AS Events 793–804; `00-CONTRACTS.md` §10 A7 `EventKind` row at `a411be9`.
+
+**Failure:** AS0 follows the binding A7 inventory, which still adds
+`desktop.request_dispatched` and `desktop.request_issued`. Revision 4 instead requires
+`desktop.request_authorized`, `desktop.request_reported` and `desktop.outcome_unknown`, none of
+which A7 lists. The AS1 implementer cannot append those kinds through the closed `EventKind`
+union produced by that amendment. Renaming them locally or using old event names would hide the
+intention/execution distinction this revision was written to establish. The delta changes only
+AS, so the mismatch is present in the reviewed target, not a stale local checkout.
+
+**Smallest change:** update A7 in the same spec revision to enumerate the final event set,
+explicitly replacing obsolete proposed names and adding all new authorization/report/unknown
+kinds. Keep AS0 architect-owned and every consumer in its implementation diff. Specify how
+`policy_allowed` uses the existing action events so no extra undeclared kind is invented. A
+spec/contract inventory check should compare required literal kinds with the proposed union
+before AS1 dispatch. This does not authorize a worker to edit the frozen contracts.
+
+#### R4-N2 — major — profile matching does not yet define the required context predicates
+
+**Sections:** AS profile example/matcher 262–285; Approval record 393–428; profile binding 440–453;
+acceptance 68/69.
+
+**Failure:** a surface has the same native class, automation id and resolvable context paths as
+the intended surface, but those paths contain a different mode/state. The written matcher
+requires only that the paths resolve. The example's `title_role: 'save_as'` has no specified
+matching semantics, and control native-class/type fields demanded by the matcher are not
+declared in the example's control entries. Two implementers can either enforce a Save-As
+context or match any same-shaped dialog. The HMAC detects changes after preparation; it does
+not establish that the initial state is one in which the reviewed function applies. Test 68
+uses a different path and would not catch same-path/different-state admission.
+
+**Smallest change:** publish the complete `SurfaceProfile` schema and deterministic matcher,
+including required control native class/type, root/title-role semantics and explicit expected
+context-state predicates where function depends on state. State when paths alone suffice and
+what is rejected when a predicate is absent, ambiguous or unreadable. Include matched,
+sanitized context observations in the approval record as well as their raw-state commitment,
+so the approver sees the context to which the declared function applies. Add same-path/different-
+state and unknown-title-role negative fixtures. Separate human review of semantic function
+claims from automated schema/matcher checks; a free-text function must not imply an unspecified
+automatic semantic classifier. This completes the reviewed-profile boundary chosen in R4-a;
+it does not replace it with generic UIA inference.
+
+### Verification and handoff
+
+- `git fetch public spec/desktop-grants` returned exit 0. `git rev-parse a411be9` and
+  `gh pr view 1 -R mbulentcakar/Toros --json headRefOid,state` confirmed the requested commit
+  `a411be950bdf1dd37b077d8db68abeb9898d3d9f` as the open PR head.
+- Read the complete `git diff da02d1a..a411be9 -- docs/specs/AS-delegated-desktop-control.md`,
+  then inspected the changed profile, record, lifecycle, retention, event, prerequisite and
+  acceptance sections with line numbers. Read A7 from the same immutable target with
+  `git show a411be9:docs/specs/00-CONTRACTS.md`, and rechecked the existing adapter/approval ports.
+- `git diff da02d1a..a411be9 --name-only` identifies AS alone; the package/application delta is
+  empty. The conclusions above come from the revised design and its live repository context,
+  not prior AR test counts or claimed native exploit demonstrations.
+- Docs only: no executable tests, desktop actions or CLI model exchanges were run; none apply
+  to the review-document append. Native profile and lifecycle acceptance remains future work.
+- Integrity: `git diff --check` returned exit 0 and `git diff --name-only` listed only this
+  review document. Prefix comparison confirmed the original brief and all earlier reviews are
+  unchanged. All seven distinct requested dispositions are present: six closed, one partly
+  closed. An added-text scan found no local user paths or credential-shaped values.
+
+Next owner: the spec author corrects the live-cancellation outcome rule, synchronizes A7 and
+completes the profile matcher/record schema. The six closed R3 findings stay closed under all
+Appendix A requirements. Operator acceptance and the AR/AS native, code, MCP and adversarial
+gates remain separate and outstanding.
