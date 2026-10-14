@@ -314,7 +314,8 @@ interface ControlDef {
   readonly control_id: string;
   readonly selector: Selector;               // must resolve to exactly one element
   readonly control_type: string;             // exact
-  readonly native_class: string | null;      // exact; null = must have NO native handle
+  readonly native_class: string;             // exact; a control without a native handle cannot be
+                                             // profiled (R5-N1, R3-a): actions on it stay operator-only
   readonly actions: readonly ('invoke' | 'set_value' | 'select')[];  // non-empty
   readonly typing: boolean;                  // true requires native_class in the plain-edit set
   readonly function_category: FunctionCategory;
@@ -362,7 +363,8 @@ and the request falls to the operator tier.
 4. **Control:**
    - its selector resolves to exactly one element inside the matched root;
    - control type equal;
-   - native class equal (`null` means no native handle);
+   - native class equal. An element without a native handle never matches a `ControlDef`, so an
+     action on it can **never** reach delegate, even inside a matched surface (R5-N1, R3-a).
    - the requested action is listed.
 5. **Re-run at execution:** the whole match runs again; any failure is `E_APPROVAL_INVALID`.
 
@@ -1189,6 +1191,8 @@ verdicts. Real Notepad and Calculator are used for smoke tests under a real miss
     non-plain-edit class, or `state_independent: false` with an empty context → fails to load.
 83. A context path or control selector resolving to two elements → no match.
 84. The approver prompt includes `context_observed` for a profiled request.
+85. A profile whose `ControlDef` omits or nulls `native_class` fails to load. A no-handle
+    `invoke` or `select` inside a matched surface routes to the operator, never the approver.
 
 ## Out of scope
 
