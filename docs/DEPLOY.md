@@ -116,6 +116,13 @@ and why it must be the only one.
 `operator_token` is required for the cockpit's findings view even when no capabilities require
 approval, because findings deliberately live on the operator surface rather than `/tools`.
 
+Whenever `operator_token` is set — gated or not — it must be at least 32 characters and different
+from `token`. Node Core refuses to start otherwise, even with nothing gated, and the start-up
+error names the rule: `operator_token must be at least 32 characters…` or `operator_token must
+differ from token…`. This is unconditional because a short or shared operator bearer is a gate the
+ordinary bearer can open; it is rejected at start-up rather than the first time an approval is
+needed.
+
 `coordinator_entry` is optional. Node Core verifies that the file exists once at startup and
 refuses to start if it is missing or misconfigured, naming the path in the error.
 

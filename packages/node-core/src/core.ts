@@ -124,19 +124,29 @@ export class Core implements NodeCore {
     this.registeredCapabilities = registry.list();
     const chrome = this.options.adapters.find(isChromeWorkerAdapter);
     this.chromeWorker = chrome !== undefined && this.registeredCapabilities.includes('chrome.navigate') ? chrome : null;
-    // A gate nobody can open is a broken node that looks like a working one:
-    // every gated action would deny E_APPROVAL_REQUIRED forever, and the only
-    // symptom would be work quietly not happening. Refuse to start instead, and
-    // say which capabilities are gated.
     const gated = this.gatedCapabilities(registry);
-    if (gated.length > 0) {
-      const operatorToken = this.options.operator_token;
-      if (operatorToken === undefined || operatorToken.length < 32) {
-        throw new Error(`operator_token of at least 32 characters is required because these capabilities need approval: ${gated.join(', ')}`);
+    const operatorToken = this.options.operator_token;
+    // The operator surface in http.ts is mounted whenever `operator_token` is a
+    // non-empty string, whether or not any capability is currently gated. The
+    // strength and distinctness checks must therefore read that same condition,
+    // not `gated`: AR-03 showed that with `operator_token` equal to `token` and
+    // no gated capability, Core started and the ordinary bearer could list jobs,
+    // create a job and run it through `/operator/*`. Enforce on the mount's own
+    // condition, so a weak or shared operator bearer can never start.
+    if (operatorToken !== undefined && operatorToken.length > 0) {
+      if (operatorToken.length < 32) {
+        throw new Error('operator_token must be at least 32 characters: the operator surface holds job-creation and approval authority');
       }
       if (operatorToken === this.options.token) {
         throw new Error('operator_token must differ from token: the coordinator holds token, and it must not be able to approve its own actions');
       }
+    }
+    // A gate nobody can open is a broken node that looks like a working one:
+    // every gated action would deny E_APPROVAL_REQUIRED forever, and the only
+    // symptom would be work quietly not happening. Refuse to start instead, and
+    // say which capabilities are gated.
+    if (gated.length > 0 && (operatorToken === undefined || operatorToken.length === 0)) {
+      throw new Error(`operator_token of at least 32 characters is required because these capabilities need approval: ${gated.join(', ')}`);
     }
     this.policy = createPolicy({ registry, approval_required: this.options.approval_required, approvals: this.approvals });
     // The relay resolves selected_files against a workspace root, so it needs
