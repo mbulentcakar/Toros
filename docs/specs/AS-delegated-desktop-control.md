@@ -2,7 +2,10 @@
 
 **Read `00-CONTRACTS.md` first.** It is short and it is binding.
 
-**Status: proposed, revision 4 (2026-10-14). Not accepted.** Revision 4 answers the re-review of
+**Status: proposed, revision 5 (2026-10-14). Not accepted.** Revision 5 answers the re-review of
+revision 4: R4-B4 (an outcome is decided by proof, never by silence), R4-N1 (A7's event list
+matches the lifecycle) and R4-N2 (a normative profile schema and deterministic matcher). Revision
+4: Revision 4 answers the re-review of
 revision 3 (R3-B1, R3-B3, R3-B4, R3-B6, R3-N1–N3): delegation is limited to reviewed surface
 profiles (operator decision R4-a), and the lifecycle, spend point, retention check, password veto
 and AR gate are corrected. Earlier: revision 2 answered the independent
@@ -256,33 +259,117 @@ observable through generic UI Automation.** So revision 4 stops inferring it. A 
 
 **A surface profile** is a TypeScript data module under
 `packages/adapters-uia/src/profiles/<profile_id>.ts`. It is static data, never fetched or
-generated at runtime, and changed only by a reviewed PR. Each profile has:
+generated at runtime, and changed only by a reviewed PR.
+
+#### Schema (R4-N2), normative
 
 ```ts
-export const profile: SurfaceProfile = {
-  profile_id: 'notepad', version: 1,
-  app: { signer: 'Microsoft Windows', product: 'Microsoft® Windows® Operating System',
-         original_filename: 'NOTEPAD.EXE', file_version: { min: '…', max: '…' } },
-  surfaces: [{
-    surface_id: 'save_dialog',
-    root: { native_class: '#32770', automation_id: null, title_role: 'save_as' },
-    context: [ /* selector paths whose state defines what an action here means */ ],
-    controls: [
-      { control_id: 'file_name', selector: [ … ], function: 'Type the file name to save as',
-        actions: ['set_value'], typing: true },
-      { control_id: 'save', selector: [ … ], function: 'Confirm Save',
-        actions: ['invoke'], typing: false },
-    ],
-  }],
-  review: { reviewed_by: '…', fixture_test: 'profiles/notepad.test.ts' },
-};
+type Selector = readonly SelectorStep[];   // Spec V path from the surface root, no coordinates
+interface SelectorStep { readonly control_type: string; readonly automation_id: string | null;
+                         readonly name: string | null; readonly index: number }
+
+interface SurfaceProfile {
+  readonly profile_id: string;               // ^[a-z][a-z0-9_]{1,40}$
+  readonly version: number;                  // integer ≥ 1; bumped on any change
+  readonly app: {
+    readonly signer: string;                 // Authenticode subject CN, exact
+    readonly product: string;                // version-resource ProductName, exact
+    readonly original_filename: string;      // version-resource OriginalFilename, case-insensitive
+    readonly file_version: { readonly min: string; readonly max: string };  // inclusive, dotted quad
+  };
+  readonly surfaces: readonly SurfaceDef[];
+  readonly review: { readonly reviewed_in: string; readonly fixture_test: string };  // PR ref, test path
+}
+
+interface SurfaceDef {
+  readonly surface_id: string;               // ^[a-z][a-z0-9_]{1,40}$, unique in the profile
+  readonly root: {
+    readonly native_class: string;           // top-level window class, exact (GetClassName)
+    readonly control_type: string;           // UIA ControlType programmatic name, exact
+    readonly automation_id: string | null;   // exact; null = must be empty
+  };
+  readonly title: TitleRule;
+  readonly state_independent: boolean;       // true only if no control's function depends on state
+  readonly context: readonly ContextPredicate[];  // must be non-empty unless state_independent
+  readonly controls: readonly ControlDef[];
+}
+
+type TitleRule =                              // native GetWindowText of the root, never UIA Name
+  | { readonly kind: 'any' }
+  | { readonly kind: 'equals' | 'prefix'; readonly value: string };
+
+interface ContextPredicate {
+  readonly predicate_id: string;
+  readonly path: Selector;                   // must resolve to exactly one element
+  readonly test:
+    | { readonly kind: 'exists' }
+    | { readonly kind: 'absent' }            // the path must resolve to nothing
+    | { readonly kind: 'enabled'; readonly expect: boolean }
+    | { readonly kind: 'selected'; readonly expect: boolean }
+    | { readonly kind: 'toggle'; readonly expect: 'on' | 'off' }
+    | { readonly kind: 'name_equals'; readonly one_of: readonly string[] };
+}
+
+interface ControlDef {
+  readonly control_id: string;
+  readonly selector: Selector;               // must resolve to exactly one element
+  readonly control_type: string;             // exact
+  readonly native_class: string | null;      // exact; null = must have NO native handle
+  readonly actions: readonly ('invoke' | 'set_value' | 'select')[];  // non-empty
+  readonly typing: boolean;                  // true requires native_class in the plain-edit set
+  readonly function_category: FunctionCategory;
+  readonly function: string;                 // human description, ≤ 120 chars; never parsed
+}
+
+type FunctionCategory =                       // closed; anything else fails to load
+  | 'enter_text' | 'confirm_local_save' | 'open_local_file_dialog' | 'navigate_view'
+  | 'select_item' | 'toggle_option' | 'compute' | 'dismiss_dialog';
 ```
 
-- **Matching.** An app matches a profile only on OS evidence: signer, product,
-  `OriginalFilename`, and a file version in range. A **surface** matches only when its root
-  native class and automation id match, **and** every `context` path resolves. A **control**
-  matches only when its full selector resolves inside a matched surface, and its native class and
-  control type equal the profile's.
+The forbidden functions have **no category**, so a profile cannot express them:
+- command or script execution;
+- sending anything off the machine;
+- payment;
+- credential, account or security changes;
+- installation;
+- deletion without a recycle step.
+
+Adding a category is a spec change. The **loader** checks the schema, the closed category set,
+`typing` against the plain-edit class set, and that no surface's root class or app identity falls
+in an operator-only or absolute class. Whether `function` and `function_category` are *true* for
+the app is a **human review** claim, proven by the profile's native fixture test, never by an
+automatic semantic check.
+
+#### Matcher (R4-N2), deterministic
+
+Evaluated by Node Core. Any step that cannot be read, or resolves ambiguously, is **no match**,
+and the request falls to the operator tier.
+
+1. **App:**
+   - signer equal;
+   - product equal;
+   - `OriginalFilename` equal (case-insensitive);
+   - file version within `[min, max]`.
+2. **Surface root:**
+   - the top-level window's native class equal;
+   - its UIA control type equal;
+   - its automation id equal (`null` means empty);
+   - the title rule holds on the native window text.
+3. **Context:** every predicate's path resolves to **exactly one** element (except `absent`, which
+   requires none), and its test holds.
+   - A surface with `state_independent: false` and an empty `context` fails to load.
+   - **Paths alone suffice only when `state_independent: true`**, which the review must justify.
+4. **Control:**
+   - its selector resolves to exactly one element inside the matched root;
+   - control type equal;
+   - native class equal (`null` means no native handle);
+   - the requested action is listed.
+5. **Re-run at execution:** the whole match runs again; any failure is `E_APPROVAL_INVALID`.
+
+The approval record's `profile` block carries `context_observed`: for each predicate, its id, its
+test, and the **sanitized** observation. The approver sees the context in which the declared
+function applies, and the raw values are covered by `state_commitment`.
+
 - **Delegate tier = profiled and nothing else.** The approver may decide:
   - app admission, only for an app that matches a profile;
   - delegate reads, only within matched surfaces;
@@ -291,8 +378,8 @@ export const profile: SurfaceProfile = {
   Every other window, surface and control **of any app** is **operator-only**, profiled apps
   included. Absolute rules still win. A custom terminal built from ordinary controls has no
   profile, so it never reaches the approver.
-- **What a profile may not declare.** The review checklist rejects any profile control whose
-  function is:
+- **What a profile may not declare** (enforced by the closed `FunctionCategory` set above, and
+  re-checked in human review). No control may have a function that is:
   - executing commands or scripts;
   - sending a message or payment outside the machine;
   - changing credentials, accounts or security settings;
@@ -393,7 +480,10 @@ assembled from driver input. The record is a **discriminated union** on `kind` (
 // kind = "mutation"
 { "grant_id": "…", "process": { … },
   "profile": { "profile_id": "notepad", "version": 1, "surface_id": "save_dialog",
-               "control_id": "save", "function": "Confirm Save" } | null,   // null = unprofiled, operator tier
+               "control_id": "save", "function_category": "confirm_local_save",
+               "function": "Confirm Save",
+               "context_observed": [ { "predicate_id": "…", "test": { … }, "observed": "…sanitized…" } ]
+             } | null,   // null = unprofiled, operator tier
 
   "action": "invoke" | "set_value" | "select",
   "input": { "selector": [ /* Spec V path */ ], "value": "…" /* set_value only, post-scan */ },
@@ -480,7 +570,8 @@ The states, kept distinct as R3-B4 asks:
   generation, a go token. It is **not** a claim that any call happened.
 - **The pattern call** is the only irreversible point. Nothing records it in advance.
 - **`reported`** means the worker sent `called` (immediately after the pattern returned or threw)
-  and then its result.
+  and then its result. Silence is never a report: a missing report after `authorized` is
+  `outcome_unknown` (R4-B4).
 
 Anything before the pattern call can be cancelled with no effect.
 
@@ -536,9 +627,18 @@ approval is never reusable.
 **Each one** bumps the generation, voids every grant, and does the following under the
 per-desktop lock:
 - requests not yet `authorized` → `invalidated`, worker killed;
-- `authorized` but not yet `reported` → Node Core sends the worker **abort**, then kills it. If
-  the worker reports `called` anyway, the request ends `outcome_uncertain`; otherwise it ends
-  `invalidated` (abort won).
+- `authorized` but not yet `reported` → Node Core sends the worker **abort** and waits up to
+  100 ms for a reply, then kills the worker. The outcome is decided by **proof, never by silence**
+  (R4-B4):
+  - **`invalidated`** only if the worker replies `aborted_before_call`. The worker sends this
+    only from its final pre-call check, which reads the abort flag immediately before the pattern
+    call. Sending it and calling the pattern are mutually exclusive in the worker's code.
+  - **`outcome_uncertain`** if the worker reported `called`, or replied `call_in_progress`.
+  - **`outcome_unknown`** in every other case: no reply, the worker was killed, it crashed, or a
+    report was lost.
+
+  `outcome_uncertain` and `outcome_unknown` both **hold** a still-live mission, are never retried,
+  and are recorded with that exact outcome even when the mission has already ended.
 
 A late verdict for an old generation is recorded and inert.
 
@@ -800,6 +900,16 @@ The stream is a view over the hash-chained event log (§8.1). There is no second
   `desktop.request_authorized`, `desktop.request_reported`, `desktop.request_invalidated`;
 - `desktop.app_granted`, `desktop.app_denied`;
 - `desktop.outcome_uncertain`, `desktop.outcome_unknown`.
+
+**Lifecycle stage → event kind** (R4-N1). `received`, `rejected` and `classified` →
+`desktop.request_received`, `desktop.request_rejected` and `desktop.request_classified`.
+`replayed` and `policy_allowed` → the existing `action.requested` and `action.decided`, so no new
+kind is added for them. `authorized`, `reported` and `invalidated` →
+`desktop.request_authorized`, `desktop.request_reported` and `desktop.request_invalidated`.
+`executed` → the existing `action.finished`. `outcome_uncertain` and `outcome_unknown` →
+`desktop.outcome_uncertain` and `desktop.outcome_unknown`. The final A7 list in `00-CONTRACTS.md`
+§10 is exactly the kinds named here. AS0 is checked by a test that every literal kind AS uses is in
+the amended union.
 
 Action-level decisions continue to use `approval.requested`/`approval.resolved` (payload gains
 `decided_by: operator | agent:claude | agent:codex`, `tier`, `record_digest`, and the
@@ -1064,6 +1174,21 @@ verdicts. Real Notepad and Calculator are used for smoke tests under a real miss
     pre-wipe inspection fails the profile, even though the wipe leaves no file afterwards.
 77. With `desktop_control.ar_gate_cleared` unset, neither `look` nor `act` desktop routes are
     mounted.
+
+**Revision 5 (R4 findings)**
+78. A worker paused after the pattern's observable effect but before it returns or reports, then
+    revoked or killed → `outcome_unknown` (or `outcome_uncertain` on a `call_in_progress` reply),
+    and the mission is held; never `invalidated`.
+79. A worker that receives the abort flag before its final pre-call check → replies
+    `aborted_before_call`, never calls the pattern → `invalidated`.
+80. Every lifecycle stage emits exactly the event kind in the stage→event table; AS0's
+    union-inventory test fails if any AS literal kind is missing from A7.
+81. Same root class, automation id and context paths but a failing state predicate (for example a
+    different `name_equals` or toggle state) → no profile match → operator tier.
+82. A profile with an unknown title-rule kind, an unknown function category, `typing: true` on a
+    non-plain-edit class, or `state_independent: false` with an empty context → fails to load.
+83. A context path or control selector resolving to two elements → no match.
+84. The approver prompt includes `context_observed` for a profiled request.
 
 ## Out of scope
 
