@@ -21,6 +21,25 @@ import { createToolRoutes } from './routes-tools.js';
 import { createRunCredentials, type RunCredentials } from './run-credentials.js';
 import { StageGraphController } from './stage-graph.js';
 
+/**
+ * The only characters a token may contain: printable ASCII 0x21–0x7E.
+ *
+ * The HTTP header boundary strips surrounding whitespace from a bearer value,
+ * so a token that differs from another only by leading or trailing whitespace
+ * is indistinguishable on the wire. The round-2 finding showed the consequence:
+ * `token = B + " "` arrived as `B` and authenticated as `operator_token = B`.
+ * Refusing any character outside this range at start-up — which excludes
+ * spaces, tabs and line breaks — means whitespace can never reach a comparison,
+ * and thus never a bearer, at all.
+ */
+const PRINTABLE_ASCII = /^[\x21-\x7E]*$/;
+
+function assertPrintableAscii(value: string, name: string): void {
+  if (!PRINTABLE_ASCII.test(value)) {
+    throw new Error(`${name} must contain only printable ASCII characters (0x21–0x7E), with no spaces, tabs, line breaks or other whitespace`);
+  }
+}
+
 export class Core implements NodeCore {
   private store: Store | null = null;
   private policy: Policy | null = null;
@@ -124,19 +143,40 @@ export class Core implements NodeCore {
     this.registeredCapabilities = registry.list();
     const chrome = this.options.adapters.find(isChromeWorkerAdapter);
     this.chromeWorker = chrome !== undefined && this.registeredCapabilities.includes('chrome.navigate') ? chrome : null;
-    // A gate nobody can open is a broken node that looks like a working one:
-    // every gated action would deny E_APPROVAL_REQUIRED forever, and the only
-    // symptom would be work quietly not happening. Refuse to start instead, and
-    // say which capabilities are gated.
     const gated = this.gatedCapabilities(registry);
-    if (gated.length > 0) {
-      const operatorToken = this.options.operator_token;
-      if (operatorToken === undefined || operatorToken.length < 32) {
-        throw new Error(`operator_token of at least 32 characters is required because these capabilities need approval: ${gated.join(', ')}`);
+    const operatorToken = this.options.operator_token;
+    // The operator surface in http.ts is mounted whenever `operator_token` is a
+    // non-empty string, whether or not any capability is currently gated. The
+    // strength and distinctness checks must therefore read that same condition,
+    // not `gated`: AR-03 showed that with `operator_token` equal to `token` and
+    // no gated capability, Core started and the ordinary bearer could list jobs,
+    // create a job and run it through `/operator/*`. Enforce on the mount's own
+    // condition, so a weak or shared operator bearer can never start.
+    //
+    // Shape comes before strength and distinctness because those two are
+    // meaningless on a string that cannot survive the transport intact: the
+    // HTTP header boundary strips surrounding whitespace, so `token = B + " "`
+    // arrives on the wire as `B` and would authenticate as `operator_token = B`
+    // (the round-2 finding). A token with any character outside printable
+    // ASCII 0x21–0x7E — spaces, tabs and line breaks included — is refused
+    // before it can be compared against anything. The `token` check is
+    // unconditional because the ordinary bearer is also compared on the wire.
+    assertPrintableAscii(this.options.token, 'token');
+    if (operatorToken !== undefined && operatorToken.length > 0) {
+      assertPrintableAscii(operatorToken, 'operator_token');
+      if (operatorToken.length < 32) {
+        throw new Error('operator_token must be at least 32 characters: the operator surface holds job-creation and approval authority');
       }
       if (operatorToken === this.options.token) {
         throw new Error('operator_token must differ from token: the coordinator holds token, and it must not be able to approve its own actions');
       }
+    }
+    // A gate nobody can open is a broken node that looks like a working one:
+    // every gated action would deny E_APPROVAL_REQUIRED forever, and the only
+    // symptom would be work quietly not happening. Refuse to start instead, and
+    // say which capabilities are gated.
+    if (gated.length > 0 && (operatorToken === undefined || operatorToken.length === 0)) {
+      throw new Error(`operator_token of at least 32 characters is required because these capabilities need approval: ${gated.join(', ')}`);
     }
     this.policy = createPolicy({ registry, approval_required: this.options.approval_required, approvals: this.approvals });
     // The relay resolves selected_files against a workspace root, so it needs
