@@ -47,8 +47,11 @@ has to be closed first.
    is at least 32 characters **and** not equal to `token`. This applies regardless of gating.
    Keep the existing rule that a gated capability with no operator token refuses to start. Error
    messages name the rule, never a token value.
-2. **Equality** is checked on the exact strings. Do not trim or case-fold, so two tokens that
-   differ only in case or surrounding whitespace count as distinct, as today. A test pins this.
+2. **Token shape, then equality** (corrected in round 2, see "Round 2" below). Core refuses to start
+   if `token` or a non-empty `operator_token` contains any character outside printable ASCII
+   `0x21–0x7E`. That excludes spaces, tabs, line breaks and any leading or trailing whitespace.
+   Distinctness is then checked on the exact strings. Case still counts: two tokens differing only
+   in case are distinct.
 3. **Operator route, defence in depth.** In `handleHttp`, on the `operator` branch, a request
    whose bearer equals `token` is answered **401** even if it would also match `operator_token`.
    Start-up already prevents that configuration; this guards against a future code path that
@@ -65,7 +68,11 @@ has to be closed first.
    `token` → 401; with `operator_token` → 200.
 4. Absent or empty `operator_token`, no gated capability → starts; every `/operator/*` → 401.
 5. A gated capability with no `operator_token` → still refuses to start (existing behaviour kept).
-6. Tokens differing only by case or by trailing whitespace → treated as distinct (pinned).
+6. Tokens differing only by case → distinct, and Core starts. A `token` or `operator_token` with
+   leading or trailing whitespace, an inner space, a tab or a line break → Core refuses to start,
+   and the error names the shape rule. Regression for the round-1 finding: `token = B + " "` with
+   `operator_token = B` must **refuse to start**, and must never reach the point where
+   `/operator/*` answers 200.
 7. A live advisory run credential on `/operator/*` → 401.
 8. The full node-core suite passes with **zero skips**. Every existing test that used equal or short
    tokens is updated, not deleted.
@@ -91,3 +98,12 @@ the reviewer runs them natively before merge.
   separation`. Link AR-03 and the remediation plan. Do not merge it.
 - Match the surrounding comment style: say *why* a check exists, as the existing gated-check
   comment does.
+
+## Round 2 — correction after review (2026-10-14)
+
+Codex's review of PR mbulentcakar/Toros#5 found a High bypass. **It was caused by this brief.** The
+original acceptance item 6 required tokens that differ only by trailing whitespace to count as
+distinct. But HTTP strips surrounding whitespace from header values, so `token = B + " "` arrives
+on the wire as `B` and authenticates as `operator_token = B`. The fix is the token-shape rule in
+required behaviour 2. Whitespace never reaches a comparison, because a token containing any is
+refused at start-up. The defence-in-depth check in `http.ts` stays as it is.
