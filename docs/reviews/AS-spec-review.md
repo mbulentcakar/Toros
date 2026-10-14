@@ -1064,3 +1064,80 @@ Next owner: the spec author corrects the live-cancellation outcome rule, synchro
 completes the profile matcher/record schema. The six closed R3 findings stay closed under all
 Appendix A requirements. Operator acceptance and the AR/AS native, code, MCP and adversarial
 gates remain separate and outstanding.
+
+## Re-review (revision 5)
+
+Reviewer: Codex, 2026-10-14. Delta reviewed: `a411be950bdf1dd37b077d8db68abeb9898d3d9f` →
+`a67ec3e779a352842d4b4c099e506020b0264c0a`, fetched from `public/spec/desktop-grants`.
+The baseline is **Re-review (revision 4)** above. This revision changes AS and the proposed A7
+inventory only; there are no implementation changes. AS line references below refer to the
+immutable `a67ec3e` document, inspected through Git rather than the older local spec checkout.
+
+All Appendix A decisions remain requirements, including R3-a and R4-a. The reviewed-profile
+function/context boundary, the operator's disclosed observed-state-only residual, strict native
+typing evidence and the accepted same-user confinement limitation are preserved.
+
+VERDICT: ready to implement — all three revision 4 findings are closed; the remaining minor
+clarification below does not change the binding operator requirements or block implementation.
+
+This verdict authorizes no deployment, mutation enablement or operator acceptance. Implementation
+still proceeds in bounded slices, with the AR, AG, A7, profile-verification and independent
+code/MCP/adversarial prerequisites in AS. No native or implementation test pass is claimed.
+
+### Disposition of every revision 4 finding
+
+| Finding | Status | Reason at revision 5 |
+|---|---|---|
+| R4-B4 | **closed** | AS 570–574/627–641 treats silence after authorization as unknown. `invalidated` requires the worker's explicit `aborted_before_call`, emitted only from a pre-call branch mutually exclusive with executing the pattern. A call/in-progress report yields uncertainty; missing/lost reports, kill or crash yield unknown. Both uncertain/unknown outcomes hold a still-live mission, are never retried and retain their exact outcome when the mission has ended. Acceptance 78 tests effect-before-return/report; 79 tests the acknowledged pre-call abort. Live cancellation and restart now conservatively reflect the available evidence. |
+| R4-N1 | **closed** | A7 now adds `desktop.request_authorized`, `desktop.request_reported` and `desktop.outcome_unknown`, and replaces obsolete proposed dispatched/issued kinds. AS 904–912 maps stages to those kinds and existing `action.requested`/`action.decided`/`action.finished`. Independent comparison of the AS event section and the target's A7 row found the same 15 distinct mission/desktop kinds, with no difference. Acceptance 80 requires an amended-union inventory check in AS0. The architect-owned freeze/amendment process is unchanged. |
+| R4-N2 | **closed** | AS 264–371 defines the profile/root/control schema, title rules, required native class/type, explicit context predicates, state-independent exception, deterministic matching and execution-time re-matching. Unknown/unreadable/ambiguous matches do not delegate. The record now includes sanitized `context_observed`, while raw values remain committed. Closed function categories are validated structurally; whether they truthfully describe the application remains a human review/native-fixture claim. Acceptance 81–84 covers same-path/wrong-state, invalid schemas, ambiguous resolution and visible context. This closes the initially missing context predicate and matcher semantics without asking a model to infer function. |
+
+All three findings are **closed** at the specification level; none is partly closed or open.
+Earlier closures remain in force under the same operator requirements.
+
+### New nonblocking clarification
+
+#### R5-N1 — minor — make the no-native-handle precedence explicit beside the nullable profile field
+
+**Sections:** AS `ControlDef.native_class`, 313–319; matcher 362–367; Appendix A R3-a.
+
+**Failure:** the new schema permits `native_class: null` with `invoke` or `select`, and the
+matcher describes that as a valid no-native-handle match. An implementer considering only this
+local matcher could promote such a match to delegate, overlooking R3-a's binding requirement
+that actions without a native handle remain operator-only. The existing Appendix decision and
+operator-over-delegate precedence already forbid that promotion; this is a local clarity/test
+gap, not permission to widen authority or a new unresolved policy decision.
+
+**Smallest change:** state beside the field/matcher that a null-native-class match cannot promote
+a mutation to delegate, even inside a reviewed profile. Either reject such delegable control
+definitions or retain them only with explicit operator-only routing. Add a profile-matched
+no-handle `invoke`/`select` case asserting operator routing, alongside the existing no-handle
+typing refusal. This can be addressed in the implementation's acceptance coverage without
+another spec review round; R3-a controls the implementation choice.
+
+### Verification and handoff
+
+- `git fetch public spec/desktop-grants` returned exit 0; `git rev-parse a67ec3e` and
+  `gh pr view 1 -R mbulentcakar/Toros --json headRefOid,state` confirmed the requested commit
+  `a67ec3e779a352842d4b4c099e506020b0264c0a` as the open PR head.
+- Read the complete `git diff a411be9..a67ec3e` for AS and 00-CONTRACTS, then independently
+  inspected the normative schema/matcher, outcome rules, record context, stage/event mapping,
+  acceptance additions and unchanged Appendix requirements from the target's Git objects.
+- Event inventory check: extracted the mission/desktop literal kinds from AS's event section
+  and A7's `EventKind` row, deduplicated and compared the sets with `Compare-Object`.
+  Result: **15 AS kinds, 15 A7 kinds, no difference**. This is a documentation consistency check,
+  not an implementation or AS0 test run.
+- `git diff a411be9..a67ec3e --name-only` listed only AS and 00-CONTRACTS;
+  `git diff a411be9..a67ec3e -- packages apps` was empty.
+- Docs only: no executable tests, model exchanges or desktop actions were run, and none apply
+  to this review-document append. The implementation and its native acceptance tests remain
+  future work.
+- Integrity: `git diff --check` returned exit 0; `git diff --name-only` listed only the review
+  document. Prefix comparison confirmed the brief and all previous reviews are unchanged.
+  All three requested disposition rows are present and closed. The added-text scan found no
+  local user paths or credential-shaped values.
+
+Next owner: the operator may accept the spec for bounded implementation dispatch; the assigned
+implementers must preserve all prerequisites and satisfy the written acceptance cases, including
+R3-a routing when applying the new profile schema. The operator retains final acceptance, and
+implementation is still subject to independent review.
