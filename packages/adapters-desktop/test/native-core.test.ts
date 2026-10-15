@@ -11,7 +11,6 @@ import { createNodeCore, type NodeCore } from '@toros/node-core';
 import { createDesktopAdapter } from '../src/adapter.js';
 import {
   fixtureProbe,
-  selfProbe,
   startFixture,
   stopFixture,
   tools,
@@ -22,22 +21,6 @@ const CORE_TOKEN = 'toros-f2-native-core-token';
 
 describe('AR-F2 Native Core Integration (finding 2)', () => {
   const activeFixtures: FixtureInstance[] = [];
-
-  before(async () => {
-    // Same unlocked-desktop precondition as the adapter fixture suite: checked
-    // with a PID-bound probe so no other window is ever enumerated or read.
-    const probe = selfProbe();
-    const state = await probe.enumerateWindows(
-      'default',
-      { max_windows: 200 },
-      new AbortController().signal,
-    );
-    if (state.session_state !== 'active') {
-      throw new Error(
-        `Desktop is not in active state (state=${state.session_state}). AR-F2 requires an interactive, unlocked Windows desktop.`,
-      );
-    }
-  });
 
   after(async () => {
     while (activeFixtures.length > 0) {
@@ -50,6 +33,21 @@ describe('AR-F2 Native Core Integration (finding 2)', () => {
     const fixture = await startFixture({});
     activeFixtures.push(fixture);
     const probe = fixtureProbe(fixture);
+
+    // Round 4, item 2: the locked-desktop precondition check runs after the
+    // fixture starts, using the fixture-bound probe. The PID filter makes the
+    // walk skip every other window before any text is read, so the check never
+    // inspects the operator's real applications.
+    const deskState = await probe.enumerateWindows(
+      'default',
+      { max_windows: 200 },
+      new AbortController().signal,
+    );
+    if (deskState.session_state !== 'active') {
+      throw new Error(
+        `Desktop is not in active state (state=${deskState.session_state}). AR-F2 requires an interactive, unlocked Windows desktop.`,
+      );
+    }
 
     // A real Core with the desktop adapter, a fixture-bound probe, and a
     // temporary store.

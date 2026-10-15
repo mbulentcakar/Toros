@@ -6,7 +6,6 @@ import { DESKTOP_UIA_PS1 } from '../src/probe.js';
 import {
   fakeContext,
   fixtureProbe,
-  selfProbe,
   startFixture,
   stopFixture,
   type FixtureInstance,
@@ -14,27 +13,6 @@ import {
 
 describe('AR-F2 Native Windows Fixture Verification', () => {
   const activeFixtures: FixtureInstance[] = [];
-
-  before(async () => {
-    // Acceptance 7 / safety rules: verify an interactive, unlocked Windows
-    // desktop BEFORE any window is inspected. The probe is PID-bound to THIS
-    // test process, so the walk skips every other window before any text is
-    // read — the precondition is checked without ever inspecting the
-    // operator's real applications. A locked or non-interactive desktop fails
-    // the suite here with a clear message; it is never reported as a pass or a
-    // skip.
-    const probe = selfProbe();
-    const state = await probe.enumerateWindows(
-      'default',
-      { max_windows: 200 },
-      new AbortController().signal,
-    );
-    if (state.session_state !== 'active') {
-      throw new Error(
-        `Desktop is not in active state (state=${state.session_state}). AR-F2 requires an interactive, unlocked Windows desktop.`,
-      );
-    }
-  });
 
   afterEach(async () => {
     while (activeFixtures.length > 0) {
@@ -54,6 +32,19 @@ describe('AR-F2 Native Windows Fixture Verification', () => {
     const fixture = await startFixture({});
     activeFixtures.push(fixture);
     const probe = fixtureProbe(fixture);
+
+    // Acceptance 7 / safety rules (Round 4, item 2): the locked-desktop
+    // precondition check runs AFTER the fixture starts, using the fixture-bound
+    // probe. The PID filter makes the walk skip every other window before any
+    // text is read, so the check never inspects the operator's real applications.
+    // A locked or non-interactive desktop fails the test here with a clear
+    // message; the afterEach/after cleanup removes the fixture's temp dir.
+    const deskState = await probe.enumerateWindows('default', { max_windows: 200 }, new AbortController().signal);
+    if (deskState.session_state !== 'active') {
+      throw new Error(
+        `Desktop is not in active state (state=${deskState.session_state}). AR-F2 requires an interactive, unlocked Windows desktop.`,
+      );
+    }
 
     // P1 binding at the raw layer: every enumerated window belongs to the
     // spawned child's PID and the fixture's own reported HWND. Nothing else was

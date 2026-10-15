@@ -305,15 +305,6 @@ export function fixtureProbe(fixture: FixtureInstance): UiaProbe {
 }
 
 /**
- * Probe bound to THIS test process's own PID — the locked-desktop precondition
- * check only. The PID filter makes the walk skip every other window before any
- * text is read, so an active-desktop check never inspects real applications.
- */
-export function selfProbe(): UiaProbe {
-  return createPowerShellUiaProbe({ timeout_ms: 30_000, restrict_to_pid: process.pid });
-}
-
-/**
  * POST to a real Node Core tool surface (loopback). `agent: false` so the
  * keep-alive socket cannot hold `node --test` open after the suite finishes.
  */

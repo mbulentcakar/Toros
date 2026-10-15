@@ -29,6 +29,8 @@ describe('AR-F2 round 3 — restrict_to_pid cannot fail open', () => {
       true, // boolean
       {}, // object
       [], // array
+      null, // explicit null must throw, not mean unrestricted
+      undefined, // explicit undefined must throw, not mean unrestricted
     ];
     for (const bad of badValues) {
       assert.throws(
@@ -39,14 +41,24 @@ describe('AR-F2 round 3 — restrict_to_pid cannot fail open', () => {
     }
   });
 
-  it('factory accepts absent/null (no restriction) and positive safe integers', () => {
+  it('factory accepts absent (no restriction) and positive safe integers; rejects explicit null/undefined', () => {
     // Absent means "no restriction" — the normal production path.
     assert.doesNotThrow(() => createPowerShellUiaProbe({ timeout_ms: 1000 }));
-    assert.doesNotThrow(() => createPowerShellUiaProbe({ timeout_ms: 1000, restrict_to_pid: null }));
     // A positive safe integer binds the probe to that PID.
     assert.doesNotThrow(() => createPowerShellUiaProbe({ timeout_ms: 1000, restrict_to_pid: 12345 }));
     assert.doesNotThrow(() =>
       createPowerShellUiaProbe({ timeout_ms: 1000, restrict_to_pid: Number.MAX_SAFE_INTEGER }),
+    );
+    // Explicit null or undefined must throw — only absence means unrestricted.
+    assert.throws(
+      () => createPowerShellUiaProbe({ timeout_ms: 1000, restrict_to_pid: null }),
+      /absent \(unrestricted\) or a positive safe integer/,
+    );
+    // Explicit undefined is rejected the same way; bypass TS exactOptionalPropertyTypes
+    // with `as any` because the runtime path is what matters here.
+    assert.throws(
+      () => (createPowerShellUiaProbe as any)({ timeout_ms: 1000, restrict_to_pid: undefined }),
+      /absent \(unrestricted\) or a positive safe integer/,
     );
   });
 

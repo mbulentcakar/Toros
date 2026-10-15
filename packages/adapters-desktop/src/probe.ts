@@ -285,23 +285,34 @@ function runPowerShell(input: Record<string, unknown>, timeoutMs: number, signal
  * The restriction cannot fail open: a present `restrict_to_pid` that is not a
  * positive safe integer throws here, BEFORE PowerShell starts, so no malformed
  * value can be serialized into `input.json` and silently disable the guard in
- * the script. Absent or `null` means "no restriction" (the normal production
- * path).
+ * the script. Only the ABSENCE of the property selects the unrestricted
+ * production path. A present `null` or `undefined` throws.
  */
 export function createPowerShellUiaProbe(options: {
   timeout_ms: number;
   restrict_to_pid?: number | null;
 }): UiaProbe {
   const timeoutMs = options.timeout_ms;
-  const restrictPid = options.restrict_to_pid ?? null;
 
-  // Fail closed at the factory boundary: absent/null is "no restriction", but
-  // any other present value must be a positive safe integer. NaN, Infinity,
-  // floats, strings, booleans, zero and negatives are all rejected here.
-  if (restrictPid !== null && (!Number.isSafeInteger(restrictPid) || restrictPid <= 0)) {
-    throw new Error(
-      `restrict_to_pid must be a positive safe integer when provided, got ${String(restrictPid)}`,
-    );
+  // Fail closed at the factory boundary: only the ABSENCE of restrict_to_pid
+  // selects the unrestricted production path. A present value that is null,
+  // undefined, or anything other than a positive safe integer throws here,
+  // BEFORE PowerShell starts, so no malformed value can be serialized into
+  // input.json and silently disable the guard in the script.
+  const hasRestrictPid = 'restrict_to_pid' in options;
+  const restrictPid = options.restrict_to_pid;
+
+  if (hasRestrictPid) {
+    if (restrictPid === null || restrictPid === undefined) {
+      throw new Error(
+        `restrict_to_pid must be absent (unrestricted) or a positive safe integer, got ${String(restrictPid)}`,
+      );
+    }
+    if (!Number.isSafeInteger(restrictPid) || restrictPid <= 0) {
+      throw new Error(
+        `restrict_to_pid must be a positive safe integer when provided, got ${String(restrictPid)}`,
+      );
+    }
   }
 
   return {
@@ -329,7 +340,7 @@ export function createPowerShellUiaProbe(options: {
           action: 'enumerate_windows',
           session_scope: sessionScope,
           max_windows: maxWindows,
-          ...(restrictPid !== null ? { restrict_to_pid: restrictPid } : {}),
+          ...(hasRestrictPid ? { restrict_to_pid: restrictPid } : {}),
         },
         timeoutMs,
         signal,
@@ -366,7 +377,7 @@ export function createPowerShellUiaProbe(options: {
           native_handle: nativeHandle,
           depth: opts.depth,
           max_controls: opts.max_controls,
-          ...(restrictPid !== null ? { restrict_to_pid: restrictPid } : {}),
+          ...(hasRestrictPid ? { restrict_to_pid: restrictPid } : {}),
         },
         timeoutMs,
         signal,
