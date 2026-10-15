@@ -12,6 +12,8 @@ import {
   type AdapterContext,
   type AdapterManifest,
   type NodePlatform,
+  type Receipt,
+  type SessionAdapter,
 } from '@toros/contracts';
 import { sealEnvelope } from '@toros/envelope';
 import { openStore } from '@toros/store';
@@ -255,3 +257,253 @@ async function readReceipt(path: string, job: string): Promise<{ outcome: string
   if (receipt === undefined) return undefined;
   return { outcome: receipt.outcome, ended_at: receipt.ended_at };
 }
+
+// ---------------------------------------------------------------------------
+// Round 2 finding 1 (P1) — the Core timeout must WIN the race even when the
+// adapter settles its own pending promise from its abort listener. Abort
+// listeners run synchronously, so without deciding the timeout first, an
+// adapter that resolves (or rejects) there would replace E_TIMEOUT with its
+// own outcome.
+// ---------------------------------------------------------------------------
+
+test('an adapter that resolves from its own abort listener is still E_TIMEOUT with a terminated receipt', async (t) => {
+  let capturedSignal: AbortSignal | undefined;
+  const adapter: Adapter = {
+    manifest: makeManifest({ timeout_ms: 60 }),
+    async init() {},
+    async invoke(_actionId: string, _args: Readonly<Record<string, unknown>>, ctx: AdapterContext): Promise<ActionResult> {
+      capturedSignal = ctx.signal;
+      // The pending action resolves ONLY when the abort listener runs — which
+      // queues its fulfillment before the timer can queue its rejection.
+      return new Promise<ActionResult>((resolve) => {
+        ctx.signal.addEventListener('abort', () => {
+          resolve({ output: 'won-the-race', truncated: false, artifacts: [], receipt_extra: {} });
+        });
+      });
+    },
+    async dispose() {},
+  };
+  const f = await fixture(adapter);
+  t.after(() => finish(f));
+  const p = await f.core.start();
+
+  const response = await invoke(p.port, f.job, { workspace_id: 'work' });
+  assert.equal(response.body.error, ErrorCode.E_TIMEOUT, 'an abort-listener resolve replaced E_TIMEOUT with a success');
+
+  const receipt = await readReceipt(f.path, f.job);
+  assert.equal(receipt?.outcome, 'terminated');
+  assert.equal(capturedSignal?.aborted, true, 'the adapter signal was not aborted on timeout');
+});
+
+test('an adapter that rejects from its own abort listener is still E_TIMEOUT, not the adapter error', async (t) => {
+  const adapter: Adapter = {
+    manifest: makeManifest({ timeout_ms: 60 }),
+    async init() {},
+    async invoke(_actionId: string, _args: Readonly<Record<string, unknown>>, ctx: AdapterContext): Promise<ActionResult> {
+      // Rejecting from the abort listener queues the adapter's own error before
+      // the timer's rejection — the timeout must still win.
+      return new Promise<ActionResult>((_, reject) => {
+        ctx.signal.addEventListener('abort', () => {
+          reject(new Error('adapter own error'));
+        });
+      });
+    },
+    async dispose() {},
+  };
+  const f = await fixture(adapter);
+  t.after(() => finish(f));
+  const p = await f.core.start();
+
+  const response = await invoke(p.port, f.job, { workspace_id: 'work' });
+  assert.equal(response.body.error, ErrorCode.E_TIMEOUT, 'an abort-listener rejection replaced E_TIMEOUT with its own error');
+  assert.notEqual(response.body.error, 'adapter own error');
+
+  const receipt = await readReceipt(f.path, f.job);
+  assert.equal(receipt?.outcome, 'terminated');
+});
+
+// ---------------------------------------------------------------------------
+// Round 2 finding 3 (P2) — the whole post-start sequence lives inside the
+// single closing path, INCLUDING the first receipt write. A store failure on
+// that write — persisting then rejecting, or rejecting without persisting —
+// must still close a receipt (failed) and append action.finished.
+// ---------------------------------------------------------------------------
+
+test('a first receipt write that rejects without persisting still closes a failed receipt and propagates', async (t) => {
+  let invoked = false;
+  const adapter: Adapter = {
+    manifest: makeManifest(),
+    async init() {},
+    async invoke(): Promise<ActionResult> {
+      invoked = true;
+      return { output: 'ok', truncated: false, artifacts: [], receipt_extra: {} };
+    },
+    async dispose() {},
+  };
+  const f = await fixture(adapter);
+  t.after(() => finish(f));
+  const p = await f.core.start();
+
+  const storeObj = (f.core as unknown as { store: { putReceipt: (r: unknown) => Promise<unknown> } }).store;
+  const realPutReceipt = storeObj.putReceipt.bind(storeObj);
+  let failedWrites = 0;
+  try {
+    storeObj.putReceipt = (r: unknown): Promise<unknown> => {
+      if (failedWrites === 0) { failedWrites += 1; return Promise.reject(new Error('store failure injected')); }
+      return realPutReceipt(r);
+    };
+    const response = await invoke(p.port, f.job, { workspace_id: 'work' });
+    assert.equal(response.body.error, ErrorCode.E_ADAPTER_FAILURE, 'the injected first receipt write did not propagate');
+    assert.equal(invoked, false, 'the adapter ran although the running receipt could not be written');
+  } finally {
+    storeObj.putReceipt = realPutReceipt;
+  }
+
+  const store = await openStore({ path: f.path, nodeId: 'node' });
+  const receipts = await store.listReceipts(f.job);
+  const events = await store.listEvents(f.job);
+  await store.close();
+
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0]?.outcome, 'failed', 'the receipt was not closed as failed');
+  assert.notEqual(receipts[0]?.ended_at, null, 'the failed receipt has no ended_at');
+  assert.equal(receipts.some((r) => r.outcome === 'running'), false, 'a running receipt remains');
+  const finished = events.find((e) => e.kind === 'action.finished');
+  assert.ok(finished !== undefined, 'no action.finished was recorded');
+  assert.equal((finished?.payload as Record<string, unknown>).error, ErrorCode.E_ADAPTER_FAILURE);
+});
+
+test('a first receipt write that persists then rejects still closes a failed receipt and propagates', async (t) => {
+  let invoked = false;
+  const adapter: Adapter = {
+    manifest: makeManifest(),
+    async init() {},
+    async invoke(): Promise<ActionResult> {
+      invoked = true;
+      return { output: 'ok', truncated: false, artifacts: [], receipt_extra: {} };
+    },
+    async dispose() {},
+  };
+  const f = await fixture(adapter);
+  t.after(() => finish(f));
+  const p = await f.core.start();
+
+  const storeObj = (f.core as unknown as { store: { putReceipt: (r: unknown) => Promise<unknown> } }).store;
+  const realPutReceipt = storeObj.putReceipt.bind(storeObj);
+  let failedWrites = 0;
+  try {
+    storeObj.putReceipt = (r: unknown): Promise<unknown> => {
+      if (failedWrites === 0) {
+        // The row is persisted and THEN the call fails — the worst case for a
+        // closing path, because an unclosed `running` row now exists.
+        failedWrites += 1;
+        return realPutReceipt(r).then(() => { throw new Error('store failure injected'); });
+      }
+      return realPutReceipt(r);
+    };
+    const response = await invoke(p.port, f.job, { workspace_id: 'work' });
+    assert.equal(response.body.error, ErrorCode.E_ADAPTER_FAILURE, 'the injected first receipt write did not propagate');
+    assert.equal(invoked, false, 'the adapter ran although the running receipt could not be written');
+  } finally {
+    storeObj.putReceipt = realPutReceipt;
+  }
+
+  const store = await openStore({ path: f.path, nodeId: 'node' });
+  const receipts = await store.listReceipts(f.job);
+  const events = await store.listEvents(f.job);
+  await store.close();
+
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0]?.outcome, 'failed', 'the persisted running receipt was not overwritten by a closed failed one');
+  assert.notEqual(receipts[0]?.ended_at, null);
+  assert.equal(receipts.some((r) => r.outcome === 'running'), false, 'a running receipt remains');
+  const finished = events.find((e) => e.kind === 'action.finished');
+  assert.ok(finished !== undefined, 'no action.finished was recorded');
+  assert.equal((finished?.payload as Record<string, unknown>).error, ErrorCode.E_ADAPTER_FAILURE);
+});
+
+// ---------------------------------------------------------------------------
+// Round 2 follow-up 1 — restart with an unexpired running send: the
+// settlement deadline is re-armed, so the receipt is still closed when the
+// deadline passes, without needing another restart.
+// ---------------------------------------------------------------------------
+
+test('a restart re-arms the settlement deadline for an unexpired running send and closes it when the deadline passes', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'toros-f4-rearm-'));
+  const path = join(dir, 'node.sqlite');
+  const job = '66666666-6666-4666-8666-666666666666';
+  const actions = [
+    { id: 'start', summary: 'start', input_schema: { type: 'object', additionalProperties: false }, path_fields: [], mutates: true, always_requires_approval: false },
+    { id: 'send', summary: 'send', input_schema: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'], additionalProperties: false }, path_fields: [], mutates: true, always_requires_approval: false },
+    { id: 'read', summary: 'read', input_schema: { type: 'object', properties: { cursor: { type: 'integer' } }, required: ['cursor'], additionalProperties: false }, path_fields: [], mutates: false, always_requires_approval: false },
+  ] as const;
+  const manifest: AdapterManifest = {
+    id: 'rearmcli', version: '1.0.0', platforms: [process.platform as NodePlatform],
+    actions, required_permissions: [], allowed_resources: [],
+    default_timeout_ms: 1000, cancellation: 'kill', receipt_fields: ['exchange_state'],
+  };
+  const adapter: SessionAdapter = {
+    manifest,
+    async init() {},
+    async invoke(): Promise<ActionResult> {
+      return { output: '', truncated: false, artifacts: [], receipt_extra: { exchange_state: 'running' } };
+    },
+    async dispose() {}, async start() { return { pid: -1 }; }, async send() {},
+    async read() { return { chunk: 'done', cursor: 0, exchange_state: 'succeeded', exchange_error: null }; },
+    async interrupt() {}, async stop() {},
+  };
+
+  const store = await openStore({ path, nodeId: 'node' });
+  await store.createJob(sealEnvelope({
+    job_id: job, objective: 're-arm settlement deadline',
+    allowed_capabilities: ['rearmcli.start', 'rearmcli.send', 'rearmcli.read'],
+    allowed_workspaces: ['work'], acceptance: ['done'], forbidden: [],
+    max_actions: 10, max_retries: 0, expires_at: '2999-01-01T00:00:00Z',
+  }));
+
+  // Seed a running send receipt whose deadline (started_at + timeout_ms +
+  // CLI_SETTLE_GRACE_MS) is ~200 ms in the future, so the re-armed timer has a
+  // small window to fire during the test. The adapter declares no per-action
+  // timeout, so it inherits default_timeout_ms = 1000 from the manifest.
+  const timeoutMs = 1000;
+  const startedAt = new Date(Date.now() + 200 - timeoutMs - 30_000).toISOString();
+  const seeded: Receipt = {
+    receipt_id: 'future-deadline-send', job_id: job, node_id: 'node',
+    session_id: 'rearm-session', actor: 'coordinator', capability: 'rearmcli.send',
+    arguments_normalized: null, arguments_digest: 'future',
+    decision: { allow: true, reason: 'Allowed' },
+    envelope_digest: (await store.getJob(job))!.envelope_digest,
+    started_at: startedAt, ended_at: null, outcome: 'running',
+    artifact_refs: [], finding_refs: [], adapter_fields: { exchange_state: 'running' },
+  };
+  await store.putReceipt(seeded);
+  await store.close();
+
+  const core = createNodeCore({
+    node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
+    port: 0, token, adapters: [adapter], observer: null, approval_required: [],
+  });
+  try {
+    await core.start(); // calls reconcileCliSettlements → re-arms the timer
+
+    // Wait past the re-armed deadline so the timer fires.
+    await new Promise((r) => setTimeout(r, 500));
+
+    const settled = await openStore({ path, nodeId: 'node' });
+    const receipt = await settled.getReceipt('future-deadline-send');
+    const finishedEvents = (await settled.listEvents(job)).filter((e) => e.kind === 'action.finished');
+    await settled.close();
+
+    assert.notEqual(receipt, null);
+    assert.equal(receipt!.outcome, 'terminated', 'the re-armed deadline did not close the receipt');
+    assert.notEqual(receipt!.ended_at, null);
+    assert.equal((receipt!.adapter_fields as Record<string, unknown>)['exchange_state'], 'unsettled_deadline');
+    assert.ok(
+      finishedEvents.some((e) => (e.payload as Record<string, unknown>).exchange_state === 'unsettled_deadline'),
+      'the deadline close appended no action.finished with exchange_state unsettled_deadline',
+    );
+  } finally {
+    await core.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

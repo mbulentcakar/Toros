@@ -146,9 +146,11 @@ async function removeProbeDir(dir: string): Promise<void> {
     await fsPromises.rm(dir, { recursive: true, force: true });
   } catch (removalErr: unknown) {
     // A failed removal is a hygiene problem, not a probe failure: the action's
-    // result stands. Log once, naming only the basename — the full path can
-    // contain a machine-specific root and must not reach the log.
-    console.error(`desktop probe cleanup failed: ${path.basename(dir)}`, removalErr instanceof Error ? removalErr.message : String(removalErr));
+    // result stands. Log once, naming only the basename and the error CODE —
+    // never the raw message or the full path, which can contain a machine root
+    // or a local username and must not reach the log.
+    const code = (removalErr as { readonly code?: unknown } | null)?.code;
+    console.error(`desktop probe cleanup failed: ${path.basename(dir)}${typeof code === 'string' && code.length > 0 ? ` (${code})` : ''}`);
   }
 }
 
@@ -192,6 +194,17 @@ export function runPowerShell(
         return;
       }
 
+      // The entry check cannot see an abort landing WHILE the setup awaited on
+      // the filesystem. Re-check now that setup finished: an already-aborted
+      // signal must reject before spawning anything — a probe must not start
+      // after Core has already terminated its action. Cleanup is awaited so no
+      // temp dir survives this path either.
+      if (signal.aborted) {
+        await removeProbeDir(dir);
+        reject(new Error('desktop probe cancelled'));
+        return;
+      }
+
       let settled = false;
       let child: ProbeChild | undefined;
       const cleanup = (): Promise<void> => removeProbeDir(dir);
@@ -211,35 +224,44 @@ export function runPowerShell(
       const onAbort = (): void => { void done(new Error('desktop probe cancelled')); };
       signal.addEventListener?.('abort', onAbort, { once: true });
 
-      child = spawn(
-        powershellPath(),
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
-        { shell: false, windowsHide: true, timeout: timeoutMs, maxBuffer: MAX_BUFFER_BYTES },
-        (err, stdout, stderr) => {
-          if (settled) return;
-          if (err) {
-            void done(new Error(`powershell exited with error: ${String(err)} stdout=${stdout.slice(0, 500)} stderr=${stderr.slice(0, 500)}`));
-            return;
-          }
-          void (async () => {
-            try {
-              // Stat before reading: an oversized output is rejected by size,
-              // never read into memory (AR-07). The code is E_OUTPUT_LIMIT so
-              // the adapter surfaces it as the terminate-outcome code instead
-              // of a generic adapter failure.
-              const stat = await fsPromises.stat(outPath);
-              if (stat.size > MAX_OUTPUT_BYTES) {
-                void done(new TorosError(ErrorCode.E_OUTPUT_LIMIT, `desktop probe output exceeded ${MAX_OUTPUT_BYTES} bytes`));
-                return;
-              }
-              const text = await fsPromises.readFile(outPath, 'utf8');
-              await done(null, parseScriptJson(text) as Record<string, unknown>);
-            } catch (readErr: unknown) {
-              await done(new Error(`failed to read probe output: ${String(readErr)}`));
+      try {
+        child = spawn(
+          powershellPath(),
+          ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
+          { shell: false, windowsHide: true, timeout: timeoutMs, maxBuffer: MAX_BUFFER_BYTES },
+          (err, stdout, stderr) => {
+            if (settled) return;
+            if (err) {
+              void done(new Error(`powershell exited with error: ${String(err)} stdout=${stdout.slice(0, 500)} stderr=${stderr.slice(0, 500)}`));
+              return;
             }
-          })();
-        },
-      );
+            void (async () => {
+              try {
+                // Stat before reading: an oversized output is rejected by size,
+                // never read into memory (AR-07). The code is E_OUTPUT_LIMIT so
+                // the adapter surfaces it as the terminate-outcome code instead
+                // of a generic adapter failure.
+                const stat = await fsPromises.stat(outPath);
+                if (stat.size > MAX_OUTPUT_BYTES) {
+                  void done(new TorosError(ErrorCode.E_OUTPUT_LIMIT, `desktop probe output exceeded ${MAX_OUTPUT_BYTES} bytes`));
+                  return;
+                }
+                const text = await fsPromises.readFile(outPath, 'utf8');
+                await done(null, parseScriptJson(text) as Record<string, unknown>);
+              } catch (readErr: unknown) {
+                await done(new Error(`failed to read probe output: ${String(readErr)}`));
+              }
+            })();
+          },
+        );
+      } catch (spawnErr: unknown) {
+        // A SYNCHRONOUS spawn/execFile failure must reject the caller through
+        // the same closing path as every other outcome — cleanup awaited, no
+        // unhandled rejection — rather than escaping the detached IIFE and
+        // becoming an unhandled rejection that can take Core down.
+        await done(new Error(`failed to start powershell: ${String(spawnErr)}`));
+        return;
+      }
     })();
   });
 }

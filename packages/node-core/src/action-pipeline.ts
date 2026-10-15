@@ -14,6 +14,16 @@ import type { StageGraphController } from './stage-graph.js';
 
 function now(): string { return new Date().toISOString(); }
 
+/**
+ * The bounded grace a `send_cli` receipt may stay open after the action's own
+ * timeout before Core closes it. The documented exchange-settlement design
+ * keeps the receipt `running` until a later `read_cli` reports the terminal
+ * exchange state; this is the guaranteed close on top of it: the receipt is
+ * settled as `terminated`/`unsettled_deadline` at `started_at + timeout +
+ * CLI_SETTLE_GRACE_MS` if nothing else settled it first.
+ */
+const CLI_SETTLE_GRACE_MS = 30_000;
+
 function declaredAdapterFields(adapter: Adapter, result: ActionResult): Readonly<Record<string, JsonValue>> {
   const allowed = new Set(adapter.manifest.receipt_fields);
   const fields: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
@@ -68,6 +78,14 @@ function sessionAdapter(adapter: Adapter): SessionAdapter {
 export interface ActionPipeline {
   readonly execute: (tool: string, args: Readonly<Record<string, JsonValue>>) => Promise<unknown>;
   readonly replay: (approvalId: string, jobId: string) => Promise<unknown>;
+  /**
+   * Restart reconciliation for the `send_cli` settlement deadline: settlement
+   * timers are in-memory and die with the process, so at Core start any
+   * `send_cli` receipt still `running` whose deadline
+   * (`started_at` + action timeout + 30 s) has already passed is closed the
+   * same way the in-process deadline would have closed it.
+   */
+  readonly reconcileCliSettlements: () => Promise<void>;
 }
 
 export function createActionPipeline(deps: {
@@ -83,6 +101,12 @@ export function createActionPipeline(deps: {
   readonly removeSession: (sessionId: string) => void;
 }): ActionPipeline {
   const locks = new Set<string>();
+  /**
+   * In-memory settlement-deadline timers for `send_cli` receipts returned while
+   * still `running`, keyed by receipt id. Cleared when the exchange settles
+   * itself (via `read_cli`) or when the deadline fires.
+   */
+  const pendingSettleTimers = new Map<string, NodeJS.Timeout>();
 
   function getPolicyRegistryEntry(capability: CapabilityId): { readonly adapter: Adapter; readonly actionId: string } {
     // The policy owns the registry, so resolving through the adapters keeps the
@@ -271,57 +295,77 @@ export function createActionPipeline(deps: {
       // §8.3 asks it not to be.
       const spent = await store.incrementActionsUsed(jobId);
       await store.appendEvent({ node_id: deps.node_id, job_id: jobId, kind: 'action.started', payload: { receipt_id: receiptId } });
-      // Still before the adapter runs — a crash or a hung adapter must not
-      // leave an action that spent budget with no record of it.
-      await store.putReceipt(receipt);
-      // Core-level timeout (AR-07). One controller per action; its signal is
-      // handed to the adapter, and the adapter call races a timer armed with
-      // the action's OWN ceiling: ActionSchema.timeout_ms, else the manifest
-      // default. On timeout the controller aborts, the run fails with
-      // E_TIMEOUT (receipt `terminated`), and a late adapter result cannot
-      // overwrite the already-closed receipt. Wiring a job-cancellation hook
-      // (E_CANCELLED) would land here; the pipeline has no such hook today, so
-      // one is not invented.
-      const controller = new AbortController();
-      const timeoutMs = actionSchema?.timeout_ms ?? adapter.manifest.default_timeout_ms;
-      const timedOut = toros(ErrorCode.E_TIMEOUT, `The action exceeded its ${timeoutMs}ms timeout`);
-      async function withinTimeout<T>(work: () => Promise<T>): Promise<T> {
-        let timer: NodeJS.Timeout | undefined;
-        try {
-          return await Promise.race([
-            work(),
-            new Promise<never>((_, reject) => {
-              timer = setTimeout(() => {
-                controller.abort();
-                reject(timedOut);
-              }, timeoutMs);
-            }),
-          ]);
-        } finally { if (timer !== undefined) clearTimeout(timer); }
-      }
-      const context: AdapterContext = { job_id: jobId, session_id: sessionId, workspace, correlation_id: receiptId, signal: controller.signal };
-      // Hand the adapter the SAME path policy approved, not the string the
-      // caller wrote.
-      //
-      // Policy resolves a workspace-relative path against the workspace root to
-      // decide containment — `book.xlsx` is checked as
-      // `<workspace>\book.xlsx`. Passing the original relative string on meant
-      // the adapter resolved it again, against Node Core's own process
-      // directory, so what executed was not what was authorised. That is a
-      // check-then-use gap, and it lands outside the workspace.
-      //
-      // Substituting the resolved absolute form closes it: the argument the
-      // adapter receives is exactly the one that was contained.
-      const executedArgs = actionSchema === null ? actionArgs : resolvePathArgs(actionArgs, actionSchema, workspace.root);
-      let result: ActionResult;
-      let adapterFields: Readonly<Record<string, JsonValue>> = {};
-      // One closing path for the `running` receipt: success closes it
-      // `succeeded`, and ANY throw from this point on — adapter error,
-      // Core-level timeout, cancellation, or a store failure while recording
-      // the session or its artifacts — closes it `failed`/`terminated` before
-      // the error propagates. A receipt never stays `running` after this call
-      // returns or throws.
+      // One closing path for the `running` receipt. From action.started on,
+      // EVERY failure — the first receipt write itself, timeout controller and
+      // timer setup, path-argument resolution, the adapter call, a store
+      // failure while recording the session or its artifacts, or Core's own
+      // timeout/cancellation — closes the receipt `failed`/`terminated` before
+      // the error propagates, and success closes it `succeeded`. A receipt
+      // never stays `running` after this call returns or throws.
       try {
+        // Still before the adapter runs — a crash or a hung adapter must not
+        // leave an action that spent budget with no record of it. INSIDE the
+        // closing path on purpose: a store failure while persisting the
+        // `running` row (or one that persists the row and then rejects) must
+        // still produce a closed receipt and an action.finished event.
+        await store.putReceipt(receipt);
+        // Core-level timeout (AR-07). One controller per action; its signal is
+        // handed to the adapter, and the adapter call races a timer armed with
+        // the action's OWN ceiling: ActionSchema.timeout_ms, else the manifest
+        // default. On timeout the controller aborts, the run fails with
+        // E_TIMEOUT (receipt `terminated`), and a late adapter result cannot
+        // overwrite the already-closed receipt. Wiring a job-cancellation hook
+        // (E_CANCELLED) would land here; the pipeline has no such hook today, so
+        // one is not invented.
+        const controller = new AbortController();
+        const timeoutMs = actionSchema?.timeout_ms ?? adapter.manifest.default_timeout_ms;
+        const timedOut = toros(ErrorCode.E_TIMEOUT, `The action exceeded its ${timeoutMs}ms timeout`);
+        async function withinTimeout<T>(work: () => Promise<T>): Promise<T> {
+          let timer: NodeJS.Timeout | undefined;
+          let didTimeOut = false;
+          try {
+            try {
+              const outcome = await Promise.race([
+                work(),
+                new Promise<never>((_, reject) => {
+                  timer = setTimeout(() => {
+                    // Mark the action timed out BEFORE aborting the adapter's
+                    // signal. Abort listeners run synchronously: an adapter
+                    // that resolves (or rejects) its pending promise from its
+                    // own abort listener would otherwise settle the race first
+                    // and replace E_TIMEOUT with a success or its own error.
+                    // Deciding the timeout before the abort makes E_TIMEOUT the
+                    // only outcome the race can produce.
+                    didTimeOut = true;
+                    controller.abort();
+                    reject(timedOut);
+                  }, timeoutMs);
+                }),
+              ]);
+              if (didTimeOut) throw timedOut;
+              return outcome;
+            } catch (error: unknown) {
+              if (didTimeOut) throw timedOut;
+              throw error;
+            }
+          } finally { if (timer !== undefined) clearTimeout(timer); }
+        }
+        const context: AdapterContext = { job_id: jobId, session_id: sessionId, workspace, correlation_id: receiptId, signal: controller.signal };
+        // Hand the adapter the SAME path policy approved, not the string the
+        // caller wrote.
+        //
+        // Policy resolves a workspace-relative path against the workspace root to
+        // decide containment — `book.xlsx` is checked as
+        // `<workspace>\book.xlsx`. Passing the original relative string on meant
+        // the adapter resolved it again, against Node Core's own process
+        // directory, so what executed was not what was authorised. That is a
+        // check-then-use gap, and it lands outside the workspace.
+        //
+        // Substituting the resolved absolute form closes it: the argument the
+        // adapter receives is exactly the one that was contained.
+        const executedArgs = actionSchema === null ? actionArgs : resolvePathArgs(actionArgs, actionSchema, workspace.root);
+        let result: ActionResult;
+        let adapterFields: Readonly<Record<string, JsonValue>> = {};
         if (tool === 'start_cli') {
           const startedSession = await withinTimeout(() => sessionAdapter(adapter).start({ ...context, session_id: receiptId }));
           await store.createSession({ session_id: receiptId, job_id: jobId, adapter_id: adapter.manifest.id, workspace_id: workspace.id, pid: startedSession.pid, started_at: started });
@@ -370,9 +414,13 @@ export function createActionPipeline(deps: {
           // The one deliberate exception to "never return a `running` receipt":
           // an exchange that is still in flight is settled later by the next
           // read_cli (see settleCliExchange), so the receipt stays open on
-          // purpose.
+          // purpose. It is never open-ended, though: the settlement deadline
+          // closes it `terminated` with exchange_state `unsettled_deadline`
+          // after the action's timeout plus the bounded grace, so the receipt
+          // cannot remain `running` forever.
           receipt = { ...receipt, artifact_refs: artifactRefs, adapter_fields: adapterFields };
           await store.putReceipt(receipt);
+          armCliSettlementDeadline(store, receipt, timeoutMs);
           return response;
         }
         receipt = { ...receipt, ended_at: now(), outcome: 'succeeded', artifact_refs: artifactRefs, adapter_fields: adapterFields };
@@ -409,11 +457,93 @@ export function createActionPipeline(deps: {
   async function settleCliExchange(store: Store, jobId: string, sessionId: string, adapterId: string, state: string, error: JsonValue | undefined, adapterFields: Readonly<Record<string, JsonValue>>): Promise<void> {
     const pending = await store.latestRunningReceipt(jobId, sessionId, `${adapterId}.send`);
     if (pending === null) return;
+    // The exchange reported its own terminal state before the send's settlement
+    // deadline — cancel the deadline timer so the process is not held open by
+    // it. The deadline close is idempotent with this one: the receipt is now
+    // closed, so whichever runs first wins and neither reopens nor rewrites it.
+    clearPendingSettleTimer(pending.receipt_id);
     const terminated = state === 'interrupted' || error === ErrorCode.E_TIMEOUT || error === ErrorCode.E_CANCELLED || error === ErrorCode.E_OUTPUT_LIMIT;
     const outcome: Receipt['outcome'] = state === 'succeeded' ? 'succeeded' : terminated ? 'terminated' : 'failed';
     const settled: Receipt = { ...pending, ended_at: now(), outcome, adapter_fields: { ...pending.adapter_fields, ...adapterFields } };
     await store.putReceipt(settled);
     await store.appendEvent({ node_id: deps.node_id, job_id: jobId, kind: 'action.finished', payload: { receipt_id: pending.receipt_id, outcome, exchange_state: state, exchange_error: typeof error === 'string' ? error : null } });
+  }
+
+  /** Cancel a pending settlement-deadline timer, if any. */
+  function clearPendingSettleTimer(receiptId: string): void {
+    const timer = pendingSettleTimers.get(receiptId);
+    if (timer !== undefined) { timer.unref(); clearTimeout(timer); pendingSettleTimers.delete(receiptId); }
+  }
+
+  /**
+   * Close a still-open `send_cli` receipt that reached its settlement deadline.
+   *
+   * Idempotent by design: the receipt is re-read and re-checked immediately
+   * before the write, so a `read_cli` that settled the receipt a moment earlier
+   * (or a duplicate deadline firing) closes nothing and rewrites nothing.
+   */
+  async function closeUnsettledCliReceipt(receiptId: string, store: Store): Promise<void> {
+    const current = await store.getReceipt(receiptId);
+    if (current === null || current.outcome !== 'running') return;
+    const settled: Receipt = {
+      ...current,
+      ended_at: now(),
+      outcome: 'terminated',
+      adapter_fields: { ...current.adapter_fields, exchange_state: 'unsettled_deadline' },
+    };
+    await store.putReceipt(settled);
+    await store.appendEvent({ node_id: deps.node_id, job_id: current.job_id, kind: 'action.finished', payload: { receipt_id: current.receipt_id, outcome: 'terminated', exchange_state: 'unsettled_deadline', exchange_error: null } });
+  }
+
+  /**
+   * Arm the guaranteed close for a `send_cli` receipt that returns open. The
+   * deadline is the action's own timeout plus the bounded grace, counted from
+   * the receipt's `started_at`; any later `read_cli` settlement cancels it.
+   */
+  function armCliSettlementDeadline(store: Store, receipt: Receipt, timeoutMs: number): void {
+    const deadlineMs = Date.parse(receipt.started_at) + timeoutMs + CLI_SETTLE_GRACE_MS;
+    clearPendingSettleTimer(receipt.receipt_id);
+    const timer = setTimeout(() => {
+      pendingSettleTimers.delete(receipt.receipt_id);
+      void closeUnsettledCliReceipt(receipt.receipt_id, store)
+        .catch((error: unknown) => { console.error('failed to close cli exchange at its settlement deadline', error); });
+    }, Math.max(0, deadlineMs - Date.now()));
+    timer.unref();
+    pendingSettleTimers.set(receipt.receipt_id, timer);
+  }
+
+  /**
+   * Restart reconciliation for the `send_cli` settlement deadline. Deadline
+   * timers are in-memory and die with the process, so a `send_cli` receipt
+   * still `running` after a crash would otherwise stay open forever. Called at
+   * Core start: every running send whose deadline (`started_at` + the send
+   * action's timeout + the grace) has already passed is closed exactly as the
+   * in-process deadline would have closed it. Receipts whose deadline has not
+   * passed yet get their in-memory timer re-armed with the remaining time, so
+   * the guaranteed close still fires without another restart.
+   */
+  async function reconcileCliSettlements(): Promise<void> {
+    const store = deps.store();
+    const adaptersById = new Map(deps.adapters.map((adapter) => [adapter.manifest.id, adapter]));
+    for (const job of await store.listJobs()) {
+      for (const receipt of await store.listReceipts(job.job_id)) {
+        if (receipt.outcome !== 'running' || !receipt.capability.endsWith('.send')) continue;
+        const adapter = adaptersById.get(receipt.capability.slice(0, -'.send'.length));
+        if (adapter === undefined) continue;
+        const sendAction = adapter.manifest.actions.find((action) => action.id === 'send');
+        const timeoutMs = sendAction?.timeout_ms ?? adapter.manifest.default_timeout_ms;
+        const deadlineMs = Date.parse(receipt.started_at) + timeoutMs + CLI_SETTLE_GRACE_MS;
+        if (Date.now() >= deadlineMs) {
+          await closeUnsettledCliReceipt(receipt.receipt_id, store);
+        } else {
+          // The deadline has not passed: re-arm the in-memory timer so the
+          // receipt does not stay open until the next restart. Calling
+          // armCliSettlementDeadline with the timeout computed above sets the
+          // delay to exactly the remaining wall-clock time.
+          armCliSettlementDeadline(store, receipt, timeoutMs);
+        }
+      }
+    }
   }
 
   /**
@@ -442,5 +572,5 @@ export function createActionPipeline(deps: {
     return Math.max(0, failures - 1);
   }
 
-  return { execute, replay };
+  return { execute, replay, reconcileCliSettlements };
 }

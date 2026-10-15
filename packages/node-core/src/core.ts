@@ -38,6 +38,7 @@ export class Core implements NodeCore {
    * of ours.
    */
   private readonly sessionJobs = new Map<string, string>();
+  private readonly actionPipeline: ReturnType<typeof createActionPipeline>;
   private readonly approvals: ApprovalRegistry;
   private readonly runCredentials: RunCredentials;
   private readonly activeCoordinatorStarts = new Set<string>();
@@ -69,6 +70,7 @@ export class Core implements NodeCore {
       recordSession: (sessionId, jobId) => { this.sessionJobs.set(sessionId, jobId); },
       removeSession: (sessionId) => { this.sessionJobs.delete(sessionId); },
     });
+    this.actionPipeline = actionPipeline;
     this.tools = createToolRoutes({
       registeredCapabilities: () => this.registeredCapabilities,
       store: () => this.getStore(),
@@ -122,6 +124,14 @@ export class Core implements NodeCore {
       catch (error: unknown) { console.error('adapter registration failed', adapter.manifest.id, error instanceof Error ? error.message : String(error)); }
     }
     this.registeredCapabilities = registry.list();
+    // A restart must not leave a `send_cli` receipt open past its settlement
+    // deadline: the deadline timers are in-memory and died with the previous
+    // process, so every running send whose deadline has already passed is closed
+    // here exactly as the in-process deadline would have closed it (AR-F4 Round
+    // 2 item 2). A write failure here must not take the node down — the server
+    // is not up yet, and the normal exchange settlement still applies.
+    try { await this.actionPipeline.reconcileCliSettlements(); }
+    catch (error: unknown) { console.error('failed to reconcile cli settlement deadlines', error); }
     const chrome = this.options.adapters.find(isChromeWorkerAdapter);
     this.chromeWorker = chrome !== undefined && this.registeredCapabilities.includes('chrome.navigate') ? chrome : null;
     // A gate nobody can open is a broken node that looks like a working one:

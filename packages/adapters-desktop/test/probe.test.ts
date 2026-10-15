@@ -186,3 +186,103 @@ test('an unparseable output file rejects and still removes the temp dir', async 
   );
   assertNoProbeLeak(before, await sandboxProbeDirs());
 });
+
+// ---------------------------------------------------------------------------
+// Round 2 finding 4 (P2) — an abort landing WHILE the async setup awaits on
+// the filesystem (after the entry check, before the spawn) must not let the
+// child start. The post-setup recheck rejects cancelled without spawning, with
+// cleanup awaited.
+// ---------------------------------------------------------------------------
+
+test('an abort during async setup rejects without spawning once the setup writes complete', async () => {
+  const before = await sandboxProbeDirs();
+  const controller = new AbortController();
+  let spawned = 0;
+  const spawn: ProbeSpawn = (_file, _args, _opts, _callback) => { spawned += 1; return { kill: () => {} }; };
+  const realWriteFile = fsPromises.writeFile.bind(fsPromises);
+  // Abort at the moment the script write completes — mid-setup, after the
+  // entry check and before the spawn seam can run.
+  fsPromises.writeFile = ((file: Parameters<typeof fsPromises.writeFile>[0], data: Parameters<typeof fsPromises.writeFile>[1], options?: Parameters<typeof fsPromises.writeFile>[2]) => {
+    return realWriteFile(file, data, options).then((result) => {
+      if (typeof file === 'string' && file.endsWith('action.ps1')) controller.abort();
+      return result;
+    });
+  }) as typeof fsPromises.writeFile;
+  try {
+    await assert.rejects(
+      runPowerShell({ action: 'enumerate_windows' }, 5000, controller.signal, spawn),
+      (err: unknown) => err instanceof Error && err.message.includes('cancelled'),
+    );
+  } finally {
+    fsPromises.writeFile = realWriteFile;
+  }
+  assert.equal(spawned, 0, 'a child was spawned after the probe was aborted mid-setup');
+  assertNoProbeLeak(before, await sandboxProbeDirs());
+});
+
+// ---------------------------------------------------------------------------
+// Round 2 finding 5 (P2) — a SYNCHRONOUS spawn/execFile failure must reject the
+// caller through the closing path (cleanup awaited), never escape the detached
+// IIFE as an unhandled rejection.
+// ---------------------------------------------------------------------------
+
+test('a synchronous spawn failure rejects through the wrapper with cleanup awaited and no unhandled rejection', async () => {
+  const before = await sandboxProbeDirs();
+  let unhandled = 0;
+  const onUnhandled = (): void => { unhandled += 1; };
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    await assert.rejects(
+      runPowerShell({ action: 'enumerate_windows' }, 5000, context().signal, () => { throw new Error('spawn boom'); }),
+      (err: unknown) => err instanceof Error && err.message.includes('spawn boom'),
+      'a synchronous spawn failure must reject the returned promise',
+    );
+  } finally {
+    process.removeListener('unhandledRejection', onUnhandled);
+  }
+  assert.equal(unhandled, 0, 'the synchronous spawn error became an unhandled rejection');
+  assertNoProbeLeak(before, await sandboxProbeDirs());
+});
+
+// ---------------------------------------------------------------------------
+// Round 2 finding 6 (P3) — a cleanup failure is logged once with the directory
+// basename and the error CODE only (never the raw message or the full path),
+// and it does not change the action's result.
+// ---------------------------------------------------------------------------
+
+test('a cleanup failure logs only the basename and the error code, and keeps the result', async () => {
+  const before = await sandboxProbeDirs();
+  const logs: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: Parameters<typeof console.error>) => { logs.push(args.map(String).join(' ')); };
+  const realRm = fsPromises.rm.bind(fsPromises);
+  fsPromises.rm = ((target: Parameters<typeof fsPromises.rm>[0], options?: Parameters<typeof fsPromises.rm>[1]) => {
+    if (typeof target === 'string' && target.includes('toros-desktop-')) {
+      // EACCES-style removal failure whose message contains the full path.
+      const err = Object.assign(new Error(`EACCES: permission denied, unlink '${target}'`), { code: 'EACCES' });
+      return Promise.reject(err);
+    }
+    return realRm(target, options);
+  }) as typeof fsPromises.rm;
+  try {
+    const spawn = spawnForScript((dir) => {
+      void fsPromises.writeFile(path.join(dir, 'output.json'), '{"session_state":"active","windows":[]}', 'utf8');
+    }, 5);
+    const output = await runPowerShell({ action: 'enumerate_windows' }, 5000, context().signal, spawn);
+    assert.deepEqual(output, { session_state: 'active', windows: [] }, 'a cleanup failure changed the probe result');
+  } finally {
+    fsPromises.rm = realRm;
+    console.error = originalError;
+    // The injected removal failure left the probe temp dir behind; the real rm
+    // (restored above) removes it so the suite does not leak a directory.
+    const leaked = (await sandboxProbeDirs()).filter((name) => !before.includes(name));
+    for (const name of leaked) await fsPromises.rm(path.join(tmpdir(), name), { recursive: true, force: true });
+  }
+
+  assert.equal(logs.length, 1, `expected exactly one cleanup log, got: ${JSON.stringify(logs)}`);
+  const log = logs[0]!;
+  assert.ok(log.includes('desktop probe cleanup failed'), `unexpected log line: ${log}`);
+  assert.ok(log.includes('EACCES'), `the cleanup log omitted the error code: ${log}`);
+  assert.ok(!log.includes(tmpdir()), `the cleanup log leaked the temp directory path: ${log}`);
+  assert.ok(!log.includes('permission denied'), `the cleanup log leaked the raw error message: ${log}`);
+});
