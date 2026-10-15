@@ -264,7 +264,9 @@ test('CLI settlement selects only the newest exact running send and exposes decl
     job_id: job, objective: 'test exchange state',
     allowed_capabilities: ['exchangecli.start', 'exchangecli.send', 'exchangecli.read'],
     allowed_workspaces: ['work'], acceptance: ['done'], forbidden: [],
-    max_actions: 3, max_retries: 0, expires_at: '2999-01-01T00:00:00Z',
+    // Room for start + send + two reads, so the post-restart idempotence read
+    // (Round 2 item 2) is not refused by the action budget.
+    max_actions: 10, max_retries: 0, expires_at: '2999-01-01T00:00:00Z',
   }));
   await store.close();
   const core = createNodeCore({
@@ -305,6 +307,54 @@ test('CLI settlement selects only the newest exact running send and exposes decl
     assert.equal(sendReceipt?.outcome, 'succeeded');
     assert.ok(sendReceipt?.ended_at !== null);
     assert.deepEqual(untouched, seeded);
+
+    // Round 2 item 2 (operator decision): the receipt is still `running` right
+    // after the send — the exchange-settlement design is unchanged — but a
+    // send left open is NEVER open-ended. A settlement deadline derived from
+    // started_at + the action timeout + 30 s closes it, and after a restart the
+    // same closing runs for any running send whose deadline has already passed.
+    const deadlineStore = await openStore({ path, nodeId: 'node' });
+    const expirySeeded: Receipt = {
+      receipt_id: 'unsettled-deadline-send', job_id: job, node_id: 'node', session_id: sessionId,
+      actor: 'coordinator', capability: 'exchangecli.send', arguments_normalized: null,
+      arguments_digest: 'unsettled', decision: { allow: true, reason: 'Allowed' },
+      envelope_digest: (await deadlineStore.getJob(job))!.envelope_digest,
+      started_at: '2020-01-01T00:00:00.000Z', ended_at: null, outcome: 'running',
+      artifact_refs: [], finding_refs: [], adapter_fields: { exchange_state: 'running' },
+    };
+    await deadlineStore.putReceipt(expirySeeded);
+    await deadlineStore.close();
+
+    await core.stop();
+    const restarted = await core.start();
+    const settled = await openStore({ path, nodeId: 'node' });
+    const expired = await settled.getReceipt('unsettled-deadline-send');
+    const older = await settled.getReceipt('older-running-send');
+    const opening = await settled.getReceipt(sentReceiptId);
+    const finishedEvents = (await settled.listEvents(job)).filter((e) => e.kind === 'action.finished');
+    await settled.close();
+
+    assert.equal(expired?.outcome, 'terminated', 'the expired running send was not closed at restart');
+    assert.notEqual(expired?.ended_at, null);
+    assert.equal(expired?.adapter_fields['exchange_state'], 'unsettled_deadline');
+    assert.equal(older?.outcome, 'terminated', 'an older running send past its deadline was not closed at restart');
+    assert.equal(opening?.outcome, 'succeeded', 'the restart disturbed the already-settled send');
+    assert.ok(
+      finishedEvents.some((e) => (e.payload as Record<string, unknown>).exchange_state === 'unsettled_deadline'),
+      'the deadline close appended no action.finished with exchange_state unsettled_deadline',
+    );
+
+    // Idempotence: a settlement arriving later (read_cli) neither reopens nor
+    // rewrites a receipt the deadline already closed.
+    const readAgain = await http(restarted.port, 'read_cli', { job_id: job, session_id: sessionId, cursor: 0 });
+    assert.equal(readAgain.body.exchange_state, 'succeeded');
+    const afterRestart = await openStore({ path, nodeId: 'node' });
+    const expiredAfter = await afterRestart.getReceipt('unsettled-deadline-send');
+    const firstAfter = await afterRestart.getReceipt(sentReceiptId);
+    await afterRestart.close();
+    assert.equal(expiredAfter?.outcome, 'terminated', 'a later read_cli reopened the deadline-closed receipt');
+    assert.equal(expiredAfter?.ended_at, expired?.ended_at, 'a later read_cli rewrote the deadline-closed receipt');
+    assert.equal(firstAfter?.outcome, 'succeeded');
   } finally {
     await core.stop();
     await rm(dir, { recursive: true, force: true });
