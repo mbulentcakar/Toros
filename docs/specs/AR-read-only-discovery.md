@@ -164,11 +164,14 @@ action's `input_schema`; the output shapes are the adapter's contract with its c
 ### `desktop.inspect`  (package `@toros/adapters-desktop`)
 
 - **Input:** `{ window_id, freshness_token, depth?, control_filter?, page?, page_size? }`.
-- **Output:** `{ controls: [{ control_id (opaque), type, name?, enabled, patterns[] }],
-  truncated: bool, next_page? }`. `name` follows the same in-scope rule as `desktop.state.title`.
-  Control **values are never returned** (that would be a read of content; a future typed read is a
-  separate action). `patterns[]` reports supported UIA patterns so a future Spec V `invoke` can be
-  planned without this action performing one.
+- **Output:** `{ controls: [{ control_id (opaque), type, automation_id?, enabled, patterns[] }],
+  truncated: bool, next_page? }`. Control output is structure only; UIA `Name` is **never read or
+  emitted** for controls (AR-F2 remediation for AR-01). `automation_id` is included only when it is
+  1–128 printable ASCII characters. Control **values are never returned** (that would be a read of
+  content; a future typed read is a separate action). `patterns[]` reports supported UIA patterns so
+  a future Spec V `invoke` can be planned without this action performing one. Window titles in
+  `desktop.state` come from native window text (`GetWindowText` on the top-level handle, capped at 256
+  characters), not UIA `Name`.
 - **Failure modes, each explicit and tested:** `window_id` unknown → `E_STALE_HANDLE`;
   `freshness_token` stale or reused → `refresh_required` (return this, do **not** guess another
   window — invariant 4); window's app not in authorized scope → `denied`; window closed since
