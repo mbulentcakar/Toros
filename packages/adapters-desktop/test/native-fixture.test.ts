@@ -1,176 +1,39 @@
-import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
+import { describe, it, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
 
 import { createDesktopAdapter } from '../src/adapter.js';
-import { createPowerShellUiaProbe, DESKTOP_UIA_PS1 } from '../src/probe.js';
-import type { AdapterContext } from '@toros/contracts';
-
-function getPowershellPath(): string {
-  const systemRoot = process.env['SystemRoot'] ?? process.env['SYSTEMROOT'];
-  if (systemRoot) {
-    return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  }
-  return 'powershell.exe';
-}
-
-function fakeContext(): AdapterContext {
-  return {
-    job_id: 'native-job-1',
-    session_id: null,
-    workspace: { id: 'ws-native', root: '/tmp/ws-native' },
-    correlation_id: 'corr-native-1',
-    signal: new AbortController().signal,
-  };
-}
-
-interface FixtureInstance {
-  readonly process: ChildProcess;
-  readonly hwnd: number;
-  readonly pid: number;
-  readonly title: string;
-  readonly canaryPwd: string;
-  readonly canaryTxt: string;
-  readonly canaryLbl: string;
-}
-
-function startFixture(options: {
-  title?: string;
-  canaryPwd?: string;
-  canaryTxt?: string;
-  canaryLbl?: string;
-  extraControls?: number;
-}): Promise<FixtureInstance> {
-  return new Promise((resolve, reject) => {
-    const baseDir = import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname);
-    let fixtureScript = path.resolve(baseDir, '../../test/fixtures/canary-form.ps1');
-    if (!fs.existsSync(fixtureScript)) {
-      fixtureScript = path.resolve(baseDir, '../test/fixtures/canary-form.ps1');
-    }
-    const title = options.title ?? `TorosFixture_${randomBytes(4).toString('hex')}`;
-    const canaryPwd = options.canaryPwd ?? `CANARY_PWD_${randomBytes(8).toString('hex')}`;
-    const canaryTxt = options.canaryTxt ?? `CANARY_TXT_${randomBytes(8).toString('hex')}`;
-    const canaryLbl = options.canaryLbl ?? `CANARY_LBL_${randomBytes(8).toString('hex')}`;
-    const extraControls = options.extraControls ?? 0;
-
-    const child = spawn(
-      getPowershellPath(),
-      [
-        '-NoProfile',
-        '-Sta',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-File',
-        fixtureScript,
-        '-Title',
-        title,
-        '-Canary1',
-        canaryPwd,
-        '-Canary2',
-        canaryTxt,
-        '-Canary3',
-        canaryLbl,
-        '-ExtraControls',
-        String(extraControls),
-      ],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-
-    let resolved = false;
-    let stdoutBuffer = '';
-    let stderrBuffer = '';
-
-    const timeout = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        try { child.kill(); } catch { /* ignore */ }
-        reject(new Error(`Fixture start timed out. Stdout: ${stdoutBuffer} Stderr: ${stderrBuffer}`));
-      }
-    }, 15_000);
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdoutBuffer += chunk.toString('utf8');
-      const lines = stdoutBuffer.split(/\r?\n/);
-      for (const line of lines) {
-        if (line.startsWith('READY:')) {
-          const parts = line.split(':');
-          const hwnd = Number(parts[1]);
-          const pid = Number(parts[2]);
-          if (!resolved) {
-            resolved = true;
-            clearTimeout(timeout);
-            resolve({
-              process: child,
-              hwnd,
-              pid,
-              title,
-              canaryPwd,
-              canaryTxt,
-              canaryLbl,
-            });
-          }
-          return;
-        }
-      }
-    });
-
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderrBuffer += chunk.toString('utf8');
-    });
-
-    child.on('error', (err) => {
-      if (!resolved) {
-        resolved = true;
-        clearTimeout(timeout);
-        reject(err);
-      }
-    });
-
-    child.on('exit', (code) => {
-      if (!resolved) {
-        resolved = true;
-        clearTimeout(timeout);
-        reject(new Error(`Fixture exited prematurely with code ${code}. Stderr: ${stderrBuffer}. Stdout: ${stdoutBuffer}`));
-      }
-    });
-  });
-}
-
-function stopFixture(fixture: FixtureInstance): void {
-  try {
-    fixture.process.kill();
-  } catch {
-    // already exited
-  }
-}
+import { DESKTOP_UIA_PS1 } from '../src/probe.js';
+import {
+  fakeContext,
+  fixtureProbe,
+  selfProbe,
+  startFixture,
+  stopFixture,
+  type FixtureInstance,
+} from './native-utils.js';
 
 describe('AR-F2 Native Windows Fixture Verification', () => {
-  const probe = createPowerShellUiaProbe({ timeout_ms: 30_000 });
   const activeFixtures: FixtureInstance[] = [];
 
-  function dismissScreensaver(): void {
-    try {
-      spawnSync('taskkill', ['/F', '/IM', 'scrnsave.scr'], { stdio: 'ignore' });
-    } catch {
-      // ignore
-    }
-  }
-
   before(async () => {
-    dismissScreensaver();
-    // Acceptance 7: Verify interactive, unlocked Windows desktop before running tests.
-    // A locked or headless run is reported as an error, never as a pass or skip.
-    const state = await probe.enumerateWindows('default', { max_windows: 200 }, new AbortController().signal);
+    // Acceptance 7 / safety rules: verify an interactive, unlocked Windows
+    // desktop BEFORE any window is inspected. The probe is PID-bound to THIS
+    // test process, so the walk skips every other window before any text is
+    // read — the precondition is checked without ever inspecting the
+    // operator's real applications. A locked or non-interactive desktop fails
+    // the suite here with a clear message; it is never reported as a pass or a
+    // skip.
+    const probe = selfProbe();
+    const state = await probe.enumerateWindows(
+      'default',
+      { max_windows: 200 },
+      new AbortController().signal,
+    );
     if (state.session_state !== 'active') {
-      throw new Error(`Desktop is not in active state (state=${state.session_state}). AR-F2 requires an interactive, unlocked Windows desktop.`);
+      throw new Error(
+        `Desktop is not in active state (state=${state.session_state}). AR-F2 requires an interactive, unlocked Windows desktop.`,
+      );
     }
-  });
-
-  beforeEach(() => {
-    dismissScreensaver();
   });
 
   afterEach(() => {
@@ -187,13 +50,41 @@ describe('AR-F2 Native Windows Fixture Verification', () => {
     }
   });
 
-  it('acceptance 1: inspecting native fixture reveals none of the three canaries anywhere', async () => {
+  it('acceptance 1 + P1: fixture-bound enumeration; none of the three canaries anywhere in output', async () => {
     const fixture = await startFixture({});
     activeFixtures.push(fixture);
+    const probe = fixtureProbe(fixture);
+
+    // P1 binding at the raw layer: every enumerated window belongs to the
+    // spawned child's PID and the fixture's own reported HWND. Nothing else was
+    // enumerated, so no other process's window text was ever read.
+    const raw = await probe.enumerateWindows(
+      'default',
+      { max_windows: 200 },
+      new AbortController().signal,
+    );
+    assert.strictEqual(raw.session_state, 'active');
+    if (raw.session_state === 'active') {
+      assert.ok(raw.windows.length >= 1, 'the fixture window must be enumerated');
+      for (const w of raw.windows) {
+        assert.strictEqual(
+          w.native_handle,
+          String(fixture.hwnd),
+          `every returned window must be the fixture's own HWND, got ${w.native_handle}`,
+        );
+      }
+      const norm = (s: string): string => s.toLowerCase().replace(/\.exe$/, '');
+      assert.ok(
+        raw.windows.some((w) => norm(w.process_name) === norm(fixture.process_name)),
+        'the enumerated window must report the fixture process',
+      );
+    }
 
     const adapter = createDesktopAdapter({
       node_platform: 'win32',
-      authorized_apps: ['powershell', 'powershell.exe'],
+      // The allowlist names the fixture's own process, and because the probe is
+      // PID-bound to the fixture, no other process's window can satisfy it.
+      authorized_apps: [fixture.process_name],
       probe,
       max_windows: 200,
       max_controls: 2000,
@@ -208,10 +99,12 @@ describe('AR-F2 Native Windows Fixture Verification', () => {
     };
 
     assert.ok(stateBody.freshness_token, 'freshness_token must be present');
-    // Find the fixture window
+    // Binding at the public layer: only the fixture's window is enumerated.
+    assert.strictEqual(stateBody.windows.length, 1, 'only the fixture window may be in state');
     const targetWindow = stateBody.windows.find((w) => w.title === fixture.title);
     assert.ok(targetWindow, `Fixture window with title "${fixture.title}" must be enumerated in state`);
     assert.strictEqual(targetWindow.app_in_scope, true);
+    assert.strictEqual(targetWindow.title, fixture.title);
 
     const inspectResult = await adapter.invoke(
       'inspect',
@@ -228,24 +121,16 @@ describe('AR-F2 Native Windows Fixture Verification', () => {
     assert.ok(inspectBody.controls.length > 0, 'Must inspect at least one control');
 
     // 1. None of the three canaries appear anywhere in output
-    assert.ok(
-      !inspectResult.output.includes(fixture.canaryPwd),
-      `Masked password canary "${fixture.canaryPwd}" must NOT appear in output`,
-    );
-    assert.ok(
-      !inspectResult.output.includes(fixture.canaryTxt),
-      `Normal textbox canary "${fixture.canaryTxt}" must NOT appear in output`,
-    );
-    assert.ok(
-      !inspectResult.output.includes(fixture.canaryLbl),
-      `Off-client label canary "${fixture.canaryLbl}" must NOT appear in output`,
-    );
+    for (const canary of [fixture.canaryPwd, fixture.canaryTxt, fixture.canaryLbl]) {
+      assert.ok(!inspectResult.output.includes(canary), `canary "${canary}" must NOT appear in inspect output`);
+      assert.ok(!stateResult.output.includes(canary), `canary "${canary}" must NOT appear in state output`);
+    }
 
     // 2. None of the three canaries appear anywhere in receipt_extra
     const receiptStr = JSON.stringify(inspectResult.receipt_extra);
-    assert.ok(!receiptStr.includes(fixture.canaryPwd), 'canaryPwd must not appear in receipt_extra');
-    assert.ok(!receiptStr.includes(fixture.canaryTxt), 'canaryTxt must not appear in receipt_extra');
-    assert.ok(!receiptStr.includes(fixture.canaryLbl), 'canaryLbl must not appear in receipt_extra');
+    for (const canary of [fixture.canaryPwd, fixture.canaryTxt, fixture.canaryLbl]) {
+      assert.ok(!receiptStr.includes(canary), `canary "${canary}" must not appear in receipt_extra`);
+    }
 
     // 3. No control has a "name" property
     for (const ctrl of inspectBody.controls) {
@@ -257,10 +142,11 @@ describe('AR-F2 Native Windows Fixture Verification', () => {
   it('acceptance 4: control_filter matches by type and automation_id; canary matches nothing', async () => {
     const fixture = await startFixture({});
     activeFixtures.push(fixture);
+    const probe = fixtureProbe(fixture);
 
     const adapter = createDesktopAdapter({
       node_platform: 'win32',
-      authorized_apps: ['powershell', 'powershell.exe'],
+      authorized_apps: [fixture.process_name],
       probe,
       max_windows: 200,
       max_controls: 2000,
@@ -274,7 +160,9 @@ describe('AR-F2 Native Windows Fixture Verification', () => {
       windows: Array<{ window_id: string; title?: string }>;
     };
 
-    const targetWindow = stateBody.windows.find((w) => w.title === fixture.title)!;
+    const target = stateBody.windows.find((w) => w.title === fixture.title);
+    assert.ok(target, `Fixture window with title "${fixture.title}" must be enumerated in state`);
+    const targetWindow = target!;
 
     // Filter by canary: must match nothing
     const canaryFilterResult = await adapter.invoke(
@@ -304,56 +192,81 @@ describe('AR-F2 Native Windows Fixture Verification', () => {
     assert.ok(typeFilterBody.controls.every((c) => String(c['type']).toLowerCase().includes('pane')));
   });
 
-  it('acceptance 5: in-scope window title equals native window text truncated to 256; out-of-scope has no title', async () => {
-    const fixture = await startFixture({});
+  it('acceptance 5 + finding 3: native long title truncated to 256; out-of-scope fixture window has no title', async () => {
+    // The fixture sets an ACTUAL native window text longer than 256 characters;
+    // GetWindowText on the real handle is capped at 256 by the script.
+    const longTitle = 'W'.repeat(300);
+    const fixture = await startFixture({ title: longTitle });
     activeFixtures.push(fixture);
+    const probe = fixtureProbe(fixture);
 
-    // In-scope adapter
+    // Native evidence at the raw layer: only the fixture appears, and its real
+    // window text is exactly the first 256 characters.
+    const raw = await probe.enumerateWindows(
+      'default',
+      { max_windows: 200 },
+      new AbortController().signal,
+    );
+    assert.strictEqual(raw.session_state, 'active');
+    if (raw.session_state === 'active') {
+      const rawWin = raw.windows.find((w) => w.native_handle === String(fixture.hwnd));
+      assert.ok(rawWin, 'fixture window must appear in the PID-bound enumeration');
+      assert.strictEqual(rawWin?.title, longTitle.slice(0, 256), 'the script must cap native window text at 256');
+    }
+
+    // In-scope adapter: authorized_apps is exactly the fixture's process.
     const adapterInScope = createDesktopAdapter({
       node_platform: 'win32',
-      authorized_apps: ['powershell', 'powershell.exe'],
+      authorized_apps: [fixture.process_name],
       probe,
       max_windows: 200,
       max_controls: 2000,
       timeout_ms: 30_000,
     });
 
-    const stateInScope = JSON.parse((await adapterInScope.invoke('state', { session_scope: 'default' }, fakeContext())).output) as {
+    const stateInScope = JSON.parse(
+      (await adapterInScope.invoke('state', { session_scope: 'default' }, fakeContext())).output,
+    ) as {
       windows: Array<{ window_id: string; title?: string; app_in_scope: boolean }>;
     };
-    const winInScope = stateInScope.windows.find((w) => w.title === fixture.title);
-    assert.ok(winInScope, 'In-scope window must have its native title');
-    assert.strictEqual(winInScope.title, fixture.title);
-    assert.strictEqual(winInScope.app_in_scope, true);
+    const winInScope = stateInScope.windows.find((w) => w.title === longTitle.slice(0, 256));
+    assert.ok(winInScope, 'in-scope window must carry its native title truncated to 256');
+    assert.strictEqual(winInScope?.title, longTitle.slice(0, 256));
+    assert.strictEqual(winInScope?.app_in_scope, true);
 
-    // Out-of-scope adapter (powershell not allowlisted)
+    // Out-of-scope adapter: authorized_apps EXCLUDES the fixture's process.
     const adapterOutOfScope = createDesktopAdapter({
       node_platform: 'win32',
-      authorized_apps: ['notepad', 'notepad.exe'],
+      authorized_apps: ['definitely-not-the-fixture-app'],
       probe,
       max_windows: 200,
       max_controls: 2000,
       timeout_ms: 30_000,
     });
 
-    const stateOutOfScope = JSON.parse((await adapterOutOfScope.invoke('state', { session_scope: 'default' }, fakeContext())).output) as {
+    const stateOutOfScope = JSON.parse(
+      (await adapterOutOfScope.invoke('state', { session_scope: 'default' }, fakeContext())).output,
+    ) as {
       windows: Array<{ window_id: string; title?: string; app_in_scope: boolean }>;
     };
-    // The fixture window exists in state, but app_in_scope is false and title is omitted
-    const winOutOfScope = stateOutOfScope.windows.find((w) => w.app_in_scope === false && w.title === undefined);
-    assert.ok(winOutOfScope, 'Out-of-scope window must omit title');
+    // Finding 3: the out-of-scope assertion targets the FIXTURE's own window.
+    // The PID-bound probe enumerates only the fixture, so the single returned
+    // window IS the fixture — it must be marked out-of-scope with no title.
+    assert.strictEqual(stateOutOfScope.windows.length, 1, 'only the fixture window may be in state');
+    const winOutOfScope = stateOutOfScope.windows[0]!;
+    assert.strictEqual(winOutOfScope.app_in_scope, false);
+    assert.strictEqual(winOutOfScope.title, undefined, 'out-of-scope window must omit title');
   });
 
-  it('acceptance 6: script stops at max_controls cap and reports truncated directly from probe', async () => {
-    // Start fixture with 20 extra controls (over 20 controls total)
-    const fixture = await startFixture({ extraControls: 20 });
+  it('acceptance 6: script stops at the caps and reports truncated, with only the fixture bound', async () => {
+    // The fixture owns ONE main form plus two extra top-level forms from the
+    // SAME process, and 20 extra child controls: both caps are exceeded while
+    // every window still belongs to the single PID the probe is bound to.
+    const fixture = await startFixture({ extraControls: 20, extraWindows: 2 });
     activeFixtures.push(fixture);
-    const fixture2 = await startFixture({});
-    activeFixtures.push(fixture2);
-
+    const probe = fixtureProbe(fixture);
     const signal = new AbortController().signal;
 
-    // Direct probe call asserting what the script emitted
     const probeResult = await probe.inspectWindow(
       String(fixture.hwnd),
       { depth: 3, max_controls: 5 },
@@ -366,12 +279,30 @@ describe('AR-F2 Native Windows Fixture Verification', () => {
       assert.strictEqual(probeResult.truncated, true, 'Script must report truncated=true when stopping early');
     }
 
-    // Direct probe call asserting window enumeration cap
     const probeState = await probe.enumerateWindows('default', { max_windows: 1 }, signal);
     assert.strictEqual(probeState.session_state, 'active');
     if (probeState.session_state === 'active') {
       assert.strictEqual(probeState.windows.length, 1, 'Script must enumerate up to max_windows');
-      assert.strictEqual(probeState.truncated, true, 'Script must report truncated=true when more windows exist');
+      assert.strictEqual(probeState.truncated, true, 'Script must report truncated=true when more fixture windows exist');
     }
+  });
+
+  it('static: the script binds restrict_to_pid before any native text is read (P1 regression guard)', () => {
+    // The PID guard must sit inside the enumerate walk BEFORE GetWindowText, so
+    // skipped windows are never read. `enumerate_windows` appears before any
+    // window text read in that walk and after the TorosNative class definition.
+    const enumerateBlock = DESKTOP_UIA_PS1.slice(DESKTOP_UIA_PS1.indexOf('enumerate_windows'));
+    const pidGuard = enumerateBlock.indexOf('restrictPid');
+    const titleRead = enumerateBlock.indexOf('GetWindowText');
+    assert.ok(DESKTOP_UIA_PS1.includes('restrict_to_pid'), 'script must read restrict_to_pid from input.json');
+    assert.ok(pidGuard >= 0, 'script must contain the restrictPid guard');
+    assert.ok(titleRead >= 0, 'script must contain a GetWindowText read');
+    assert.ok(pidGuard < titleRead, 'the PID guard must run before GetWindowText');
+
+    const inspectBlock = DESKTOP_UIA_PS1.slice(DESKTOP_UIA_PS1.indexOf('inspect_window'));
+    assert.ok(inspectBlock.indexOf('restrictPid') >= 0,
+      'the PID guard must also run in the inspect window walk');
+    assert.strictEqual(inspectBlock.indexOf('GetWindowText'), -1,
+      'inspecting a window must never read native window text');
   });
 });

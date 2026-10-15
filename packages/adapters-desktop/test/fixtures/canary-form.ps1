@@ -3,7 +3,8 @@ param(
   [string]$Canary1 = "CANARY_PWD_DEFAULT",
   [string]$Canary2 = "CANARY_TXT_DEFAULT",
   [string]$Canary3 = "CANARY_LBL_DEFAULT",
-  [int]$ExtraControls = 0
+  [int]$ExtraControls = 0,
+  [int]$ExtraWindows = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -54,9 +55,27 @@ if ($ExtraControls -gt 0) {
 }
 
 $form.Add_Shown({
+  # Optional extra TOP-LEVEL windows from the SAME process, so the fixture can
+  # own more than one window for probe-side enumeration cap tests while every
+  # window still belongs to the single PID the test binds to. Shown BEFORE the
+  # READY line so that by the time the test reads our identity, the extra forms
+  # already exist; the short sleep lets UIA observe them.
+  if ($ExtraWindows -gt 0) {
+    for ($i = 0; $i -lt $ExtraWindows; $i++) {
+      $extra = New-Object System.Windows.Forms.Form
+      $extra.Text = "TorosExtraWindow_$i"
+      $extra.Size = New-Object System.Drawing.Size(200, 100)
+      $extra.StartPosition = 'Manual'
+      $extra.Location = New-Object System.Drawing.Point((600 + ($i * 30)), (150 + ($i * 30)))
+      $extra.Show()
+      [void]$extra.Handle
+    }
+    Start-Sleep -Milliseconds 400
+  }
   $hwnd = $form.Handle.ToInt64()
   $procId = [System.Diagnostics.Process]::GetCurrentProcess().Id
-  [Console]::WriteLine("READY:" + [string]$hwnd + ":" + [string]$procId)
+  $procName = [System.Diagnostics.Process]::GetCurrentProcess().ProcessName
+  [Console]::WriteLine("READY:" + [string]$hwnd + ":" + [string]$procId + ":" + $procName)
   [Console]::Out.Flush()
 })
 

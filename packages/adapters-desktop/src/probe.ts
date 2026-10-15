@@ -74,6 +74,16 @@ $req = Get-Content -LiteralPath (Join-Path $dir 'input.json') -Raw -Encoding UTF
 $outPath = Join-Path $dir 'output.json'
 function Emit($o) { $ser.Serialize($o) | Set-Content -LiteralPath $outPath -Encoding UTF8 }
 $root = [System.Windows.Automation.AutomationElement]::RootElement
+# Test-only binding: createPowerShellUiaProbe's restrict_to_pid option. When
+# set, every top-level window walk below skips windows owned by another process
+# BEFORE reading their native text or descending into them. Native fixture tests
+# use this to bind discovery to the window they themselves created, so the probe
+# never inspects the operator's real applications. It is never an action input
+# or a configuration field.
+$restrictPid = $null
+if ($null -ne $req.restrict_to_pid) {
+  try { $restrictPid = [int64]$req.restrict_to_pid } catch { $restrictPid = $null }
+}
 try {
   # Locked / secure desktop: input desktop inaccessible or not 'Default'.
   $deskName = [TorosNative]::InputDesktopName()
@@ -91,6 +101,10 @@ try {
     $c = $null; try { $c = $walker.GetFirstChild($root) } catch { }
     while ($null -ne $c) {
       if ($ws.Count -ge $maxw) { $truncated = $true; break }
+      if ($null -ne $restrictPid -and [int64]$c.Current.ProcessId -ne $restrictPid) {
+        try { $c = $walker.GetNextSibling($c) } catch { $c = $null }
+        continue
+      }
       $hwnd = [int64]$c.Current.NativeWindowHandle
       $rid = ($c.GetRuntimeId() | ForEach-Object { [string]$_ }) -join ','
       $nh = if ($hwnd -ne 0) { [string]$hwnd } else { 'rid:' + $rid }
@@ -113,6 +127,10 @@ try {
     $target = $null
     $c = $null; try { $c = $walker.GetFirstChild($root) } catch { }
     while ($null -ne $c) {
+      if ($null -ne $restrictPid -and [int64]$c.Current.ProcessId -ne $restrictPid) {
+        try { $c = $walker.GetNextSibling($c) } catch { $c = $null }
+        continue
+      }
       $hwnd = [int64]$c.Current.NativeWindowHandle
       $rid = ($c.GetRuntimeId() | ForEach-Object { [string]$_ }) -join ','
       $nh = if ($hwnd -ne 0) { [string]$hwnd } else { 'rid:' + $rid }
@@ -237,9 +255,21 @@ function runPowerShell(input: Record<string, unknown>, timeoutMs: number, signal
 /**
  * Creates the real PowerShell-backed UIA probe. Live-validated on Windows 11
  * 2026-09-16; the deferred quality items in the T3 review are addressed here.
+ *
+ * `restrict_to_pid` is TEST-ONLY. When set, the script skips every top-level
+ * window owned by another process before reading its native text or descending
+ * into it (see the `restrictPid` block in DESKTOP_UIA_PS1). Native fixture
+ * tests bind discovery to the window they themselves created with it, so the
+ * probe never reads the operator's real applications. It is reachable only
+ * through this factory option — never through an action input or a
+ * configuration field.
  */
-export function createPowerShellUiaProbe(options: { timeout_ms: number }): UiaProbe {
+export function createPowerShellUiaProbe(options: {
+  timeout_ms: number;
+  restrict_to_pid?: number | null;
+}): UiaProbe {
   const timeoutMs = options.timeout_ms;
+  const restrictPid = options.restrict_to_pid ?? null;
 
   return {
     async enumerateWindows(
@@ -262,7 +292,12 @@ export function createPowerShellUiaProbe(options: { timeout_ms: number }): UiaPr
       }
 
       const output = await runPowerShell(
-        { action: 'enumerate_windows', session_scope: sessionScope, max_windows: maxWindows },
+        {
+          action: 'enumerate_windows',
+          session_scope: sessionScope,
+          max_windows: maxWindows,
+          ...(restrictPid !== null ? { restrict_to_pid: restrictPid } : {}),
+        },
         timeoutMs,
         signal,
       );
@@ -293,7 +328,13 @@ export function createPowerShellUiaProbe(options: { timeout_ms: number }): UiaPr
       | { readonly closed: false; readonly process_name: string; readonly controls: readonly RawControl[]; readonly truncated: boolean }
     > {
       const output = await runPowerShell(
-        { action: 'inspect_window', native_handle: nativeHandle, depth: opts.depth, max_controls: opts.max_controls },
+        {
+          action: 'inspect_window',
+          native_handle: nativeHandle,
+          depth: opts.depth,
+          max_controls: opts.max_controls,
+          ...(restrictPid !== null ? { restrict_to_pid: restrictPid } : {}),
+        },
         timeoutMs,
         signal,
       );
