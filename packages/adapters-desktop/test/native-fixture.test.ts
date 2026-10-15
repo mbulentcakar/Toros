@@ -36,17 +36,17 @@ describe('AR-F2 Native Windows Fixture Verification', () => {
     }
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     while (activeFixtures.length > 0) {
       const f = activeFixtures.pop()!;
-      stopFixture(f);
+      await stopFixture(f);
     }
   });
 
-  after(() => {
+  after(async () => {
     while (activeFixtures.length > 0) {
       const f = activeFixtures.pop()!;
-      stopFixture(f);
+      await stopFixture(f);
     }
   });
 
@@ -82,8 +82,10 @@ describe('AR-F2 Native Windows Fixture Verification', () => {
 
     const adapter = createDesktopAdapter({
       node_platform: 'win32',
-      // The allowlist names the fixture's own process, and because the probe is
-      // PID-bound to the fixture, no other process's window can satisfy it.
+      // The allowlist names the fixture's own UNIQUE process (the renamed
+      // PowerShell copy startFixture placed in its temp dir, never a generic
+      // `powershell`), and because the probe is PID-bound to the fixture, no
+      // other process's window can satisfy it.
       authorized_apps: [fixture.process_name],
       probe,
       max_windows: 200,

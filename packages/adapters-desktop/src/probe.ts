@@ -80,9 +80,27 @@ $root = [System.Windows.Automation.AutomationElement]::RootElement
 # use this to bind discovery to the window they themselves created, so the probe
 # never inspects the operator's real applications. It is never an action input
 # or a configuration field.
+#
+# The restriction CANNOT fail open: a present restrict_to_pid must parse as a
+# positive integer, and any other value (empty, null, boolean, float, negative,
+# zero, non-numeric) emits an error and enumerates nothing. It never means "no
+# restriction". Only the ABSENCE of the key means unrestricted.
 $restrictPid = $null
-if ($null -ne $req.restrict_to_pid) {
-  try { $restrictPid = [int64]$req.restrict_to_pid } catch { $restrictPid = $null }
+if ($null -ne $req.PSObject.Properties['restrict_to_pid']) {
+  $restrictOk = $false
+  $restrictParsed = 0L
+  $restrictRaw = $req.restrict_to_pid
+  if ($null -ne $restrictRaw) {
+    $restrictText = [string]$restrictRaw
+    if ($restrictText -match '^\\d+$') {
+      $restrictOk = [long]::TryParse($restrictText, [ref]$restrictParsed)
+    }
+  }
+  if (-not $restrictOk -or $restrictParsed -le 0) {
+    Emit @{ session_state='error'; error='restrict_to_pid must parse as a positive integer; refusing to enumerate' }
+    return
+  }
+  $restrictPid = $restrictParsed
 }
 try {
   # Locked / secure desktop: input desktop inaccessible or not 'Default'.
@@ -263,6 +281,12 @@ function runPowerShell(input: Record<string, unknown>, timeoutMs: number, signal
  * probe never reads the operator's real applications. It is reachable only
  * through this factory option — never through an action input or a
  * configuration field.
+ *
+ * The restriction cannot fail open: a present `restrict_to_pid` that is not a
+ * positive safe integer throws here, BEFORE PowerShell starts, so no malformed
+ * value can be serialized into `input.json` and silently disable the guard in
+ * the script. Absent or `null` means "no restriction" (the normal production
+ * path).
  */
 export function createPowerShellUiaProbe(options: {
   timeout_ms: number;
@@ -270,6 +294,15 @@ export function createPowerShellUiaProbe(options: {
 }): UiaProbe {
   const timeoutMs = options.timeout_ms;
   const restrictPid = options.restrict_to_pid ?? null;
+
+  // Fail closed at the factory boundary: absent/null is "no restriction", but
+  // any other present value must be a positive safe integer. NaN, Infinity,
+  // floats, strings, booleans, zero and negatives are all rejected here.
+  if (restrictPid !== null && (!Number.isSafeInteger(restrictPid) || restrictPid <= 0)) {
+    throw new Error(
+      `restrict_to_pid must be a positive safe integer when provided, got ${String(restrictPid)}`,
+    );
+  }
 
   return {
     async enumerateWindows(

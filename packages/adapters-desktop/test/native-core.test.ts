@@ -39,10 +39,10 @@ describe('AR-F2 Native Core Integration (finding 2)', () => {
     }
   });
 
-  after(() => {
+  after(async () => {
     while (activeFixtures.length > 0) {
       const f = activeFixtures.pop()!;
-      stopFixture(f);
+      await stopFixture(f);
     }
   });
 
@@ -75,6 +75,8 @@ describe('AR-F2 Native Core Integration (finding 2)', () => {
 
     const adapter = createDesktopAdapter({
       node_platform: 'win32',
+      // Only the fixture's unique process name (the renamed PowerShell copy in
+      // the fixture's own temp dir) is authorized — never a generic `powershell`.
       authorized_apps: [fixture.process_name],
       probe,
       max_windows: 200,
