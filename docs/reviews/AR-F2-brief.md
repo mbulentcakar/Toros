@@ -145,3 +145,33 @@ round may be too. Fix the three findings on the PR, under these rules.
 **Reporting:** state pass, fail and skip counts. **Also state** that the real-CLI suites
 (`real-gemini`, `real-grok`) are disabled unless `TOROS_REAL_TESTS=1`, and are therefore not
 covered.
+
+## Round 3 — after the round-2 review (2026-10-15)
+
+Codex refused to run the native tests: the process binding could fail open. Fix both findings
+(see the review on PR mbulentcakar/Toros#7).
+
+1. **The restriction cannot fail open, and the process id comes from the spawned child (P1).**
+   - **In the script:** when `restrict_to_pid` is present in `input.json`, it must parse as a
+     positive integer. If it does not, the script emits an error and **enumerates nothing**. An
+     unparseable value never means "no restriction".
+   - **In `createPowerShellUiaProbe`:** reject (throw) a `restrict_to_pid` that is not a positive
+     safe integer, before PowerShell starts.
+   - **In the test helpers:** the fixture id is `child.pid` of the process the test spawned. The
+     READY line's reported id must **equal** `child.pid`, or the helper fails before any probe
+     runs. A missing or non-integer `child.pid` also fails.
+   - **Tests:**
+     - static or unit checks that the script and factory refuse malformed values;
+     - the helper rejects a mismatched READY id.
+
+     These run without a window.
+2. **No generic process name in authorization (P2).**
+   - **Fixture host:** the fixture runs from a **renamed copy of the Windows PowerShell
+     executable**, placed in a fresh temp directory with a unique name (for example
+     `toros-fixture-<random>.exe`), so its process name is unique to the test run.
+   - **Authorization:** `authorized_apps` contains only that unique name.
+   - **Cleanup:** the copy and its directory are removed afterwards. The test kills only the
+     process it started.
+
+The implementer must **not** run native tests. The independent reviewer reads the code, confirms
+that the binding cannot fail open, and only then runs the native suites.

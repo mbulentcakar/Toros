@@ -173,3 +173,32 @@ Codex: findings 1 and 3–6 are fixed. Two items remain.
 2. **Scope (P3), a brief correction.** `packages/node-core/src/core.ts` **is in scope**, limited to
    the minimal startup hook that keeps the pipeline reference and calls reconciliation at start.
    The round-2 brief should have said so.
+
+## Round 4 — after the round-3 review (2026-10-15)
+
+Codex confirmed that the one-shot receipt-write recovery works. Fix the four remaining findings
+(see the review on PR mbulentcakar/Toros#6).
+
+1. **The whole closure attempt is caught (P2).** `closeUnsettledCliReceipt` catches **every** step,
+   including `store.getReceipt`. Any failure schedules the bounded retry. Nothing a `void`-ed
+   caller awaits can reject. Regression: a one-shot `getReceipt` rejection on the deadline, retry
+   and reconciliation paths → no unhandled rejection, and the receipt closes on retry.
+2. **The finished event is recovered (P2).** Closure has two durable steps: the terminal receipt
+   write, then `action.finished`. A retry checks **both**:
+   - receipt still running → write the receipt, then append the event;
+   - receipt closed but no `action.finished` for it → append the event only, without rewriting
+     the receipt;
+   - both present → stop.
+
+   There must never be duplicate events. Apply the same rule to the `read_cli` settlement path:
+   its deadline is cleared only after the receipt **and** its event are durable. Regression: a
+   one-shot `action.finished` append failure after a successful receipt write → the event is
+   appended on retry, exactly once.
+3. **The read-settlement regression must actually fire (P2).** Fix the fixture manifest so the
+   read result has no undeclared fields. Assert that the injected `putReceipt` failure fired
+   exactly once, and assert the expected error code.
+4. **No process-wide timing override (P3).** Remove `_testing_shortenDelays`. Pass the timing
+   (grace and retry schedule) as an **instance-scoped, validated** option of the pipeline (finite,
+   non-negative, non-empty schedule), defaulting to the immutable production values. Tests that
+   need short delays construct their own pipeline or Core with that option. Add one test that
+   asserts the production default schedule is 1 s, 5 s, 30 s, then 60 s.
