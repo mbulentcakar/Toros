@@ -152,3 +152,24 @@ deadline**.
    the error **code** only (for example `EACCES`), never the raw message or path.
 
 Allowed paths are unchanged, plus `packages/node-core/test/acceptance.test.ts` for item 2 only.
+
+## Round 3 — after the round-2 review (2026-10-15)
+
+Codex: findings 1 and 3–6 are fixed. Two items remain.
+
+1. **The guaranteed close must survive a failed write (P2).** Keep a `send_cli` receipt's deadline
+   armed until its closure is **durably recorded**.
+   - **`read_cli` settlement:** `settleCliExchange` clears the deadline timer only **after** the
+     terminal receipt write succeeds. If the write fails, the timer stays armed.
+   - **The deadline callback:** if its closing write fails, it re-arms a bounded retry: 1 s, then
+     5 s, then 30 s, then every 60 s. It never drops the receipt. Retries stop the moment the
+     receipt is closed by any path.
+   - **Startup reconciliation:** a failed closure for one receipt does not stop the scan. That
+     receipt gets the same retry schedule, and the scan continues with the rest.
+   - **Tests:** one-shot `putReceipt` failure in the `read_cli` settlement path, then storage
+     recovers → the send still closes by its deadline without another read or a restart. One-shot
+     failure in the deadline closure → closes on retry. Reconciliation with one failing receipt →
+     the others still close, and the failing one closes on retry.
+2. **Scope (P3), a brief correction.** `packages/node-core/src/core.ts` **is in scope**, limited to
+   the minimal startup hook that keeps the pipeline reference and calls reconciliation at start.
+   The round-2 brief should have said so.
