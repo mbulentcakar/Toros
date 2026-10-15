@@ -101,3 +101,47 @@ npm test
 - Never interpolate anything into the script source; keep the JSON parameter-file pattern.
 - One PR into `main`, titled `fix(adapters-desktop): AR-F2 no UIA names from discovery`. Do not
   merge it.
+
+## Round 2 — changes after review (2026-10-15)
+
+Codex reviewed PR mbulentcakar/Toros#7 and requested changes, all in the native fixture test.
+The no-`Name` implementation itself passed. Round 1 was written by a different implementer; this
+round may be too. Fix the three findings on the PR, under these rules.
+
+**Safety rules for every native test (non-negotiable):**
+- **Never enumerate, read or touch any window or process the test did not create.** No
+  desktop-wide enumeration whose results include other processes' window text, and no
+  allowlisting of a generic process name such as `powershell`.
+- **Never terminate, signal or alter a process the test did not start.** Remove the
+  `taskkill /F /IM scrnsave.scr` call entirely.
+- **A locked or non-interactive desktop fails the test** with a clear message naming the
+  precondition. It is neither skipped nor "fixed" by touching other processes.
+
+1. **Bind to the fixture before any text is read (P1).** Add a **test-only** restriction to the
+   probe: an option on `createPowerShellUiaProbe`, for example `restrict_to_pid`, passed into the
+   script's `input.json`.
+   - **In the script:** when the option is set, the script skips every top-level window whose
+     owning process id differs, **before** reading its native text or descending into it.
+   - **Who can set it:** it is reachable only through that factory option. It is never an action
+     input and never a configuration field. Its doc comment says it exists for tests.
+   - **The fixture test:** spawns the fixture, takes its PID from the spawned child (and the HWND
+     the fixture reports), passes the PID to the factory, and asserts that every returned window
+     belongs to that PID and HWND.
+   - **Authorization in the test:** the test's `authorized_apps` entry must match only the
+     fixture.
+   - **Scope note:** this edits the script and the probe factory, both F2 territory. Leave
+     `runPowerShell` alone.
+2. **Receipts and events through real Core (P2).** Add a native integration test:
+   - construct a real Core with the desktop adapter, using the fixture-bound probe, and a
+     temporary store;
+   - run `desktop.state` and `desktop.inspect` through the action pipeline;
+   - assert that none of the three canaries appears in the action output, any persisted
+     receipt, or any event row.
+3. **Bound the title assertions to the fixture (P2).** The out-of-scope title assertion must
+   target the fixture's own window, run under an `authorized_apps` that excludes it. Add a native
+   check where the fixture sets its own window title to more than 256 characters; the title
+   returned in scope is exactly the first 256.
+
+**Reporting:** state pass, fail and skip counts. **Also state** that the real-CLI suites
+(`real-gemini`, `real-grok`) are disabled unless `TOROS_REAL_TESTS=1`, and are therefore not
+covered.
