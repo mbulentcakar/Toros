@@ -202,3 +202,12 @@ Codex confirmed that the one-shot receipt-write recovery works. Fix the four rem
    non-negative, non-empty schedule), defaulting to the immutable production values. Tests that
    need short delays construct their own pipeline or Core with that option. Add one test that
    asserts the production default schedule is 1 s, 5 s, 30 s, then 60 s.
+
+## Round 5 — after the round-4 review (2026-10-15)
+
+1. **Restart also recovers a missing finished event (P2).** Startup reconciliation must consider
+   `send` receipts that are **closed but have no `action.finished` event**, as well as running
+   ones. For those, it uses the existing event-only recovery path: no receipt rewrite and no
+   duplicate events, with the same retry schedule on failure. Add restart regressions for both
+   the deadline-closure path and the `read_cli` settlement path, where the terminal receipt
+   landed but the event append failed and the process restarted before the retry.

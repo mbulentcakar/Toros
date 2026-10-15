@@ -175,3 +175,18 @@ Codex refused to run the native tests: the process binding could fail open. Fix 
 
 The implementer must **not** run native tests. The independent reviewer reads the code, confirms
 that the binding cannot fail open, and only then runs the native suites.
+
+## Round 4 — after the round-3 review (2026-10-15)
+
+1. **An explicit `null` or `undefined` must not turn the restriction off (P1).** Only the
+   **absence** of the `restrict_to_pid` property selects the unrestricted production path. Test
+   for absence with `'restrict_to_pid' in options` (or `Object.hasOwn`), not `??`. A present
+   value that is `null`, `undefined`, or anything other than a positive safe integer makes the
+   factory **throw** before PowerShell starts. Update `restrict-pid.test.ts`: explicit `null` and
+   explicit `undefined` → throw. Absence → allowed.
+2. **The precondition check is bound to the fixture too (P2).** Remove `selfProbe()` and the
+   runner-pid probe. Each native suite's locked-desktop check runs **after** the fixture starts,
+   using `fixtureProbe(fixture)`. A locked desktop still fails the suite with the same clear
+   message, then cleans up the fixture it started.
+
+The implementer still must not run native tests. The reviewer gates them.
