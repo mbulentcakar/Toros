@@ -654,29 +654,46 @@ export function createActionPipeline(deps: {
    * in-process deadline would have closed it. Receipts whose deadline has not
    * passed yet get their in-memory timer re-armed with the remaining time, so
    * the guaranteed close still fires without another restart.
+   *
+   * Also handles the case where a `send` receipt is already closed but its
+   * `action.finished` event is missing (the event append failed and the process
+   * restarted before the bounded retry). The event-only recovery path appends
+   * exactly one finished event without rewriting the receipt or duplicating the
+   * event, with the same retry schedule on failure.
    */
   async function reconcileCliSettlements(): Promise<void> {
     const store = deps.store();
     const adaptersById = new Map(deps.adapters.map((adapter) => [adapter.manifest.id, adapter]));
     for (const job of await store.listJobs()) {
       for (const receipt of await store.listReceipts(job.job_id)) {
-        if (receipt.outcome !== 'running' || !receipt.capability.endsWith('.send')) continue;
-        const adapter = adaptersById.get(receipt.capability.slice(0, -'.send'.length));
-        if (adapter === undefined) continue;
-        const sendAction = adapter.manifest.actions.find((action) => action.id === 'send');
-        const timeoutMs = sendAction?.timeout_ms ?? adapter.manifest.default_timeout_ms;
-        const deadlineMs = Date.parse(receipt.started_at) + timeoutMs + settlement.graceMs;
-        if (Date.now() >= deadlineMs) {
-          // Fire-and-forget: a write failure arms the retry schedule; a
-          // failure for one receipt must not stop the scan. The retry
-          // catches its own errors and never produces an unhandled rejection.
-          void closeUnsettledCliReceipt(receipt.receipt_id, store);
+        if (!receipt.capability.endsWith('.send')) continue;
+        if (receipt.outcome === 'running') {
+          const adapter = adaptersById.get(receipt.capability.slice(0, -'.send'.length));
+          if (adapter === undefined) continue;
+          const sendAction = adapter.manifest.actions.find((action) => action.id === 'send');
+          const timeoutMs = sendAction?.timeout_ms ?? adapter.manifest.default_timeout_ms;
+          const deadlineMs = Date.parse(receipt.started_at) + timeoutMs + settlement.graceMs;
+          if (Date.now() >= deadlineMs) {
+            // Fire-and-forget: a write failure arms the retry schedule; a
+            // failure for one receipt must not stop the scan. The retry
+            // catches its own errors and never produces an unhandled rejection.
+            void closeUnsettledCliReceipt(receipt.receipt_id, store);
+          } else {
+            // The deadline has not passed: re-arm the in-memory timer so the
+            // receipt does not stay open until the next restart. Calling
+            // armCliSettlementDeadline with the timeout computed above sets the
+            // delay to exactly the remaining wall-clock time.
+            armCliSettlementDeadline(store, receipt, timeoutMs);
+          }
         } else {
-          // The deadline has not passed: re-arm the in-memory timer so the
-          // receipt does not stay open until the next restart. Calling
-          // armCliSettlementDeadline with the timeout computed above sets the
-          // delay to exactly the remaining wall-clock time.
-          armCliSettlementDeadline(store, receipt, timeoutMs);
+          // Receipt is already closed but may be missing its action.finished
+          // event (the event append failed and the process restarted before
+          // the retry). Use the existing event-only recovery path in
+          // closeUnsettledCliReceipt: it sees a closed receipt with no
+          // finished event and appends exactly one, never rewriting the
+          // receipt or duplicating the event. On failure the same bounded
+          // retry schedule applies.
+          void closeUnsettledCliReceipt(receipt.receipt_id, store);
         }
       }
     }

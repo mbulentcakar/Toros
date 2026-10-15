@@ -1505,3 +1505,183 @@ test('Round4: invalid settlement timing options are rejected when the Core is co
     'a negative retry cap was accepted',
   );
 });
+
+// ---------------------------------------------------------------------------
+// Round 5 item 1 — restart reconciliation also recovers closed send receipts
+// missing their action.finished event, event-only, no rewrite, no duplicates,
+// same retry schedule.
+// ---------------------------------------------------------------------------
+
+/**
+ * Seed a closed (non-running) `settletest.send` receipt without an
+ * `action.finished` event, modeling the state after a process restart where
+ * the terminal receipt write succeeded but the event append failed before the
+ * retry could fire.
+ */
+async function seedClosedSendWithoutEvent(
+  path: string, job: string, receiptId: string, outcome: Receipt['outcome'],
+  adapterFields: Record<string, unknown> = {},
+): Promise<string> {
+  const store = await openStore({ path, nodeId: 'node' });
+  const envelopeDigest = (await store.getJob(job))!.envelope_digest;
+  const endedAt = new Date().toISOString();
+  await store.putReceipt({
+    receipt_id: receiptId, job_id: job, node_id: 'node',
+    session_id: 'r5-restart-session', actor: 'coordinator',
+    capability: 'settletest.send',
+    arguments_normalized: null, arguments_digest: receiptId,
+    decision: { allow: true, reason: 'Allowed' },
+    envelope_digest: envelopeDigest,
+    started_at: new Date(Date.now() - 120_000).toISOString(),
+    ended_at: endedAt,
+    outcome,
+    artifact_refs: [], finding_refs: [],
+    adapter_fields: { exchange_state: 'running', ...adapterFields },
+  } satisfies Receipt);
+  await store.close();
+  return endedAt;
+}
+
+test('Round5: restart reconciliation recovers a missing finished event for a deadline-closed send (terminated)', async (t) => {
+  const settleTiming: SettlementTimingOptions = { settle_retry_delays: [100, 500, 2000], settle_retry_max_delay: 5000 };
+  const dir = await mkdtemp(join(tmpdir(), 'toros-f5-r1-deadline-'));
+  const path = join(dir, 'node.sqlite');
+  const job = 'a0000005-0000-4000-8000-000000000001';
+
+  await createSettleSendJob(path, job, 'r5 deadline restart recovery');
+  const core = createTestCore({
+    node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
+    port: 0, token, adapters: [sendOnlySettleAdapter()], observer: null, approval_required: [],
+    pipeline_settlement: settleTiming,
+  });
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+  await core.start();
+
+  // Seed a terminated (deadline-closed) send receipt with no finished event,
+  // modeling the state after a restart where the terminal write landed but the
+  // event append failed before the retry.
+  const sendReceiptId = 'r5-deadline-restart-send';
+  const endedAt = await seedClosedSendWithoutEvent(path, job, sendReceiptId, 'terminated',
+    { exchange_state: 'unsettled_deadline' });
+
+  const unhandled = collectUnhandledRejections(t);
+
+  // Inject one-shot appendEvent failure for the recovery attempt.
+  const storeObj = coreStore(core);
+  const realAppendEvent = storeObj.appendEvent.bind(storeObj);
+  let appendFailed = false;
+  storeObj.appendEvent = (input: { kind: string; payload: unknown }): Promise<unknown> => {
+    const payload = input.payload as Record<string, unknown>;
+    if (!appendFailed && input.kind === 'action.finished' && payload.receipt_id === sendReceiptId) {
+      appendFailed = true;
+      return Promise.reject(new Error('one-shot restart recovery append failure'));
+    }
+    return realAppendEvent(input);
+  };
+
+  // Trigger reconciliation — it should see the closed receipt missing its event
+  // and try to recover it. The first attempt fails (injected fault) and
+  // schedules a retry.
+  const pipeline = (core as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
+  await pipeline.reconcileCliSettlements();
+  await eventually(() => appendFailed, 2_000);
+  assert.equal(appendFailed, true, 'the injected restart recovery append failure never fired');
+
+  // The receipt must still be terminated (unchanged) — no rewrite.
+  const duringStore = await openStore({ path, nodeId: 'node' });
+  const during = await duringStore.getReceipt(sendReceiptId);
+  await duringStore.close();
+  assert.equal(during?.outcome, 'terminated', 'the restart recovery rewrote the closed receipt');
+  assert.equal(during?.ended_at, endedAt, 'the restart recovery changed the receipt timestamp');
+
+  // Restore appendEvent — storage recovers.
+  storeObj.appendEvent = realAppendEvent;
+
+  // Wait for the retry (100 ms + margin) to recover the event.
+  await new Promise((r) => setTimeout(r, 300));
+
+  const afterStore = await openStore({ path, nodeId: 'node' });
+  const after = await afterStore.getReceipt(sendReceiptId);
+  const finishedEvents = (await afterStore.listEvents(job)).filter(
+    (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
+  );
+  await afterStore.close();
+
+  assert.equal(after?.outcome, 'terminated', 'the recovered event rewrote the closed receipt');
+  assert.equal(after?.ended_at, endedAt, 'the recovered event changed the receipt timestamp');
+  assert.equal(finishedEvents.length, 1, 'the finished event was not recovered exactly once');
+  assert.equal((finishedEvents[0]?.payload as Record<string, unknown>).exchange_state, 'unsettled_deadline');
+  assert.equal((finishedEvents[0]?.payload as Record<string, unknown>).outcome, 'terminated');
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(unhandled.list, [], 'an unhandled rejection escaped the restart recovery');
+});
+
+test('Round5: restart reconciliation recovers a missing finished event for a read_cli-settled send (succeeded)', async (t) => {
+  const settleTiming: SettlementTimingOptions = { settle_retry_delays: [100, 500, 2000], settle_retry_max_delay: 5000 };
+  const dir = await mkdtemp(join(tmpdir(), 'toros-f5-r1-read-'));
+  const path = join(dir, 'node.sqlite');
+  const job = 'a0000005-0000-4000-8000-000000000002';
+
+  await createSettleSendJob(path, job, 'r5 read settlement restart recovery');
+  const core = createTestCore({
+    node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
+    port: 0, token, adapters: [sendOnlySettleAdapter()], observer: null, approval_required: [],
+    pipeline_settlement: settleTiming,
+  });
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+  await core.start();
+
+  // Seed a succeeded (read_cli-settled) send receipt with no finished event.
+  const sendReceiptId = 'r5-read-restart-send';
+  const endedAt = await seedClosedSendWithoutEvent(path, job, sendReceiptId, 'succeeded',
+    { exchange_state: 'succeeded', exchange_error: null });
+
+  const unhandled = collectUnhandledRejections(t);
+
+  // Inject one-shot appendEvent failure for the recovery attempt.
+  const storeObj = coreStore(core);
+  const realAppendEvent = storeObj.appendEvent.bind(storeObj);
+  let appendFailed = false;
+  storeObj.appendEvent = (input: { kind: string; payload: unknown }): Promise<unknown> => {
+    const payload = input.payload as Record<string, unknown>;
+    if (!appendFailed && input.kind === 'action.finished' && payload.receipt_id === sendReceiptId) {
+      appendFailed = true;
+      return Promise.reject(new Error('one-shot restart recovery append failure'));
+    }
+    return realAppendEvent(input);
+  };
+
+  // Trigger reconciliation.
+  const pipeline = (core as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
+  await pipeline.reconcileCliSettlements();
+  await eventually(() => appendFailed, 2_000);
+  assert.equal(appendFailed, true, 'the injected restart recovery append failure never fired');
+
+  // The receipt must still be succeeded (unchanged) — no rewrite.
+  const duringStore = await openStore({ path, nodeId: 'node' });
+  const during = await duringStore.getReceipt(sendReceiptId);
+  await duringStore.close();
+  assert.equal(during?.outcome, 'succeeded', 'the restart recovery rewrote the closed receipt');
+  assert.equal(during?.ended_at, endedAt, 'the restart recovery changed the receipt timestamp');
+
+  // Restore appendEvent — storage recovers.
+  storeObj.appendEvent = realAppendEvent;
+
+  // Wait for the retry (100 ms + margin).
+  await new Promise((r) => setTimeout(r, 300));
+
+  const afterStore = await openStore({ path, nodeId: 'node' });
+  const after = await afterStore.getReceipt(sendReceiptId);
+  const finishedEvents = (await afterStore.listEvents(job)).filter(
+    (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
+  );
+  await afterStore.close();
+
+  assert.equal(after?.outcome, 'succeeded', 'the recovered event rewrote the closed receipt');
+  assert.equal(after?.ended_at, endedAt, 'the recovered event changed the receipt timestamp');
+  assert.equal(finishedEvents.length, 1, 'the finished event was not recovered exactly once');
+  assert.equal((finishedEvents[0]?.payload as Record<string, unknown>).exchange_state, 'succeeded');
+  assert.equal((finishedEvents[0]?.payload as Record<string, unknown>).outcome, 'succeeded');
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(unhandled.list, [], 'an unhandled rejection escaped the restart recovery');
+});
