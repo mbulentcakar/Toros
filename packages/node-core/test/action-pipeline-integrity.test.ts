@@ -18,7 +18,15 @@ import {
 import { sealEnvelope } from '@toros/envelope';
 import { openStore } from '@toros/store';
 import { createNodeCore, type NodeCore } from '../src/index.js';
-import { _testing_shortenDelays } from '../src/action-pipeline.js';
+import { PRODUCTION_SETTLEMENT_TIMING, type SettlementTimingOptions } from '../src/action-pipeline.js';
+
+/**
+ * `pipeline_settlement` is an internal instance-scoped seam: NodeCoreOptions
+ * does not declare it (production config can never set it), and a test that
+ * needs short settlement timings constructs its OWN Core with it. This alias
+ * types that seam without touching the public options interface.
+ */
+type CoreOptions = Parameters<typeof createNodeCore>[0] & { readonly pipeline_settlement?: SettlementTimingOptions };
 
 // ---------------------------------------------------------------------------
 // AR-F4 acceptance: the action pipeline never spends budget on an action that
@@ -260,6 +268,112 @@ async function readReceipt(path: string, job: string): Promise<{ outcome: string
 }
 
 // ---------------------------------------------------------------------------
+// Round 4 helpers — the settlement retries that follow share the same job,
+// receipt and timer bookkeeping, so the fixtures are factored out.
+// ---------------------------------------------------------------------------
+
+/** The store surface Round 4 fault injection needs, narrowed like the R3 tests. */
+interface StoreShim {
+  getReceipt: (id: string) => Promise<unknown>;
+  putReceipt: (r: unknown) => Promise<unknown>;
+  appendEvent: (input: { kind: string; payload: unknown }) => Promise<unknown>;
+}
+function coreStore(core: NodeCore): StoreShim {
+  return (core as unknown as { store: StoreShim }).store;
+}
+
+/** The send-only settle manifest the injected-close tests share. */
+function sendOnlySettleManifest(): AdapterManifest {
+  return {
+    id: 'settletest', version: '1.0.0', platforms: [process.platform as NodePlatform],
+    actions: [
+      { id: 'send', summary: 'send', input_schema: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'], additionalProperties: false }, path_fields: [], mutates: true, always_requires_approval: false },
+    ],
+    required_permissions: [], allowed_resources: [], default_timeout_ms: 1000,
+    cancellation: 'kill', receipt_fields: ['exchange_state'],
+  };
+}
+
+function sendOnlySettleAdapter(): Adapter {
+  return {
+    manifest: sendOnlySettleManifest(),
+    async init() {},
+    async invoke(): Promise<ActionResult> {
+      return { output: '', truncated: false, artifacts: [], receipt_extra: {} };
+    },
+    async dispose() {},
+  };
+}
+
+/** Create a job whose allowed set covers only `settletest.send`. */
+async function createSettleSendJob(path: string, job: string, objective: string): Promise<void> {
+  const store = await openStore({ path, nodeId: 'node' });
+  await store.createJob(sealEnvelope({
+    job_id: job, objective, allowed_capabilities: ['settletest.send'],
+    allowed_workspaces: ['work'], acceptance: ['done'], forbidden: [],
+    max_actions: 10, max_retries: 0, expires_at: '2999-01-01T00:00:00Z',
+  }));
+  await store.close();
+}
+
+/** Seed one running `settletest.send` receipt, by default long past its deadline. */
+async function seedRunningSend(path: string, job: string, receiptId: string, opts: { readonly session_id: string; readonly started_at?: string }): Promise<void> {
+  const store = await openStore({ path, nodeId: 'node' });
+  const envelopeDigest = (await store.getJob(job))!.envelope_digest;
+  await store.putReceipt({
+    receipt_id: receiptId, job_id: job, node_id: 'node', session_id: opts.session_id,
+    actor: 'coordinator', capability: 'settletest.send',
+    arguments_normalized: null, arguments_digest: receiptId,
+    decision: { allow: true, reason: 'Allowed' }, envelope_digest: envelopeDigest,
+    started_at: opts.started_at ?? new Date(Date.now() - 120_000).toISOString(),
+    ended_at: null, outcome: 'running', artifact_refs: [], finding_refs: [],
+    adapter_fields: { exchange_state: 'running' },
+  } satisfies Receipt);
+  await store.close();
+}
+
+/** Watch process-wide unhandled rejections for the duration of a test. */
+function collectUnhandledRejections(t: { after(fn: () => void): void }): { readonly list: unknown[] } {
+  const list: unknown[] = [];
+  const handler = (reason: unknown): void => { list.push(reason); };
+  process.on('unhandledRejection', handler);
+  t.after(() => process.removeListener('unhandledRejection', handler));
+  return { list };
+}
+
+/**
+ * Construct a Core through the NodeCoreOptions-typed factory. `CoreOptions`
+ * widens the public options with the instance-scoped `pipeline_settlement`
+ * seam, so passing it through this helper avoids an excess-property error
+ * while keeping the seam off the public options type.
+ */
+function createTestCore(options: CoreOptions): NodeCore {
+  return createNodeCore(options);
+}
+
+/**
+ * Poll `probe` until it returns true or `timeoutMs` elapses. The settlement
+ * close runs fire-and-forget (the deadline timer and reconciliation both
+ * `void` it), so a test must poll rather than assume the attempt has landed by
+ * the time an awaited call returns.
+ */
+async function eventually(probe: () => Promise<boolean> | boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await probe()) return;
+    if (Date.now() >= deadline) throw new Error(`condition not met within ${timeoutMs}ms`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+async function receiptOutcome(path: string, receiptId: string): Promise<string | null> {
+  const store = await openStore({ path, nodeId: 'node' });
+  const receipt = await store.getReceipt(receiptId);
+  await store.close();
+  return receipt?.outcome ?? null;
+}
+
+// ---------------------------------------------------------------------------
 // Round 2 finding 1 (P1) — the Core timeout must WIN the race even when the
 // adapter settles its own pending promise from its abort listener. Abort
 // listeners run synchronously, so without deciding the timeout first, an
@@ -462,10 +576,11 @@ test('a restart re-arms the settlement deadline for an unexpired running send an
     max_actions: 10, max_retries: 0, expires_at: '2999-01-01T00:00:00Z',
   }));
 
-  // Seed a running send receipt whose deadline (started_at + timeout_ms +
-  // CLI_SETTLE_GRACE_MS) is ~200 ms in the future, so the re-armed timer has a
-  // small window to fire during the test. The adapter declares no per-action
-  // timeout, so it inherits default_timeout_ms = 1000 from the manifest.
+  // Seed a running send receipt whose deadline (started_at + timeout_ms + the
+  // production 30 s settle grace) is ~200 ms in the future, so the re-armed
+  // timer has a small window to fire during the test. The adapter declares no
+  // per-action timeout, so it inherits default_timeout_ms = 1000 from the
+  // manifest.
   const timeoutMs = 1000;
   const startedAt = new Date(Date.now() + 200 - timeoutMs - 30_000).toISOString();
   const seeded: Receipt = {
@@ -523,13 +638,21 @@ const settleSessionManifest: AdapterManifest = {
     { id: 'read', summary: 'read', input_schema: { type: 'object', properties: { cursor: { type: 'integer' } }, required: ['cursor'], additionalProperties: false }, path_fields: [], mutates: false, always_requires_approval: false },
   ] as const,
   required_permissions: [], allowed_resources: [], default_timeout_ms: 80,
-  cancellation: 'kill', receipt_fields: ['exchange_state', 'exchange_error'],
+  // `bytes_read` is part of the read result (read_cli returns it), so it must
+  // be declared: declaredAdapterFields rejects any receipt_extra key the
+  // manifest does not list (Round 4 item 3).
+  cancellation: 'kill', receipt_fields: ['exchange_state', 'exchange_error', 'bytes_read'],
 };
 
 test('Round3: a failed putReceipt in read_cli settlement keeps the deadline timer armed and the receipt still closes', async (t) => {
-  // Use a very short settle grace so the deadline fires within the test window
-  // without waiting 30 s. The timeout is 80 ms + grace 200 ms = ~280 ms.
-  _testing_shortenDelays(200, [100, 500, 2000], 5000);
+  // Instance-scoped settlement timing (Round 4 item 4): this Core alone runs a
+  // short grace so the deadline fires within the test window — the timeout is
+  // 80 ms + grace 200 ms = ~280 ms.
+  const settleTiming: SettlementTimingOptions = {
+    cli_settle_grace_ms: 200,
+    settle_retry_delays: [100, 500, 2000],
+    settle_retry_max_delay: 5000,
+  };
 
   const adapter: SessionAdapter = {
     manifest: settleSessionManifest,
@@ -560,10 +683,12 @@ test('Round3: a failed putReceipt in read_cli settlement keeps the deadline time
   }));
   await store.close();
 
-  const core = createNodeCore({
+  const coreOptions: CoreOptions = {
     node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
     port: 0, token, adapters: [adapter], observer: null, approval_required: [],
-  });
+    pipeline_settlement: settleTiming,
+  };
+  const core = createNodeCore(coreOptions);
   t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
 
   const { port } = await core.start();
@@ -602,8 +727,12 @@ test('Round3: a failed putReceipt in read_cli settlement keeps the deadline time
   // read_cli returns 'succeeded', triggering settleCliExchange. The putReceipt
   // above fails once, so the deadline timer is NOT cleared.
   const readResult = await http(port, 'read_cli', { job_id: job, session_id: sessionId, cursor: 0 });
-  assert.notEqual(readResult.body.error, undefined,
-    `read_cli succeeded despite the injected write failure: ${JSON.stringify(readResult.body)}`);
+  // Round 4 item 3: the one-shot write failure must ACTUALLY fire during the
+  // settlement (with `bytes_read` declared, settleCliExchange is reached at
+  // all) and surface as the adapter failure the pipeline maps it to.
+  assert.equal(putFailed, true, 'the injected settle receipt write failure never fired');
+  assert.equal(readResult.body.error, ErrorCode.E_ADAPTER_FAILURE,
+    `read_cli did not surface the injected write failure: ${JSON.stringify(readResult.body)}`);
 
   // After the failed settle the send receipt must still be running — the timer
   // was not cleared.
@@ -640,8 +769,12 @@ test('Round3: a failed putReceipt in read_cli settlement keeps the deadline time
 // ---------------------------------------------------------------------------
 
 test('Round3: a failed putReceipt in the deadline closure retries and closes on the next attempt', async (t) => {
-  // Shorten retry delays so the test does not wait 60 s: first retry at 100 ms.
-  _testing_shortenDelays(30_000, [100, 500, 2000], 5000);
+  // Instance-scoped retry schedule (Round 4 item 4): first retry at 100 ms so
+  // the test does not wait through production's 60 s.
+  const settleTiming: SettlementTimingOptions = {
+    settle_retry_delays: [100, 500, 2000],
+    settle_retry_max_delay: 5000,
+  };
 
   const dir = await mkdtemp(join(tmpdir(), 'toros-f4-r3-2-'));
   const path = join(dir, 'node.sqlite');
@@ -676,10 +809,12 @@ test('Round3: a failed putReceipt in the deadline closure retries and closes on 
     async dispose() {},
   };
 
-  const core = createNodeCore({
+  const coreOptions: CoreOptions = {
     node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
     port: 0, token, adapters: [adapter], observer: null, approval_required: [],
-  });
+    pipeline_settlement: settleTiming,
+  };
+  const core = createNodeCore(coreOptions);
   t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
   await core.start();
 
@@ -720,6 +855,8 @@ test('Round3: a failed putReceipt in the deadline closure retries and closes on 
   // receipt, fails once, and schedules a retry.
   const pipeline = (core as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
   await pipeline.reconcileCliSettlements();
+  await eventually(() => didFail, 2_000);
+  assert.equal(didFail, true, 'the injected closure write failure never fired');
 
   // The receipt must still be running after the failed attempt.
   const duringStore = await openStore({ path, nodeId: 'node' });
@@ -757,7 +894,11 @@ test('Round3: a failed putReceipt in the deadline closure retries and closes on 
 // ---------------------------------------------------------------------------
 
 test('Round3: reconciliation closes multiple receipts even when one write fails; the failing one retries and eventually closes', async (t) => {
-  _testing_shortenDelays(30_000, [100, 500, 2000], 5000);
+  // Instance-scoped retry schedule (Round 4 item 4): first retry at 100 ms.
+  const settleTiming: SettlementTimingOptions = {
+    settle_retry_delays: [100, 500, 2000],
+    settle_retry_max_delay: 5000,
+  };
 
   const dir = await mkdtemp(join(tmpdir(), 'toros-f4-r3-3-'));
   const path = join(dir, 'node.sqlite');
@@ -790,10 +931,12 @@ test('Round3: reconciliation closes multiple receipts even when one write fails;
     async dispose() {},
   };
 
-  const core = createNodeCore({
+  const coreOptions: CoreOptions = {
     node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
     port: 0, token, adapters: [adapter], observer: null, approval_required: [],
-  });
+    pipeline_settlement: settleTiming,
+  };
+  const core = createNodeCore(coreOptions);
   t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
   await core.start();
 
@@ -860,6 +1003,8 @@ test('Round3: reconciliation closes multiple receipts even when one write fails;
   // Trigger reconciliation.
   const pipeline = (core as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
   await pipeline.reconcileCliSettlements();
+  await eventually(() => failWritten, 2_000);
+  assert.equal(failWritten, true, 'the injected failing-receipt write never fired');
 
   // The two good receipts must be closed immediately; the failing one is still running.
   const duringStore = await openStore({ path, nodeId: 'node' });
@@ -891,4 +1036,472 @@ test('Round3: reconciliation closes multiple receipts even when one write fails;
   assert.notEqual(failAfter?.ended_at, null);
   assert.equal(finishedEvents.length, 3,
     `expected 3 action.finished events, got ${finishedEvents.length} — reconciliation did not process all receipts`);
+});
+
+// ---------------------------------------------------------------------------
+// Round 4 finding 1 (P2) — the WHOLE closure attempt is caught, including
+// `store.getReceipt`. A one-shot getReceipt rejection must land on the bounded
+// retry schedule for every caller (deadline timer, retry, reconciliation) — not
+// on an unhandled rejection with the deadline entry already deleted.
+// ---------------------------------------------------------------------------
+
+test('Round4: a one-shot getReceipt rejection from reconciliation is caught, retried, and the receipt closes (no unhandled rejection)', async (t) => {
+  const settleTiming: SettlementTimingOptions = { settle_retry_delays: [100, 500, 2000], settle_retry_max_delay: 5000 };
+  const dir = await mkdtemp(join(tmpdir(), 'toros-f4-r4-1-'));
+  const path = join(dir, 'node.sqlite');
+  const job = 'a0000004-0000-4000-8000-000000000001';
+
+  // Create the job BEFORE start, seed the running send AFTER start so the
+  // startup reconcile does not see it.
+  await createSettleSendJob(path, job, 'r4 getReceipt rejection on reconciliation');
+  const core = createTestCore({
+    node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
+    port: 0, token, adapters: [sendOnlySettleAdapter()], observer: null, approval_required: [],
+    pipeline_settlement: settleTiming,
+  });
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+  await core.start();
+
+  const sendReceiptId = 'r4-get-rejection-send';
+  await seedRunningSend(path, job, sendReceiptId, { session_id: 'r4-session' });
+
+  const unhandled = collectUnhandledRejections(t);
+
+  // Reject the receipt read exactly once, then let storage recover.
+  const storeObj = coreStore(core);
+  const realGetReceipt = storeObj.getReceipt.bind(storeObj);
+  let getFailed = false;
+  storeObj.getReceipt = (id: string): Promise<unknown> => {
+    if (id === sendReceiptId && !getFailed) {
+      getFailed = true;
+      return Promise.reject(new Error('one-shot getReceipt failure'));
+    }
+    return realGetReceipt(id);
+  };
+
+  const pipeline = (core as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
+  await pipeline.reconcileCliSettlements();
+  assert.equal(getFailed, true, 'the injected getReceipt failure never fired');
+  // The first attempt failed on the read, so the receipt is untouched until
+  // the bounded retry (100 ms) closes it. Poll rather than assume: the close
+  // runs fire-and-forget.
+  await eventually(async () => (await receiptOutcome(path, sendReceiptId)) === 'terminated');
+
+  const afterStore = await openStore({ path, nodeId: 'node' });
+  const after = await afterStore.getReceipt(sendReceiptId);
+  const finishedEvents = (await afterStore.listEvents(job)).filter((e) => e.kind === 'action.finished');
+  await afterStore.close();
+
+  assert.notEqual(after?.ended_at, null);
+  assert.equal((after?.adapter_fields as Record<string, unknown>)['exchange_state'], 'unsettled_deadline');
+  assert.equal(finishedEvents.length, 1, 'more than one action.finished was recorded');
+  // Let a (buggy) late rejection surface before the listener is removed.
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(unhandled.list, [], 'an unhandled rejection escaped the settlement close');
+});
+
+test('Round4: a one-shot getReceipt rejection on a retry attempt is caught and the receipt still closes (no unhandled rejection)', async (t) => {
+  const settleTiming: SettlementTimingOptions = { settle_retry_delays: [100, 500, 2000], settle_retry_max_delay: 5000 };
+  const dir = await mkdtemp(join(tmpdir(), 'toros-f4-r4-2-'));
+  const path = join(dir, 'node.sqlite');
+  const job = 'a0000004-0000-4000-8000-000000000002';
+
+  await createSettleSendJob(path, job, 'r4 getReceipt rejection on the retry attempt');
+  const core = createTestCore({
+    node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
+    port: 0, token, adapters: [sendOnlySettleAdapter()], observer: null, approval_required: [],
+    pipeline_settlement: settleTiming,
+  });
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+  await core.start();
+
+  const sendReceiptId = 'r4-get-rejection-retry-send';
+  await seedRunningSend(path, job, sendReceiptId, { session_id: 'r4-session' });
+
+  const unhandled = collectUnhandledRejections(t);
+
+  // Attempt 1 fails its terminal write (forcing a retry); attempt 2's read
+  // then fails once; attempt 3 succeeds and closes the receipt.
+  const storeObj = coreStore(core);
+  const realGetReceipt = storeObj.getReceipt.bind(storeObj);
+  const realPutReceipt = storeObj.putReceipt.bind(storeObj);
+  let putFailed = false;
+  let getFailedOnRetry = false;
+  storeObj.putReceipt = (r: unknown): Promise<unknown> => {
+    const rObj = r as Record<string, unknown>;
+    if (!putFailed && rObj.receipt_id === sendReceiptId && rObj.ended_at !== null) {
+      putFailed = true;
+      return Promise.reject(new Error('one-shot deadline closure write failure'));
+    }
+    return realPutReceipt(r);
+  };
+  storeObj.getReceipt = (id: string): Promise<unknown> => {
+    if (id === sendReceiptId && putFailed && !getFailedOnRetry) {
+      getFailedOnRetry = true;
+      return Promise.reject(new Error('one-shot getReceipt failure on the retry attempt'));
+    }
+    return realGetReceipt(id);
+  };
+
+  const pipeline = (core as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
+  await pipeline.reconcileCliSettlements();
+  // Attempt 1 fails its terminal write (putFailed) and schedules the first
+  // retry; attempt 2 (100 ms later) fails its read (getFailedOnRetry) and
+  // schedules attempt 3 (500 ms later), which closes the receipt. All three
+  // runs are fire-and-forget, so poll for both flags and the final state.
+  await eventually(() => putFailed && getFailedOnRetry, 2_000);
+  await eventually(async () => (await receiptOutcome(path, sendReceiptId)) === 'terminated');
+  assert.equal(putFailed, true, 'the injected closure write failure never fired');
+  assert.equal(getFailedOnRetry, true, 'the injected retry getReceipt failure never fired');
+
+  const afterStore = await openStore({ path, nodeId: 'node' });
+  const after = await afterStore.getReceipt(sendReceiptId);
+  const finishedEvents = (await afterStore.listEvents(job)).filter((e) => e.kind === 'action.finished');
+  await afterStore.close();
+
+  assert.notEqual(after?.ended_at, null);
+  assert.equal(finishedEvents.length, 1, 'more than one action.finished was recorded');
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(unhandled.list, [], 'an unhandled rejection escaped the settlement close');
+});
+
+test('Round4: a one-shot getReceipt rejection on the deadline timer path is caught and the receipt closes (no unhandled rejection)', async (t) => {
+  // Short grace so the re-armed deadline fires within the test window while
+  // the retry schedule stays short too.
+  const settleTiming: SettlementTimingOptions = {
+    cli_settle_grace_ms: 200,
+    settle_retry_delays: [100, 500, 2000],
+    settle_retry_max_delay: 5000,
+  };
+  const dir = await mkdtemp(join(tmpdir(), 'toros-f4-r4-3-'));
+  const path = join(dir, 'node.sqlite');
+  const job = 'a0000004-0000-4000-8000-000000000003';
+
+  await createSettleSendJob(path, job, 'r4 getReceipt rejection on the deadline');
+  const core = createTestCore({
+    node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
+    port: 0, token, adapters: [sendOnlySettleAdapter()], observer: null, approval_required: [],
+    pipeline_settlement: settleTiming,
+  });
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+  await core.start();
+
+  // Seed a running send whose deadline (started_at + timeout 1000 + grace 200)
+  // is ~250 ms in the future; reconciliation re-arms its timer.
+  const sendReceiptId = 'r4-deadline-get-rejection-send';
+  const timeoutMs = 1000;
+  const startedAt = new Date(Date.now() + 250 - timeoutMs - 200).toISOString();
+  await seedRunningSend(path, job, sendReceiptId, { session_id: 'r4-session', started_at: startedAt });
+
+  const unhandled = collectUnhandledRejections(t);
+
+  const storeObj = coreStore(core);
+  const realGetReceipt = storeObj.getReceipt.bind(storeObj);
+  let getFailed = false;
+  storeObj.getReceipt = (id: string): Promise<unknown> => {
+    if (id === sendReceiptId && !getFailed) {
+      getFailed = true;
+      return Promise.reject(new Error('one-shot getReceipt failure on the deadline'));
+    }
+    return realGetReceipt(id);
+  };
+
+  // Reconciliation re-arms the (not yet expired) deadline timer. The read
+  // failure then fires when that timer closes the receipt.
+  const pipeline = (core as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
+  await pipeline.reconcileCliSettlements();
+  assert.equal(getFailed, false, 'the getReceipt failure fired before the deadline');
+
+  // Deadline fires at ~250 ms; the retry lands 100 ms later.
+  await new Promise((r) => setTimeout(r, 700));
+
+  const store = await openStore({ path, nodeId: 'node' });
+  const after = await store.getReceipt(sendReceiptId);
+  const finishedEvents = (await store.listEvents(job)).filter((e) => e.kind === 'action.finished');
+  await store.close();
+
+  assert.equal(getFailed, true, 'the injected getReceipt failure never fired on the deadline');
+  assert.equal(after?.outcome, 'terminated', 'the receipt was not closed after the deadline');
+  assert.equal((after?.adapter_fields as Record<string, unknown>)['exchange_state'], 'unsettled_deadline');
+  assert.equal(finishedEvents.length, 1, 'more than one action.finished was recorded');
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(unhandled.list, [], 'an unhandled rejection escaped the deadline close');
+});
+
+// ---------------------------------------------------------------------------
+// Round 4 finding 2 (P2) — a failed `action.finished` append after a
+// successful terminal write is recovered. The retry checks BOTH durable
+// steps: receipt still running → write then append; closed without the event →
+// append only; both present → stop. Never a duplicate.
+// ---------------------------------------------------------------------------
+
+test('Round4: a one-shot action.finished append failure after a successful terminal write is recovered exactly once', async (t) => {
+  const settleTiming: SettlementTimingOptions = { settle_retry_delays: [100, 500, 2000], settle_retry_max_delay: 5000 };
+  const dir = await mkdtemp(join(tmpdir(), 'toros-f4-r4-4-'));
+  const path = join(dir, 'node.sqlite');
+  const job = 'a0000004-0000-4000-8000-000000000004';
+
+  await createSettleSendJob(path, job, 'r4 finished-event append recovery');
+  const core = createTestCore({
+    node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
+    port: 0, token, adapters: [sendOnlySettleAdapter()], observer: null, approval_required: [],
+    pipeline_settlement: settleTiming,
+  });
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+  await core.start();
+
+  const sendReceiptId = 'r4-append-recovery-send';
+  await seedRunningSend(path, job, sendReceiptId, { session_id: 'r4-session' });
+
+  const unhandled = collectUnhandledRejections(t);
+
+  // The terminal write succeeds; only the finished-event append fails once.
+  const storeObj = coreStore(core);
+  const realAppendEvent = storeObj.appendEvent.bind(storeObj);
+  let appendFailed = false;
+  storeObj.appendEvent = (input: { kind: string; payload: unknown }): Promise<unknown> => {
+    const payload = input.payload as Record<string, unknown>;
+    if (!appendFailed && input.kind === 'action.finished' && payload.receipt_id === sendReceiptId) {
+      appendFailed = true;
+      return Promise.reject(new Error('one-shot action.finished append failure'));
+    }
+    return realAppendEvent(input);
+  };
+
+  const pipeline = (core as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
+  await pipeline.reconcileCliSettlements();
+  // Attempt 1's terminal write lands and its event append fails; the retry
+  // (100 ms, fire-and-forget) recovers the event. Poll for the fault, then for
+  // the recovered event.
+  await eventually(() => appendFailed, 2_000);
+  await eventually(async () => {
+    const store = await openStore({ path, nodeId: 'node' });
+    const events = (await store.listEvents(job)).filter(
+      (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
+    );
+    await store.close();
+    return events.length >= 1;
+  });
+  assert.equal(appendFailed, true, 'the injected append failure never fired');
+
+  // The retry (100 ms) recovers the event: the receipt is closed by then, so
+  // the event is appended only — the receipt is never rewritten.
+  await new Promise((r) => setTimeout(r, 150));
+
+  const store = await openStore({ path, nodeId: 'node' });
+  const after = await store.getReceipt(sendReceiptId);
+  const finishedEvents = (await store.listEvents(job)).filter(
+    (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
+  );
+  await store.close();
+
+  assert.equal(after?.outcome, 'terminated');
+  assert.equal((after?.adapter_fields as Record<string, unknown>)['exchange_state'], 'unsettled_deadline');
+  assert.equal(finishedEvents.length, 1, 'the finished event was not recovered exactly once');
+  assert.equal((finishedEvents[0]?.payload as Record<string, unknown>).exchange_state, 'unsettled_deadline');
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(unhandled.list, [], 'an unhandled rejection escaped the append recovery');
+});
+
+test('Round4: an action.finished append that persists then rejects is never duplicated by the retry', async (t) => {
+  const settleTiming: SettlementTimingOptions = { settle_retry_delays: [100, 500, 2000], settle_retry_max_delay: 5000 };
+  const dir = await mkdtemp(join(tmpdir(), 'toros-f4-r4-4b-'));
+  const path = join(dir, 'node.sqlite');
+  const job = 'a0000004-0000-4000-8000-000000000044';
+
+  await createSettleSendJob(path, job, 'r4 finished-event no-duplicate recovery');
+  const core = createTestCore({
+    node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
+    port: 0, token, adapters: [sendOnlySettleAdapter()], observer: null, approval_required: [],
+    pipeline_settlement: settleTiming,
+  });
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+  await core.start();
+
+  const sendReceiptId = 'r4-append-persists-then-rejects-send';
+  await seedRunningSend(path, job, sendReceiptId, { session_id: 'r4-session' });
+
+  const storeObj = coreStore(core);
+  const realAppendEvent = storeObj.appendEvent.bind(storeObj);
+  let appendFailed = false;
+  storeObj.appendEvent = (input: { kind: string; payload: unknown }): Promise<unknown> => {
+    const payload = input.payload as Record<string, unknown>;
+    if (!appendFailed && input.kind === 'action.finished' && payload.receipt_id === sendReceiptId) {
+      appendFailed = true;
+      // The row is persisted and THEN the call rejects — the hard case: a
+      // retry that checks "event present?" must find it and stop.
+      return realAppendEvent(input).then(() => { throw new Error('one-shot append failure after persisting'); });
+    }
+    return realAppendEvent(input);
+  };
+
+  const pipeline = (core as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
+  await pipeline.reconcileCliSettlements();
+  await eventually(() => appendFailed, 2_000);
+  assert.equal(appendFailed, true, 'the injected append failure never fired');
+
+  await new Promise((r) => setTimeout(r, 300));
+
+  const store = await openStore({ path, nodeId: 'node' });
+  const finishedEvents = (await store.listEvents(job)).filter(
+    (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
+  );
+  await store.close();
+
+  assert.equal(finishedEvents.length, 1, 'the persisted event was duplicated by the retry');
+});
+
+// ---------------------------------------------------------------------------
+// Round 4 finding 2 (read_cli settlement) — the settlement deadline is cleared
+// only after the terminal receipt AND its finished event are durable. A failed
+// event append leaves the timer armed; the deadline recovers the missing event
+// without rewriting the closed receipt.
+// ---------------------------------------------------------------------------
+
+test('Round4: a one-shot finished-event append failure in read_cli settlement is recovered by the deadline without rewriting the receipt', async (t) => {
+  const settleTiming: SettlementTimingOptions = {
+    cli_settle_grace_ms: 200,
+    settle_retry_delays: [100, 500, 2000],
+    settle_retry_max_delay: 5000,
+  };
+  const dir = await mkdtemp(join(tmpdir(), 'toros-f4-r4-5-'));
+  const path = join(dir, 'node.sqlite');
+  const job = 'a0000004-0000-4000-8000-000000000005';
+
+  const store = await openStore({ path, nodeId: 'node' });
+  await store.createJob(sealEnvelope({
+    job_id: job, objective: 'r4 read settlement event recovery',
+    allowed_capabilities: ['settletest.start', 'settletest.send', 'settletest.read'],
+    allowed_workspaces: ['work'], acceptance: ['done'], forbidden: [],
+    max_actions: 10, max_retries: 0, expires_at: '2999-01-01T00:00:00Z',
+  }));
+  await store.close();
+
+  const adapter: SessionAdapter = {
+    manifest: settleSessionManifest,
+    async init() {},
+    async invoke(actionId: string): Promise<ActionResult> {
+      if (actionId === 'send') {
+        return { output: '', truncated: false, artifacts: [], receipt_extra: { exchange_state: 'running', exchange_error: null } };
+      }
+      return { output: 'done', truncated: false, artifacts: [], receipt_extra: { exchange_state: 'succeeded', exchange_error: null, bytes_read: 0 } };
+    },
+    async dispose() {},
+    async start() { return { pid: -1 }; },
+    async send() {},
+    async read() { return { chunk: 'done', cursor: 0, exchange_state: 'succeeded', exchange_error: null }; },
+    async interrupt() {},
+    async stop() {},
+  };
+  const core = createTestCore({
+    node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
+    port: 0, token, adapters: [adapter], observer: null, approval_required: [],
+    pipeline_settlement: settleTiming,
+  });
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+  const { port } = await core.start();
+
+  const started = await http(port, 'start_cli', { job_id: job, cli_id: 'settletest', workspace_id: 'work' });
+  const sessionId = String(started.body.receipt_id);
+  assert.ok(sessionId.length > 0, `start_cli failed: ${JSON.stringify(started.body)}`);
+
+  const sent = await http(port, 'send_cli', { job_id: job, session_id: sessionId, message: 'go' });
+  assert.equal(sent.body.exchange_state, 'running');
+  const sendReceiptId = String(sent.body.receipt_id);
+
+  const unhandled = collectUnhandledRejections(t);
+
+  // Fail the settlement's finished-event append exactly once, leaving the
+  // deadline timer armed.
+  const storeObj = coreStore(core);
+  const realAppendEvent = storeObj.appendEvent.bind(storeObj);
+  let appendFailed = false;
+  storeObj.appendEvent = (input: { kind: string; payload: unknown }): Promise<unknown> => {
+    const payload = input.payload as Record<string, unknown>;
+    if (!appendFailed && input.kind === 'action.finished' && payload.receipt_id === sendReceiptId) {
+      appendFailed = true;
+      return Promise.reject(new Error('one-shot read-settlement append failure'));
+    }
+    return realAppendEvent(input);
+  };
+
+  // read_cli settles the send as 'succeeded': the terminal receipt write
+  // lands, the event append fails, and read_cli surfaces the failure.
+  const readResult = await http(port, 'read_cli', { job_id: job, session_id: sessionId, cursor: 0 });
+  assert.equal(appendFailed, true, 'the injected append failure never fired');
+  assert.equal(readResult.body.error, ErrorCode.E_ADAPTER_FAILURE,
+    `read_cli did not surface the injected append failure: ${JSON.stringify(readResult.body)}`);
+
+  const midStore = await openStore({ path, nodeId: 'node' });
+  const midSend = await midStore.getReceipt(sendReceiptId);
+  await midStore.close();
+  assert.equal(midSend?.outcome, 'succeeded', 'the terminal receipt write did not land before the append failed');
+
+  // The deadline (send + 80 ms timeout + 200 ms grace) fires and recovers the
+  // missing event; the closed receipt is not rewritten.
+  await new Promise((r) => setTimeout(r, 1500));
+
+  const afterStore = await openStore({ path, nodeId: 'node' });
+  const after = await afterStore.getReceipt(sendReceiptId);
+  const finishedEvents = (await afterStore.listEvents(job)).filter(
+    (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
+  );
+  await afterStore.close();
+
+  assert.equal(after?.outcome, 'succeeded', 'the deadline rewrote the closed receipt');
+  assert.equal(after?.ended_at, midSend?.ended_at, 'the deadline changed the settlement timestamp');
+  assert.equal(finishedEvents.length, 1, 'the recovered event was not appended exactly once');
+  const recovered = finishedEvents[0]?.payload as Record<string, unknown>;
+  assert.equal(recovered.exchange_state, 'succeeded', 'the recovered event lost the settlement state');
+  assert.equal(recovered.outcome, 'succeeded');
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(unhandled.list, [], 'an unhandled rejection escaped the read-settlement recovery');
+});
+
+// ---------------------------------------------------------------------------
+// Round 4 finding 4 (P3) — instance-scoped, validated settlement timing with
+// immutable production defaults: 1 s, 5 s, 30 s, then every 60 s.
+// ---------------------------------------------------------------------------
+
+test('Round4: production settlement timing defaults to a 1s, 5s, 30s, then 60s retry schedule after a 30s grace', () => {
+  assert.equal(PRODUCTION_SETTLEMENT_TIMING.cli_settle_grace_ms, 30_000, 'production grace must be 30 s');
+  assert.deepEqual(
+    [...PRODUCTION_SETTLEMENT_TIMING.settle_retry_delays, PRODUCTION_SETTLEMENT_TIMING.settle_retry_max_delay],
+    [1_000, 5_000, 30_000, 60_000],
+    'production retry schedule must be 1 s, 5 s, 30 s, then every 60 s',
+  );
+  assert.equal(Object.isFrozen(PRODUCTION_SETTLEMENT_TIMING), true, 'production timing must be immutable');
+  assert.equal(Object.isFrozen(PRODUCTION_SETTLEMENT_TIMING.settle_retry_delays), true, 'production retry schedule must be immutable');
+});
+
+test('Round4: invalid settlement timing options are rejected when the Core is constructed', () => {
+  const base = {
+    node_id: 'node', db_path: ':memory:', workspaces: [{ id: 'work', root: tmpdir() }],
+    port: 0, token, adapters: [], observer: null, approval_required: [],
+  };
+  assert.throws(
+    () => createTestCore({ ...base, pipeline_settlement: { settle_retry_delays: [] } }),
+    /non-empty/,
+    'an empty retry schedule was accepted',
+  );
+  assert.throws(
+    () => createTestCore({ ...base, pipeline_settlement: { cli_settle_grace_ms: -1 } }),
+    /non-negative/,
+    'a negative grace was accepted',
+  );
+  assert.throws(
+    () => createTestCore({ ...base, pipeline_settlement: { settle_retry_delays: [100, Number.NaN] } }),
+    /finite/,
+    'a NaN retry delay was accepted',
+  );
+  assert.throws(
+    () => createTestCore({ ...base, pipeline_settlement: { settle_retry_max_delay: Number.POSITIVE_INFINITY } }),
+    /finite/,
+    'an infinite retry cap was accepted',
+  );
+  assert.throws(
+    () => createTestCore({ ...base, pipeline_settlement: { settle_retry_delays: [100], settle_retry_max_delay: -5 } }),
+    /non-negative/,
+    'a negative retry cap was accepted',
+  );
 });

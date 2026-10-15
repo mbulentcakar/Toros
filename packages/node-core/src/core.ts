@@ -8,7 +8,7 @@ import { createRegistry } from '@toros/registry';
 import { createRelay, type Relay } from '@toros/relay';
 import { openStore } from '@toros/store';
 
-import { createActionPipeline } from './action-pipeline.js';
+import { createActionPipeline, type SettlementTimingOptions } from './action-pipeline.js';
 import { approvalTtlMinutes, createApprovalRegistry, type ApprovalRegistry } from './approvals.js';
 import { BrowserAcquisitionController } from './browser-acquisition.js';
 import { createConversationGuard, type ConversationGuard } from './conversation-guard.js';
@@ -58,6 +58,14 @@ export class Core implements NodeCore {
       store: () => this.getStore(),
       redactSecrets: (content) => this.runCredentials.redactSecrets(content),
     });
+    // `pipeline_settlement` is an internal test seam that intentionally has no
+    // entry on the public NodeCoreOptions type: tests construct a Core (or
+    // pipeline) with short settlement timings for their own instance, and
+    // production config never sets it, so the pipeline always runs the
+    // immutable production values. Plumbed through here and omitted when
+    // absent (exactOptionalPropertyTypes: passing an explicit undefined is a
+    // type error, so it is spread conditionally).
+    const settlement = (this.options as NodeCoreOptions & { readonly pipeline_settlement?: SettlementTimingOptions }).pipeline_settlement;
     const actionPipeline = createActionPipeline({
       node_id: options.node_id,
       adapters: options.adapters,
@@ -67,6 +75,7 @@ export class Core implements NodeCore {
       policy: () => this.getPolicy(),
       stageGraphs: () => this.getStageGraphs(),
       approvals: this.approvals,
+      ...(settlement === undefined ? {} : { settlement }),
       recordSession: (sessionId, jobId) => { this.sessionJobs.set(sessionId, jobId); },
       removeSession: (sessionId) => { this.sessionJobs.delete(sessionId); },
     });
