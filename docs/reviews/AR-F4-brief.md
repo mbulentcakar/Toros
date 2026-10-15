@@ -114,3 +114,41 @@ npm test
   the second PR to merge rebases; resolve by region, never by dropping the other slice's change.
 - Public repository: no secrets, local paths or hostnames.
 - One PR into `main`, titled `fix(node-core): AR-F4 pipeline integrity`. Do not merge it.
+
+## Round 2 — changes after review (2026-10-15)
+
+Codex reviewed PR mbulentcakar/Toros#6 and requested changes. Fix all six findings (read the
+review on the PR). Finding 2 was a decision for the operator, who chose **a guaranteed close at a
+deadline**.
+
+1. **Timeout must win (P1).** When the Core timer fires, it first marks the action timed out, so
+   the race is decided as `E_TIMEOUT`/`terminated`, and only **then** aborts the adapter's
+   signal. Neither an adapter that resolves in its abort listener nor one that rejects there may
+   replace the outcome. Test both behaviours.
+2. **`send_cli` guaranteed close (P2, operator decision).** The documented exchange-settlement
+   design stays: the receipt stays `running` until a later `read_cli` settles it. Add a guaranteed
+   close on top:
+   - **Deadline:** when `send_cli` returns with its receipt open, Core arms a settlement deadline
+     equal to that action's timeout (`ActionSchema.timeout_ms`, else the manifest's
+     `default_timeout_ms`) **plus 30 seconds**.
+   - **On the deadline:** if the receipt is still open, Core closes it as `terminated` with
+     `exchange_state: "unsettled_deadline"` and appends `action.finished`.
+   - **Idempotence:** a settlement arriving later (from `read_cli`) neither reopens nor rewrites a
+     closed receipt.
+   - **Restart:** at Core start, any `send_cli` receipt still `running` whose deadline has passed
+     is closed the same way. Its deadline is derived from `started_at` plus the same timeout.
+   - **Existing test:** update the test at `acceptance.test.ts:293` to the new rule. It still
+     expects `running` right after the send; add the deadline close.
+3. **One closing path from `action.started` (P2).** The whole post-start sequence lives inside the
+   single closing path: the first receipt write, timeout setup, and path-argument resolution.
+   Test a rejected first receipt write, both persisted-then-rejected and not persisted.
+4. **Abort during setup (P2).** Install cancellation handling before the async setup in
+   `runPowerShell`, or recheck `signal.aborted` after setup. If aborted, clean up (awaited) and
+   reject **without spawning**. Test an abort timed to the moment the script write completes.
+5. **Synchronous spawn failure (P2).** Catch a synchronous throw from the spawn seam and route it
+   through `done`, with cleanup awaited and the returned promise rejected. No unhandled
+   rejection. Test it.
+6. **Basename-only logging (P3).** The cleanup failure log contains the directory basename and
+   the error **code** only (for example `EACCES`), never the raw message or path.
+
+Allowed paths are unchanged, plus `packages/node-core/test/acceptance.test.ts` for item 2 only.
