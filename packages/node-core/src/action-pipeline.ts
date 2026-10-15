@@ -22,7 +22,22 @@ function now(): string { return new Date().toISOString(); }
  * settled as `terminated`/`unsettled_deadline` at `started_at + timeout +
  * CLI_SETTLE_GRACE_MS` if nothing else settled it first.
  */
-const CLI_SETTLE_GRACE_MS = 30_000;
+let CLI_SETTLE_GRACE_MS = 30_000;
+
+/**
+ * Bounded retry schedule for the settlement-deadline close. If the terminal
+ * receipt write fails (transient store issue), the deadline callback retries
+ * at 1 s, then 5 s, then 30 s, then every 60 s until the receipt is closed.
+ */
+let SETTLE_RETRY_DELAYS = [1_000, 5_000, 30_000];
+let SETTLE_RETRY_MAX_DELAY = 60_000;
+
+// Testing overrides — used by the Round 3 tests to avoid real 30 s / 60 s waits.
+export function _testing_shortenDelays(graceMs: number, retryDelays: number[], retryMax: number): void {
+  CLI_SETTLE_GRACE_MS = graceMs;
+  SETTLE_RETRY_DELAYS = retryDelays;
+  SETTLE_RETRY_MAX_DELAY = retryMax;
+}
 
 function declaredAdapterFields(adapter: Adapter, result: ActionResult): Readonly<Record<string, JsonValue>> {
   const allowed = new Set(adapter.manifest.receipt_fields);
@@ -457,15 +472,16 @@ export function createActionPipeline(deps: {
   async function settleCliExchange(store: Store, jobId: string, sessionId: string, adapterId: string, state: string, error: JsonValue | undefined, adapterFields: Readonly<Record<string, JsonValue>>): Promise<void> {
     const pending = await store.latestRunningReceipt(jobId, sessionId, `${adapterId}.send`);
     if (pending === null) return;
-    // The exchange reported its own terminal state before the send's settlement
-    // deadline — cancel the deadline timer so the process is not held open by
-    // it. The deadline close is idempotent with this one: the receipt is now
-    // closed, so whichever runs first wins and neither reopens nor rewrites it.
-    clearPendingSettleTimer(pending.receipt_id);
     const terminated = state === 'interrupted' || error === ErrorCode.E_TIMEOUT || error === ErrorCode.E_CANCELLED || error === ErrorCode.E_OUTPUT_LIMIT;
     const outcome: Receipt['outcome'] = state === 'succeeded' ? 'succeeded' : terminated ? 'terminated' : 'failed';
     const settled: Receipt = { ...pending, ended_at: now(), outcome, adapter_fields: { ...pending.adapter_fields, ...adapterFields } };
+    // Write first, THEN clear the deadline timer (Round 3 item 1). If the
+    // write fails, the timer stays armed so the deadline callback still
+    // closes the receipt. The deadline close is idempotent with this one:
+    // the receipt is now closed, so whichever runs first wins and neither
+    // reopens nor rewrites it.
     await store.putReceipt(settled);
+    clearPendingSettleTimer(pending.receipt_id);
     await store.appendEvent({ node_id: deps.node_id, job_id: jobId, kind: 'action.finished', payload: { receipt_id: pending.receipt_id, outcome, exchange_state: state, exchange_error: typeof error === 'string' ? error : null } });
   }
 
@@ -476,13 +492,17 @@ export function createActionPipeline(deps: {
   }
 
   /**
-   * Close a still-open `send_cli` receipt that reached its settlement deadline.
+   * Try to close a still-open `send_cli` receipt that reached its settlement
+   * deadline. Idempotent by design: the receipt is re-read and re-checked
+   * immediately before the write, so a `read_cli` that settled the receipt a
+   * moment earlier (or a duplicate deadline firing) closes nothing and rewrites
+   * nothing.
    *
-   * Idempotent by design: the receipt is re-read and re-checked immediately
-   * before the write, so a `read_cli` that settled the receipt a moment earlier
-   * (or a duplicate deadline firing) closes nothing and rewrites nothing.
+   * If the terminal write fails, the close is retried on the bounded schedule
+   * (1 s, 5 s, 30 s, then every 60 s). Retries stop the moment the receipt is
+   * closed by any path — idempotency covers that.
    */
-  async function closeUnsettledCliReceipt(receiptId: string, store: Store): Promise<void> {
+  async function closeUnsettledCliReceipt(receiptId: string, store: Store, retryCount = 0): Promise<void> {
     const current = await store.getReceipt(receiptId);
     if (current === null || current.outcome !== 'running') return;
     const settled: Receipt = {
@@ -491,8 +511,17 @@ export function createActionPipeline(deps: {
       outcome: 'terminated',
       adapter_fields: { ...current.adapter_fields, exchange_state: 'unsettled_deadline' },
     };
-    await store.putReceipt(settled);
-    await store.appendEvent({ node_id: deps.node_id, job_id: current.job_id, kind: 'action.finished', payload: { receipt_id: current.receipt_id, outcome: 'terminated', exchange_state: 'unsettled_deadline', exchange_error: null } });
+    try {
+      await store.putReceipt(settled);
+      await store.appendEvent({ node_id: deps.node_id, job_id: current.job_id, kind: 'action.finished', payload: { receipt_id: current.receipt_id, outcome: 'terminated', exchange_state: 'unsettled_deadline', exchange_error: null } });
+    } catch (error: unknown) {
+      // The write failed — schedule a retry with the bounded schedule.
+      // The catch-and-retry means this function never rejects, so callers
+      // (the deadline timer callback, reconciliation) can fire-and-forget.
+      const delay = retryCount < SETTLE_RETRY_DELAYS.length ? SETTLE_RETRY_DELAYS[retryCount] : SETTLE_RETRY_MAX_DELAY;
+      const timer = setTimeout(() => { void closeUnsettledCliReceipt(receiptId, store, retryCount + 1); }, delay);
+      timer.unref();
+    }
   }
 
   /**
@@ -505,8 +534,7 @@ export function createActionPipeline(deps: {
     clearPendingSettleTimer(receipt.receipt_id);
     const timer = setTimeout(() => {
       pendingSettleTimers.delete(receipt.receipt_id);
-      void closeUnsettledCliReceipt(receipt.receipt_id, store)
-        .catch((error: unknown) => { console.error('failed to close cli exchange at its settlement deadline', error); });
+      void closeUnsettledCliReceipt(receipt.receipt_id, store);
     }, Math.max(0, deadlineMs - Date.now()));
     timer.unref();
     pendingSettleTimers.set(receipt.receipt_id, timer);
@@ -534,7 +562,10 @@ export function createActionPipeline(deps: {
         const timeoutMs = sendAction?.timeout_ms ?? adapter.manifest.default_timeout_ms;
         const deadlineMs = Date.parse(receipt.started_at) + timeoutMs + CLI_SETTLE_GRACE_MS;
         if (Date.now() >= deadlineMs) {
-          await closeUnsettledCliReceipt(receipt.receipt_id, store);
+          // Fire-and-forget: a write failure arms the retry schedule; a
+          // failure for one receipt must not stop the scan. The retry
+          // catches its own errors and never produces an unhandled rejection.
+          void closeUnsettledCliReceipt(receipt.receipt_id, store);
         } else {
           // The deadline has not passed: re-arm the in-memory timer so the
           // receipt does not stay open until the next restart. Calling
