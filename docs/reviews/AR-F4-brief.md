@@ -211,3 +211,25 @@ Codex confirmed that the one-shot receipt-write recovery works. Fix the four rem
    duplicate events, with the same retry schedule on failure. Add restart regressions for both
    the deadline-closure path and the `read_cli` settlement path, where the terminal receipt
    landed but the event append failed and the process restarted before the retry.
+
+## Round 6 — CI failure on round 5 (2026-10-19)
+
+Native Windows runs passed round 5, but the CI `Root` job fails (576 tests, 1 failed):
+`Round3: a failed putReceipt in read_cli settlement keeps the deadline timer armed and the receipt
+still closes` sees `terminated` where it expects `running`. This is a race in the test, not a
+production defect. The deadline is 80 ms timeout + 200 ms grace, so a slower runner can pass the
+deadline during the `send_cli` → `read_cli` → "still running" steps, and the timer closes the
+receipt first.
+
+1. **The window under test must outlast a slow runner.** In that test, set the grace to at least
+   5 s. Assert "still running" right after the failed settlement. Then wait for the deadline by
+   **polling** the receipt (every 100 ms, up to 15 s) instead of a fixed 2 s sleep.
+2. **Audit the same class across the F4 tests.** Any test that asserts an intermediate state
+   (still `running`, not yet closed, no event yet) inside a window under 1 s gets the same
+   treatment: widen the window, and poll for the later state. Tests that only assert the final
+   state after a deadline also poll, with a bounded timeout, instead of a fixed sleep.
+3. **No production change.** Production timing defaults, and the instance-scoped timing option
+   from round 4, stay as they are.
+
+Acceptance: `npm test` on Windows: 0 failed, and every skip is a `TOROS_REAL_TESTS` real-binary
+skip. Then the CI `Root` job is green on the PR head.

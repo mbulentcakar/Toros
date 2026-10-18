@@ -190,3 +190,32 @@ that the binding cannot fail open, and only then runs the native suites.
    message, then cleans up the fixture it started.
 
 The implementer still must not run native tests. The reviewer gates them.
+
+## Round 5 — CI failure on round 4 (2026-10-19)
+
+The CI `Root` job fails at `npm run typecheck` (`tsc --build --force`) with
+`TS2307: Cannot find module '@toros/node-core'` in `packages/adapters-desktop/test/native-core.test.ts`,
+and then in `packages/coordinator`. It passes locally only because earlier builds left `dist/`
+folders behind.
+
+1. **Remove the circular package reference (P1).** `node-core` depends on and references
+   `adapters-desktop`, so `adapters-desktop` must not import `node-core`, `store` or `envelope`.
+   Move the Core-path audit test to `packages/node-core/test/desktop-native-core.test.ts`. Import
+   the adapter from `@toros/adapters-desktop`. Import the fixture helpers through a new subpath
+   export, `@toros/adapters-desktop/testing`, which maps to `dist/test/native-utils.js` and its
+   `.d.ts`. The fixture script stays in `packages/adapters-desktop/test/fixtures/`: confirm that
+   the helper still resolves it from its own file location, not from the importer's. Do not add
+   `node-core` to `adapters-desktop`'s dependencies or references.
+2. **Native suites are opt-in (P2).** `native-fixture.test.ts` and the moved Core-path test
+   start a WinForms window and walk the live desktop, so they must not run under a plain
+   `npm test`, whether in CI, a reviewer's run or an operator's machine. Gate both the way the
+   repository gates its other real tests. Skip unless `TOROS_REAL_TESTS=1`, with the skip reason
+   `NATIVE DESKTOP SKIPPED: set TOROS_REAL_TESTS=1 to run the canary fixture`. With
+   `TOROS_REAL_TESTS=1`, a missing prerequisite (no interactive desktop, a locked desktop) fails
+   loudly; it does not skip.
+3. **Clean-build check.** Delete every `packages/*/dist` and `*.tsbuildinfo`, then run
+   `npm run typecheck`: 0 errors.
+
+The implementer still must not run the native suites. Run `npm test` **without**
+`TOROS_REAL_TESTS`: 0 failed, and every new skip carries the reason above. The reviewer runs the
+native suites with `TOROS_REAL_TESTS=1`.
