@@ -11,6 +11,40 @@ import type { AdapterContext } from '@toros/contracts';
 import { createPowerShellUiaProbe } from '../src/probe.js';
 import type { UiaProbe } from '../src/adapter.js';
 
+// ---------------------------------------------------------------------------
+// Round 5: native suites are opt-in.
+//
+// native-fixture.test.ts and desktop-native-core.test.ts (the Core-path audit
+// moved to packages/node-core) start a real WinForms window and walk the live
+// desktop, so a plain `npm test` must never run them. Only an operator who
+// sets TOROS_REAL_TESTS=1 opts in; with that set, a missing prerequisite (no
+// interactive desktop, a locked desktop) fails loudly inside the test instead
+// of skipping. This mirrors the preflight pattern in
+// packages/adapters-app/test/helpers.ts.
+// ---------------------------------------------------------------------------
+
+/** The exact, single skip reason every gated native suite must report. */
+export const NATIVE_DESKTOP_SKIP_REASON =
+  'NATIVE DESKTOP SKIPPED: set TOROS_REAL_TESTS=1 to run the canary fixture';
+
+export interface NativeDesktopTestPreflight {
+  readonly run: boolean;
+  readonly skip: false | string;
+}
+
+function nativeDesktopTestPreflight(): NativeDesktopTestPreflight {
+  if (process.env.TOROS_REAL_TESTS === '1') {
+    return { run: true, skip: false };
+  }
+  return {
+    run: false,
+    skip: NATIVE_DESKTOP_SKIP_REASON,
+  };
+}
+
+/** Evaluated synchronously during test discovery, before any fixture can start. */
+export const NATIVE_DESKTOP_TEST_PREFLIGHT = nativeDesktopTestPreflight();
+
 export function getPowershellPath(): string {
   const systemRoot = process.env['SystemRoot'] ?? process.env['SYSTEMROOT'];
   if (systemRoot) {
@@ -103,6 +137,12 @@ export function startFixture(options: {
   extraWindows?: number;
 }): Promise<FixtureInstance> {
   return new Promise((resolve, reject) => {
+    // Round 5: native-utils is imported from packages/node-core (through the
+    // @toros/adapters-desktop/testing subpath), so the fixture script MUST be
+    // resolved relative to THIS module's own file (import.meta), never the
+    // importer's location. This compiled module lives at
+    // dist/test/native-utils.js, so ../../test/fixtures/canary-form.ps1 is the
+    // fixture in this package however the helper is reached.
     const baseDir = import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname);
     let fixtureScript = path.resolve(baseDir, '../../test/fixtures/canary-form.ps1');
     if (!fs.existsSync(fixtureScript)) {

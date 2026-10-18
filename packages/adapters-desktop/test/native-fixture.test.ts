@@ -8,8 +8,16 @@ import {
   fixtureProbe,
   startFixture,
   stopFixture,
+  NATIVE_DESKTOP_TEST_PREFLIGHT,
   type FixtureInstance,
 } from './native-utils.js';
+
+// Round 5: this suite starts a real WinForms window and walks the live
+// desktop, so a plain `npm test` must never run it. It runs only when the
+// operator opts in with TOROS_REAL_TESTS=1; with that set, a missing
+// prerequisite (no interactive desktop, a locked desktop) fails loudly inside
+// the test rather than skipping. See the preflight in native-utils.
+const nativeDesktopTestOptions = { skip: NATIVE_DESKTOP_TEST_PREFLIGHT.skip };
 
 describe('AR-F2 Native Windows Fixture Verification', () => {
   const activeFixtures: FixtureInstance[] = [];
@@ -28,7 +36,7 @@ describe('AR-F2 Native Windows Fixture Verification', () => {
     }
   });
 
-  it('acceptance 1 + P1: fixture-bound enumeration; none of the three canaries anywhere in output', async () => {
+  it('acceptance 1 + P1: fixture-bound enumeration; none of the three canaries anywhere in output', nativeDesktopTestOptions, async () => {
     const fixture = await startFixture({});
     activeFixtures.push(fixture);
     const probe = fixtureProbe(fixture);
@@ -132,7 +140,7 @@ describe('AR-F2 Native Windows Fixture Verification', () => {
     }
   });
 
-  it('acceptance 4: control_filter matches by type and automation_id; canary matches nothing', async () => {
+  it('acceptance 4: control_filter matches by type and automation_id; canary matches nothing', nativeDesktopTestOptions, async () => {
     const fixture = await startFixture({});
     activeFixtures.push(fixture);
     const probe = fixtureProbe(fixture);
@@ -185,7 +193,7 @@ describe('AR-F2 Native Windows Fixture Verification', () => {
     assert.ok(typeFilterBody.controls.every((c) => String(c['type']).toLowerCase().includes('pane')));
   });
 
-  it('acceptance 5 + finding 3: native long title truncated to 256; out-of-scope fixture window has no title', async () => {
+  it('acceptance 5 + finding 3: native long title truncated to 256; out-of-scope fixture window has no title', nativeDesktopTestOptions, async () => {
     // The fixture sets an ACTUAL native window text longer than 256 characters;
     // GetWindowText on the real handle is capped at 256 by the script.
     const longTitle = 'W'.repeat(300);
@@ -251,7 +259,7 @@ describe('AR-F2 Native Windows Fixture Verification', () => {
     assert.strictEqual(winOutOfScope.title, undefined, 'out-of-scope window must omit title');
   });
 
-  it('acceptance 6: script stops at the caps and reports truncated, with only the fixture bound', async () => {
+  it('acceptance 6: script stops at the caps and reports truncated, with only the fixture bound', nativeDesktopTestOptions, async () => {
     // The fixture owns ONE main form plus two extra top-level forms from the
     // SAME process, and 20 extra child controls: both caps are exceeded while
     // every window still belongs to the single PID the probe is bound to.
@@ -280,7 +288,7 @@ describe('AR-F2 Native Windows Fixture Verification', () => {
     }
   });
 
-  it('static: the script binds restrict_to_pid before any native text is read (P1 regression guard)', () => {
+  it('static: the script binds restrict_to_pid before any native text is read (P1 regression guard)', nativeDesktopTestOptions, () => {
     // The PID guard must sit inside the enumerate walk BEFORE GetWindowText, so
     // skipped windows are never read. `enumerate_windows` appears before any
     // window text read in that walk and after the TorosNative class definition.

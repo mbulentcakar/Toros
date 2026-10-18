@@ -8,16 +8,24 @@ import { sealEnvelope } from '@toros/envelope';
 import { openStore } from '@toros/store';
 import { createNodeCore, type NodeCore } from '@toros/node-core';
 
-import { createDesktopAdapter } from '../src/adapter.js';
+import { createDesktopAdapter } from '@toros/adapters-desktop';
 import {
   fixtureProbe,
   startFixture,
   stopFixture,
   tools,
+  NATIVE_DESKTOP_TEST_PREFLIGHT,
   type FixtureInstance,
-} from './native-utils.js';
+} from '@toros/adapters-desktop/testing';
 
 const CORE_TOKEN = 'toros-f2-native-core-token';
+
+// Round 5: this suite starts a real WinForms window and walks the live
+// desktop, so a plain `npm test` must never run it. It runs only when the
+// operator opts in with TOROS_REAL_TESTS=1; with that set, a missing
+// prerequisite (no interactive desktop, a locked desktop) fails loudly inside
+// the test rather than skipping. See the preflight in native-utils.
+const nativeDesktopTestOptions = { skip: NATIVE_DESKTOP_TEST_PREFLIGHT.skip };
 
 describe('AR-F2 Native Core Integration (finding 2)', () => {
   const activeFixtures: FixtureInstance[] = [];
@@ -29,7 +37,7 @@ describe('AR-F2 Native Core Integration (finding 2)', () => {
     }
   });
 
-  it('desktop.state and desktop.inspect through a real Core: no canary in output, persisted receipts, or events', async (t) => {
+  it('desktop.state and desktop.inspect through a real Core: no canary in output, persisted receipts, or events', nativeDesktopTestOptions, async (t) => {
     const fixture = await startFixture({});
     activeFixtures.push(fixture);
     const probe = fixtureProbe(fixture);
