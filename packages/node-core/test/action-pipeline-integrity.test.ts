@@ -252,8 +252,10 @@ test('a quick adapter leaves no timer armed: the signal is not aborted after the
   assert.equal(abortEvents[0], false);
 
   // Wait past the timeout window. A leaked timer would have fired, aborted the
-  // controller, and left the process alive until then.
-  await new Promise((r) => setTimeout(r, 500));
+  // controller, and left the process alive until then. Poll past the timeout
+  // instead of a fixed sleep so a slow runner does not assert too early.
+  const afterResponse = Date.now();
+  await eventually(() => Date.now() > afterResponse + 500, 2_000);
   assert.equal(abortEvents.length, 1, 'the controller was aborted after a successful run');
   assert.equal(abortEvents[0], false, 'the adapter signal was aborted on a successful run');
 });
@@ -602,8 +604,14 @@ test('a restart re-arms the settlement deadline for an unexpired running send an
   try {
     await core.start(); // calls reconcileCliSettlements → re-arms the timer
 
-    // Wait past the re-armed deadline so the timer fires.
-    await new Promise((r) => setTimeout(r, 500));
+    // Wait past the re-armed deadline so the timer fires. Poll instead of a
+    // fixed sleep.
+    await eventually(async () => {
+      const s = await openStore({ path, nodeId: 'node' });
+      const r = await s.getReceipt('future-deadline-send');
+      await s.close();
+      return r !== null && r.outcome === 'terminated';
+    }, 5_000);
 
     const settled = await openStore({ path, nodeId: 'node' });
     const receipt = await settled.getReceipt('future-deadline-send');
@@ -645,11 +653,12 @@ const settleSessionManifest: AdapterManifest = {
 };
 
 test('Round3: a failed putReceipt in read_cli settlement keeps the deadline timer armed and the receipt still closes', async (t) => {
-  // Instance-scoped settlement timing (Round 4 item 4): this Core alone runs a
-  // short grace so the deadline fires within the test window — the timeout is
-  // 80 ms + grace 200 ms = ~280 ms.
+  // Instance-scoped settlement timing. Grace is at least 5 s so the deadline
+  // cannot race past the send → read → assertion steps on a slow CI runner.
+  // The retry schedule is short so the bounded retry after a recovery still
+  // fits in the test window.
   const settleTiming: SettlementTimingOptions = {
-    cli_settle_grace_ms: 200,
+    cli_settle_grace_ms: 5000,
     settle_retry_delays: [100, 500, 2000],
     settle_retry_max_delay: 5000,
   };
@@ -744,9 +753,10 @@ test('Round3: a failed putReceipt in read_cli settlement keeps the deadline time
   // Restore putReceipt — storage has recovered.
   storeObj.putReceipt = realPutReceipt;
 
-  // Wait for the deadline timer to fire (~280 ms from send_cli start; give it
-  // 2 s to be safe with slow CI).
-  await new Promise((r) => setTimeout(r, 2000));
+  // Wait for the deadline timer to fire (~5 s from send_cli start). Poll
+  // every 25 ms up to 15 s instead of a fixed sleep — a slow CI runner may
+  // need the full window, while a fast one completes early.
+  await eventually(async () => (await receiptOutcome(path, sendReceiptId)) === 'terminated', 15_000);
 
   const afterStore = await openStore({ path, nodeId: 'node' });
   const afterSend = await afterStore.getReceipt(sendReceiptId);
@@ -868,8 +878,8 @@ test('Round3: a failed putReceipt in the deadline closure retries and closes on 
   // Restore putReceipt — storage recovers.
   storeObj.putReceipt = realPutReceipt;
 
-  // Wait for the retry (100 ms delay + margin).
-  await new Promise((r) => setTimeout(r, 500));
+  // Wait for the retry (100 ms delay + margin). Poll instead of a fixed sleep.
+  await eventually(async () => (await receiptOutcome(path, sendReceiptId)) === 'terminated', 2_000);
 
   const afterStore = await openStore({ path, nodeId: 'node' });
   const after = await afterStore.getReceipt(sendReceiptId);
@@ -1023,8 +1033,8 @@ test('Round3: reconciliation closes multiple receipts even when one write fails;
   // Restore putReceipt.
   storeObj.putReceipt = realPutReceipt;
 
-  // Wait for the retry (100 ms + margin).
-  await new Promise((r) => setTimeout(r, 500));
+  // Wait for the retry (100 ms + margin). Poll instead of a fixed sleep.
+  await eventually(async () => (await receiptOutcome(path, failId)) === 'terminated', 2_000);
 
   const afterStore = await openStore({ path, nodeId: 'node' });
   const failAfter = await afterStore.getReceipt(failId);
@@ -1212,8 +1222,9 @@ test('Round4: a one-shot getReceipt rejection on the deadline timer path is caug
   await pipeline.reconcileCliSettlements();
   assert.equal(getFailed, false, 'the getReceipt failure fired before the deadline');
 
-  // Deadline fires at ~250 ms; the retry lands 100 ms later.
-  await new Promise((r) => setTimeout(r, 700));
+  // Deadline fires at ~250 ms; the retry lands 100 ms later. Poll instead of
+  // a fixed sleep.
+  await eventually(async () => (await receiptOutcome(path, sendReceiptId)) === 'terminated', 2_000);
 
   const store = await openStore({ path, nodeId: 'node' });
   const after = await store.getReceipt(sendReceiptId);
@@ -1340,7 +1351,17 @@ test('Round4: an action.finished append that persists then rejects is never dupl
   await eventually(() => appendFailed, 2_000);
   assert.equal(appendFailed, true, 'the injected append failure never fired');
 
-  await new Promise((r) => setTimeout(r, 300));
+  // Poll for the result — the retry (100 ms) recovers the event, or we fail
+  // bounded. The event should be appended exactly once (the retry sees it
+  // already there and stops).
+  await eventually(async () => {
+    const s = await openStore({ path, nodeId: 'node' });
+    const events = (await s.listEvents(job)).filter(
+      (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
+    );
+    await s.close();
+    return events.length >= 1;
+  }, 2_000);
 
   const store = await openStore({ path, nodeId: 'node' });
   const finishedEvents = (await store.listEvents(job)).filter(
@@ -1438,8 +1459,16 @@ test('Round4: a one-shot finished-event append failure in read_cli settlement is
   assert.equal(midSend?.outcome, 'succeeded', 'the terminal receipt write did not land before the append failed');
 
   // The deadline (send + 80 ms timeout + 200 ms grace) fires and recovers the
-  // missing event; the closed receipt is not rewritten.
-  await new Promise((r) => setTimeout(r, 1500));
+  // missing event; the closed receipt is not rewritten. Poll instead of a fixed
+  // sleep.
+  await eventually(async () => {
+    const s = await openStore({ path, nodeId: 'node' });
+    const events = (await s.listEvents(job)).filter(
+      (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
+    );
+    await s.close();
+    return events.length >= 1;
+  }, 3_000);
 
   const afterStore = await openStore({ path, nodeId: 'node' });
   const after = await afterStore.getReceipt(sendReceiptId);
@@ -1597,8 +1626,16 @@ test('Round5: restart reconciliation recovers a missing finished event for a dea
   // Restore appendEvent — storage recovers.
   storeObj.appendEvent = realAppendEvent;
 
-  // Wait for the retry (100 ms + margin) to recover the event.
-  await new Promise((r) => setTimeout(r, 300));
+  // Wait for the retry (100 ms + margin) to recover the event. Poll instead
+  // of a fixed sleep.
+  await eventually(async () => {
+    const s = await openStore({ path, nodeId: 'node' });
+    const events = (await s.listEvents(job)).filter(
+      (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
+    );
+    await s.close();
+    return events.length >= 1;
+  }, 2_000);
 
   const afterStore = await openStore({ path, nodeId: 'node' });
   const after = await afterStore.getReceipt(sendReceiptId);
@@ -1667,8 +1704,15 @@ test('Round5: restart reconciliation recovers a missing finished event for a rea
   // Restore appendEvent — storage recovers.
   storeObj.appendEvent = realAppendEvent;
 
-  // Wait for the retry (100 ms + margin).
-  await new Promise((r) => setTimeout(r, 300));
+  // Wait for the retry (100 ms + margin). Poll instead of a fixed sleep.
+  await eventually(async () => {
+    const s = await openStore({ path, nodeId: 'node' });
+    const events = (await s.listEvents(job)).filter(
+      (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
+    );
+    await s.close();
+    return events.length >= 1;
+  }, 2_000);
 
   const afterStore = await openStore({ path, nodeId: 'node' });
   const after = await afterStore.getReceipt(sendReceiptId);
