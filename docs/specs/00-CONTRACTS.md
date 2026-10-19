@@ -278,3 +278,28 @@ Core accepts only keys declared in `manifest.receipt_fields`; an undeclared key
 is `E_ADAPTER_FAILURE`, not silently omitted. Store migration 002 adds the
 durable column, and existing version-1 databases receive an empty object for
 historical receipts.
+
+### A7 — desktop control: event kinds, `E_APPROVAL_DENIED`, delegated-approval semantics (spec AS) — PROPOSED
+
+**Status: proposed with spec AS (2026-10-13). Not in effect.** It is made by the architect in
+slice AS0, with every consumer in the same diff and the full suite green. An implementation
+worker on any other AS slice still treats `packages/contracts` as frozen.
+
+**Gap.** Spec AS needs events the closed `EventKind` union cannot express, a denial outcome no
+code describes (there is no deny path today, only approve or expire), and approvals decided by
+someone other than a human. The independent review (AS-B7) inventoried the following.
+
+| Contract type | Change |
+|---|---|
+| `EventKind` (`receipt.ts`) | **Structural.** Add `mission.created`, `mission.held`, `mission.resumed`, `mission.ended`, `mission.invalidated`, `desktop.request_received`, `desktop.request_rejected`, `desktop.request_classified`, `desktop.request_authorized`, `desktop.request_reported`, `desktop.request_invalidated`, `desktop.app_granted`, `desktop.app_denied`, `desktop.outcome_uncertain`, `desktop.outcome_unknown`. This is the complete list (spec AS revision 5, stage→event table). The lifecycle stages `replayed`, `policy_allowed` and `executed` use the existing `action.requested`, `action.decided` and `action.finished`. |
+| `ErrorCode` (`errors.ts`) | **Structural.** Add `E_APPROVAL_DENIED`: an approver (agent or operator) refused this exact request, or the mission is held after such a refusal. Distinct from `E_APPROVAL_REQUIRED` (a decision is pending) and `E_APPROVAL_INVALID` (the presented approval does not authorise this action). **Documentation:** `E_SECRET_DETECTED` widens from relay creation to any input refused for secret content. |
+| `ActionSchema` (`capability.ts`) | **Documentation.** `always_requires_approval` means "approval through a gate Node Core recognizes": human, or, for spec AS desktop actions only, a Node-run delegate within an operator mission. `mutates: false` is no longer a blanket exemption: Node Core may gate reads by tier (AS gate table). Fields unchanged. |
+| `ApprovalVerifier` (`ports.ts`) | **Documentation.** Authority remains operator-issued, **or** Node-issued from a delegate verdict that Node Core itself obtained. No external route may decide a delegate approval. `consume` stays atomic and single-use. Signature unchanged. |
+| `ApprovalBinding` (`ports.ts`) | **No change.** AS's server-prepared approval record is the canonical argument object, so `arguments_digest` covers it. |
+| `Receipt.actor` (`receipt.ts`) | **Documentation.** May be `agent:claude` / `agent:codex` for driver actions. `adapter_fields` already fits. |
+| `EventRow`, `AppendEventInput`, `Store` | No change: `payload: JsonValue` fits; `kind` follows the amended union. |
+| `JobEnvelope`, `AdapterManifest`, `AdapterContext`, `ActionResult`, `Adapter`, `SessionAdapter`, `SessionRecord`, `Permission`, `PolicyDecision`, `CapabilityId` | No change. Mission and grant state stay in Node Core; the OS desktop session is not a CLI `SessionRecord`. |
+
+Outside `packages/contracts`, and owned by their AS slices: `NodeCoreOptions` (agent tokens),
+the approval registry's deny path and replay trigger, the approver runner options, and the AS
+adapter API. Binding comments in specs D, T, E and V are updated where behaviour differs.
