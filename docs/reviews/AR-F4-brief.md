@@ -233,3 +233,42 @@ receipt first.
 
 Acceptance: `npm test` on Windows: 0 failed, and every skip is a `TOROS_REAL_TESTS` real-binary
 skip. Then the CI `Root` job is green on the PR head.
+
+## Round 7 — after the Codex review of rounds 5 and 6 (2026-10-19)
+
+Codex: REQUEST CHANGES, three P2 findings, all in `packages/node-core/test/action-pipeline-integrity.test.ts`.
+Round 5's production change is accepted, and so is the fix to the named CI test. Test-only again:
+`packages/*/src` stays unchanged.
+
+1. **Every intermediate-state window is wide, not just the named test's (P2).** Find every
+   assertion of an intermediate state: still `running`, not yet retried, no event yet, or a
+   settlement that must win over the deadline. Each must hold for at least 5 s on a slow runner.
+   At minimum:
+   - the read-settlement event-failure test (80 ms timeout + 200 ms grace): grace ≥ 5 s;
+   - the two tests that assert `running` before a one-shot failure's 100 ms retry: first retry
+     delay ≥ 5 s, or assert the intermediate state before the failure is released, so the retry
+     cannot run in between;
+   - the getReceipt-rejection test with a seeded 250 ms deadline: seed it ≥ 5 s ahead.
+
+   Raise each later poll's timeout to match the wider window, plus margin.
+2. **The persisted-then-rejected regression must prove the retry ran (P2).** In "an
+   action.finished append that persists then rejects is never duplicated", the event already
+   exists before the retry, so polling for it returns at once. Instrument the retry: count the
+   event lookups, or the closure attempts, it performs after the injected failure. Wait until
+   that count shows the retry finished, then assert exactly one `action.finished` and an
+   unchanged receipt. A build that appends unconditionally on retry must fail this test. Check
+   that by temporarily breaking it locally, and say in the summary that you did.
+3. **The restart regressions go through a real restart (P2).** For both the deadline-closure path
+   and the `read_cli` settlement path:
+   - produce the missing-event state through that real closure path in Core A, with a one-shot
+     `action.finished` append failure;
+   - stop Core A before its retry fires;
+   - start a **fresh** Core B against the same database;
+   - assert that Core B's startup alone recovers the event: exactly one `action.finished`, an
+     unchanged receipt, and still one after a second reconciliation.
+
+   Do not seed the receipt by hand after start, and do not call the private reconciliation method.
+   With the round-5 startup filter reverted, both tests must fail. Check that locally as well.
+
+Acceptance: `npm test` on Windows: 0 failed in `node-core`. The real-Codex `adapters-cli` failures
+on the desktop are known and outside scope; list them separately. CI `Root` green on the PR head.
