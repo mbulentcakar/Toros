@@ -1401,7 +1401,7 @@ test('Round4: an action.finished append that persists then rejects is never dupl
 
 test('Round4: a one-shot finished-event append failure in read_cli settlement is recovered by the deadline without rewriting the receipt', async (t) => {
   const settleTiming: SettlementTimingOptions = {
-    cli_settle_grace_ms: 200,
+    cli_settle_grace_ms: 5000,
     settle_retry_delays: [100, 500, 2000],
     settle_retry_max_delay: 5000,
   };
@@ -1599,10 +1599,10 @@ test('Round5: restart reconciliation recovers a missing finished event for a dea
   // startup reconciliation alone recovers the event — without rewriting the
   // receipt or duplicating the event.
   //
-  // Short deadline (80 ms default + 200 ms grace ≈ 280 ms), long first retry
-  // (5 s) so we can stop Core A before the retry fires.
+  // Adequate deadline (~80 ms default + 5 000 ms grace), long first retry (5 s)
+  // so we can stop Core A before the retry fires.
   const settleTiming: SettlementTimingOptions = {
-    cli_settle_grace_ms: 200,
+    cli_settle_grace_ms: 5000,
     settle_retry_delays: [5000, 10000, 20000],
     settle_retry_max_delay: 30000,
   };
@@ -1652,27 +1652,31 @@ test('Round5: restart reconciliation recovers a missing finished event for a dea
   const sessionId = String(started.body.receipt_id);
   assert.ok(sessionId.length > 0, `start_cli failed: ${JSON.stringify(started.body)}`);
 
-  // send_cli → running send receipt with deadline timer armed
-  const sent = await http(portA, 'send_cli', { job_id: job, session_id: sessionId, message: 'go' });
-  assert.equal(sent.body.exchange_state, 'running');
-  const sendReceiptId = String(sent.body.receipt_id);
-
-  // Inject one-shot appendEvent failure for action.finished on the send receipt.
+  // Install the injector BEFORE send_cli so the deadline timer cannot fire
+  // before the injector is in place. Use a mutable variable to capture the
+  // send receipt_id after it becomes known.
   const storeObjA = coreStore(coreA);
   const realAppendEventA = storeObjA.appendEvent.bind(storeObjA);
   let appendFailed = false;
+  let deadlineSendId: string | undefined;
   storeObjA.appendEvent = (input: { kind: string; payload: unknown }): Promise<unknown> => {
     const payload = input.payload as Record<string, unknown>;
-    if (!appendFailed && input.kind === 'action.finished' && payload.receipt_id === sendReceiptId) {
+    if (!appendFailed && deadlineSendId !== undefined && input.kind === 'action.finished' && payload.receipt_id === deadlineSendId) {
       appendFailed = true;
       return Promise.reject(new Error('one-shot deadline append failure'));
     }
     return realAppendEventA(input);
   };
 
-  // Wait for the deadline timer to fire (~280 ms from send). The deadline
+  // send_cli → running send receipt with deadline timer armed
+  const sent = await http(portA, 'send_cli', { job_id: job, session_id: sessionId, message: 'go' });
+  assert.equal(sent.body.exchange_state, 'running');
+  const sendReceiptId = String(sent.body.receipt_id);
+  deadlineSendId = sendReceiptId; // now the injector knows which receipt to fail
+
+  // Wait for the deadline timer to fire (~5080 ms from send). The deadline
   // close writes the terminated receipt, then fails on the event append.
-  await eventually(() => appendFailed, 5_000);
+  await eventually(() => appendFailed, 15_000);
   assert.equal(appendFailed, true, 'the deadline-driven event append never fired');
 
   // The receipt must be terminated (closed by the deadline) but no event yet.
@@ -1716,16 +1720,21 @@ test('Round5: restart reconciliation recovers a missing finished event for a dea
   assert.equal((afterEvents[0]?.payload as Record<string, unknown>).exchange_state, 'unsettled_deadline');
   assert.equal((afterEvents[0]?.payload as Record<string, unknown>).outcome, 'terminated');
 
-  // A second reconciliation must not duplicate the event.
+  // The receipt itself must be unchanged by Core B's startup.
+  assert.deepEqual(afterReceipt, midReceipt, 'Core B rewrote the closed receipt fields');
+
+  // A second reconciliation must not duplicate the event or rewrite the receipt.
   const pipelineB = (coreB as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
   await pipelineB.reconcileCliSettlements();
   const finalStore = await openStore({ path, nodeId: 'node' });
+  const finalReceipt = await finalStore.getReceipt(sendReceiptId);
   const finalEvents = (await finalStore.listEvents(job)).filter(
     (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
   );
   await finalStore.close();
 
   assert.equal(finalEvents.length, 1, 'a second reconciliation duplicated the finished event');
+  assert.deepEqual(finalReceipt, midReceipt, 'the second reconciliation rewrote the receipt');
 });
 
 test('Round5: restart reconciliation recovers a missing finished event for a read_cli-settled send (succeeded) via a fresh Core restart', async (t) => {
@@ -1851,14 +1860,21 @@ test('Round5: restart reconciliation recovers a missing finished event for a rea
   assert.equal((afterEvents[0]?.payload as Record<string, unknown>).exchange_state, 'succeeded');
   assert.equal((afterEvents[0]?.payload as Record<string, unknown>).outcome, 'succeeded');
 
-  // A second reconciliation must not duplicate the event.
+  // The receipt itself must be unchanged by Core B's startup.
+  assert.deepEqual(afterReceipt, midReceipt, 'Core B rewrote the closed receipt fields');
+
+  // A second reconciliation must not duplicate the event or rewrite the receipt.
   const pipelineB = (coreB as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
   await pipelineB.reconcileCliSettlements();
   const finalStore = await openStore({ path, nodeId: 'node' });
+  const finalReceipt = await finalStore.getReceipt(sendReceiptId);
   const finalEvents = (await finalStore.listEvents(job)).filter(
     (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
   );
   await finalStore.close();
 
   assert.equal(finalEvents.length, 1, 'a second reconciliation duplicated the finished event');
+  assert.deepEqual(finalReceipt, midReceipt, 'the second reconciliation rewrote the receipt');
 });
+
+// End of all tests for this file
