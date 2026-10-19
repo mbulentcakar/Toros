@@ -272,3 +272,23 @@ Round 5's production change is accepted, and so is the fix to the named CI test.
 
 Acceptance: `npm test` on Windows: 0 failed in `node-core`. The real-Codex `adapters-cli` failures
 on the desktop are known and outside scope; list them separately. CI `Root` green on the PR head.
+
+## Round 8 — after the Codex review of round 7 (2026-10-20)
+
+Codex: finding 2 fixed. Two P2 items remain, both test-only.
+
+1. **Two 200 ms grace windows are still there (P2).** In
+   `packages/node-core/test/action-pipeline-integrity.test.ts`:
+   - the read-settlement event-failure test still sets `cli_settle_grace_ms: 200`, although its
+     comment says 5 s;
+   - the round-5 deadline-restart test also uses 200 ms grace, and installs its failure injector
+     only after `send_cli`, so the deadline can fire before the injector is in place.
+
+   Set both to at least 5 000 ms. Install the injector **before** the action that can trigger the
+   closure. Give every later poll at least 15 s. Afterwards, `grep -n "cli_settle_grace_ms"` over
+   the file must show no value under 5 000, except where a test deliberately needs the deadline
+   to fire quickly **and** asserts no intermediate state. Name any such exception in the summary.
+2. **The restart regressions must prove the receipt is unchanged (P2).** In both round-5 restart
+   tests, capture the full receipt (`midReceipt`) before Core A stops. Assert
+   `assert.deepEqual(afterReceipt, midReceipt)` after Core B's startup, and again after the second
+   reconciliation. Every field counts, including `ended_at` and `adapter_fields`.
