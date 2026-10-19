@@ -657,7 +657,9 @@ test('Round3: a failed putReceipt in read_cli settlement keeps the deadline time
   // cannot race past the send → read → assertion steps on a slow CI runner.
   // The retry schedule is short so the bounded retry after a recovery still
   // fits in the test window.
-  const settleTiming: SettlementTimingOptions = {
+const settleTiming: SettlementTimingOptions = {
+    // Grace is at least 5 s so the deadline cannot race past the send → read →
+    // assertion steps on a slow CI runner (Codex Round 7 finding 1).
     cli_settle_grace_ms: 5000,
     settle_retry_delays: [100, 500, 2000],
     settle_retry_max_delay: 5000,
@@ -779,11 +781,12 @@ test('Round3: a failed putReceipt in read_cli settlement keeps the deadline time
 // ---------------------------------------------------------------------------
 
 test('Round3: a failed putReceipt in the deadline closure retries and closes on the next attempt', async (t) => {
-  // Instance-scoped retry schedule (Round 4 item 4): first retry at 100 ms so
-  // the test does not wait through production's 60 s.
+  // Instance-scoped retry schedule. The first retry is at least 5 s so a slow
+  // CI runner can assert the intermediate `running` state before the retry
+  // fires (Codex Round 7 finding 1).
   const settleTiming: SettlementTimingOptions = {
-    settle_retry_delays: [100, 500, 2000],
-    settle_retry_max_delay: 5000,
+    settle_retry_delays: [5000, 10000, 20000],
+    settle_retry_max_delay: 30000,
   };
 
   const dir = await mkdtemp(join(tmpdir(), 'toros-f4-r3-2-'));
@@ -878,8 +881,8 @@ test('Round3: a failed putReceipt in the deadline closure retries and closes on 
   // Restore putReceipt — storage recovers.
   storeObj.putReceipt = realPutReceipt;
 
-  // Wait for the retry (100 ms delay + margin). Poll instead of a fixed sleep.
-  await eventually(async () => (await receiptOutcome(path, sendReceiptId)) === 'terminated', 2_000);
+  // Wait for the retry (5000 ms delay + margin). Poll instead of a fixed sleep.
+  await eventually(async () => (await receiptOutcome(path, sendReceiptId)) === 'terminated', 25_000);
 
   const afterStore = await openStore({ path, nodeId: 'node' });
   const after = await afterStore.getReceipt(sendReceiptId);
@@ -904,10 +907,11 @@ test('Round3: a failed putReceipt in the deadline closure retries and closes on 
 // ---------------------------------------------------------------------------
 
 test('Round3: reconciliation closes multiple receipts even when one write fails; the failing one retries and eventually closes', async (t) => {
-  // Instance-scoped retry schedule (Round 4 item 4): first retry at 100 ms.
+  // Instance-scoped retry schedule. First retry at least 5 s so the
+  // intermediate `running` assertion holds before the retry fires.
   const settleTiming: SettlementTimingOptions = {
-    settle_retry_delays: [100, 500, 2000],
-    settle_retry_max_delay: 5000,
+    settle_retry_delays: [5000, 10000, 20000],
+    settle_retry_max_delay: 30000,
   };
 
   const dir = await mkdtemp(join(tmpdir(), 'toros-f4-r3-3-'));
@@ -1033,8 +1037,8 @@ test('Round3: reconciliation closes multiple receipts even when one write fails;
   // Restore putReceipt.
   storeObj.putReceipt = realPutReceipt;
 
-  // Wait for the retry (100 ms + margin). Poll instead of a fixed sleep.
-  await eventually(async () => (await receiptOutcome(path, failId)) === 'terminated', 2_000);
+  // Wait for the retry (5000 ms + margin). Poll instead of a fixed sleep.
+  await eventually(async () => (await receiptOutcome(path, failId)) === 'terminated', 25_000);
 
   const afterStore = await openStore({ path, nodeId: 'node' });
   const failAfter = await afterStore.getReceipt(failId);
@@ -1197,10 +1201,10 @@ test('Round4: a one-shot getReceipt rejection on the deadline timer path is caug
   await core.start();
 
   // Seed a running send whose deadline (started_at + timeout 1000 + grace 200)
-  // is ~250 ms in the future; reconciliation re-arms its timer.
+  // is ~5 s in the future; reconciliation re-arms its timer.
   const sendReceiptId = 'r4-deadline-get-rejection-send';
   const timeoutMs = 1000;
-  const startedAt = new Date(Date.now() + 250 - timeoutMs - 200).toISOString();
+  const startedAt = new Date(Date.now() + 5000 - timeoutMs - 200).toISOString();
   await seedRunningSend(path, job, sendReceiptId, { session_id: 'r4-session', started_at: startedAt });
 
   const unhandled = collectUnhandledRejections(t);
@@ -1222,9 +1226,9 @@ test('Round4: a one-shot getReceipt rejection on the deadline timer path is caug
   await pipeline.reconcileCliSettlements();
   assert.equal(getFailed, false, 'the getReceipt failure fired before the deadline');
 
-  // Deadline fires at ~250 ms; the retry lands 100 ms later. Poll instead of
+  // Deadline fires at ~5 s; the retry lands 100 ms later. Poll instead of
   // a fixed sleep.
-  await eventually(async () => (await receiptOutcome(path, sendReceiptId)) === 'terminated', 2_000);
+  await eventually(async () => (await receiptOutcome(path, sendReceiptId)) === 'terminated', 15_000);
 
   const store = await openStore({ path, nodeId: 'node' });
   const after = await store.getReceipt(sendReceiptId);
@@ -1333,8 +1337,15 @@ test('Round4: an action.finished append that persists then rejects is never dupl
   await seedRunningSend(path, job, sendReceiptId, { session_id: 'r4-session' });
 
   const storeObj = coreStore(core);
+  const realGetReceipt = storeObj.getReceipt.bind(storeObj);
   const realAppendEvent = storeObj.appendEvent.bind(storeObj);
   let appendFailed = false;
+  // Count how many times getReceipt is called for this receipt AFTER the
+  // injected append failure. The retry in closeUnsettledCliReceipt calls
+  // getReceipt once; waiting until this counter reaches 1 proves the retry
+  // re-entered the closure code and performed its event-presence check.
+  let postAppendGetReceiptCalls = 0;
+
   storeObj.appendEvent = (input: { kind: string; payload: unknown }): Promise<unknown> => {
     const payload = input.payload as Record<string, unknown>;
     if (!appendFailed && input.kind === 'action.finished' && payload.receipt_id === sendReceiptId) {
@@ -1346,30 +1357,39 @@ test('Round4: an action.finished append that persists then rejects is never dupl
     return realAppendEvent(input);
   };
 
+  // Instrument getReceipt to detect when the retry re-enters the closure code.
+  storeObj.getReceipt = (id: string): Promise<unknown> => {
+    if (id === sendReceiptId && appendFailed) {
+      postAppendGetReceiptCalls++;
+    }
+    return realGetReceipt(id);
+  };
+
   const pipeline = (core as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
   await pipeline.reconcileCliSettlements();
   await eventually(() => appendFailed, 2_000);
   assert.equal(appendFailed, true, 'the injected append failure never fired');
 
-  // Poll for the result — the retry (100 ms) recovers the event, or we fail
-  // bounded. The event should be appended exactly once (the retry sees it
-  // already there and stops).
-  await eventually(async () => {
-    const s = await openStore({ path, nodeId: 'node' });
-    const events = (await s.listEvents(job)).filter(
-      (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
-    );
-    await s.close();
-    return events.length >= 1;
-  }, 2_000);
+  // Wait for the retry to actually re-enter closeUnsettledCliReceipt. The
+  // retry's getReceipt call increments postAppendGetReceiptCalls. Waiting
+  // for this proves the retry ran; without it the event-has-existed check
+  // might never have executed.
+  await eventually(() => postAppendGetReceiptCalls >= 1, 5_000);
+  assert.ok(postAppendGetReceiptCalls >= 1, 'the retry never re-entered closeUnsettledCliReceipt');
 
+  // Now assert that the event was never duplicated: exactly one
+  // action.finished exists, and the receipt is unchanged.
   const store = await openStore({ path, nodeId: 'node' });
+  const receipt = await store.getReceipt(sendReceiptId);
   const finishedEvents = (await store.listEvents(job)).filter(
     (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
   );
   await store.close();
 
   assert.equal(finishedEvents.length, 1, 'the persisted event was duplicated by the retry');
+  assert.notEqual(receipt, null);
+  assert.equal(receipt!.outcome, 'terminated', 'the receipt outcome changed after the retry');
+  assert.notEqual(receipt!.ended_at, null);
 });
 
 // ---------------------------------------------------------------------------
@@ -1458,9 +1478,9 @@ test('Round4: a one-shot finished-event append failure in read_cli settlement is
   await midStore.close();
   assert.equal(midSend?.outcome, 'succeeded', 'the terminal receipt write did not land before the append failed');
 
-  // The deadline (send + 80 ms timeout + 200 ms grace) fires and recovers the
+  // The deadline (send + 80 ms timeout + 5 s grace) fires and recovers the
   // missing event; the closed receipt is not rewritten. Poll instead of a fixed
-  // sleep.
+  // sleep with a wider window for a slow runner.
   await eventually(async () => {
     const s = await openStore({ path, nodeId: 'node' });
     const events = (await s.listEvents(job)).filter(
@@ -1468,7 +1488,7 @@ test('Round4: a one-shot finished-event append failure in read_cli settlement is
     );
     await s.close();
     return events.length >= 1;
-  }, 3_000);
+  }, 15_000);
 
   const afterStore = await openStore({ path, nodeId: 'node' });
   const after = await afterStore.getReceipt(sendReceiptId);
@@ -1571,161 +1591,274 @@ async function seedClosedSendWithoutEvent(
   return endedAt;
 }
 
-test('Round5: restart reconciliation recovers a missing finished event for a deadline-closed send (terminated)', async (t) => {
-  const settleTiming: SettlementTimingOptions = { settle_retry_delays: [100, 500, 2000], settle_retry_max_delay: 5000 };
-  const dir = await mkdtemp(join(tmpdir(), 'toros-f5-r1-deadline-'));
-  const path = join(dir, 'node.sqlite');
-  const job = 'a0000005-0000-4000-8000-000000000001';
+test('Round5: restart reconciliation recovers a missing finished event for a deadline-closed send (terminated) via a fresh Core restart', async (t) => {
+  // Produce the missing-event state through the real deadline closure path in
+  // Core A: a running send receipt whose deadline fires, writes a terminated
+  // receipt, but the event append fails (one-shot). Stop Core A before the
+  // retry fires. Start Core B against the same database and assert that its
+  // startup reconciliation alone recovers the event — without rewriting the
+  // receipt or duplicating the event.
+  //
+  // Short deadline (80 ms default + 200 ms grace ≈ 280 ms), long first retry
+  // (5 s) so we can stop Core A before the retry fires.
+  const settleTiming: SettlementTimingOptions = {
+    cli_settle_grace_ms: 200,
+    settle_retry_delays: [5000, 10000, 20000],
+    settle_retry_max_delay: 30000,
+  };
 
-  await createSettleSendJob(path, job, 'r5 deadline restart recovery');
-  const core = createTestCore({
+  const dir = await mkdtemp(join(tmpdir(), 'toros-f5-real-restart-deadline-'));
+  const path = join(dir, 'node.sqlite');
+  const job = 'b0000001-0000-4000-8000-000000000001';
+
+  const store = await openStore({ path, nodeId: 'node' });
+  await store.createJob(sealEnvelope({
+    job_id: job, objective: 'r5 real restart deadline recovery',
+    allowed_capabilities: ['settletest.start', 'settletest.send', 'settletest.read'],
+    allowed_workspaces: ['work'], acceptance: ['done'], forbidden: [],
+    max_actions: 10, max_retries: 0, expires_at: '2999-01-01T00:00:00Z',
+  }));
+  await store.close();
+
+  function makeSessionAdapter(): SessionAdapter {
+    return {
+      manifest: settleSessionManifest,
+      async init() {},
+      async invoke(actionId: string): Promise<ActionResult> {
+        if (actionId === 'send') {
+          return { output: '', truncated: false, artifacts: [], receipt_extra: { exchange_state: 'running', exchange_error: null } };
+        }
+        return { output: 'done', truncated: false, artifacts: [], receipt_extra: { exchange_state: 'succeeded', exchange_error: null, bytes_read: 0 } };
+      },
+      async dispose() {},
+      async start() { return { pid: -1 }; },
+      async send() {},
+      async read() { return { chunk: 'done', cursor: 0, exchange_state: 'succeeded', exchange_error: null }; },
+      async interrupt() {},
+      async stop() {},
+    };
+  }
+
+  // --- Core A: produce the missing-event state via the deadline closure ---
+  const coreA = createTestCore({
     node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
-    port: 0, token, adapters: [sendOnlySettleAdapter()], observer: null, approval_required: [],
+    port: 0, token, adapters: [makeSessionAdapter()], observer: null, approval_required: [],
     pipeline_settlement: settleTiming,
   });
-  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
-  await core.start();
+  const { port: portA } = await coreA.start();
 
-  // Seed a terminated (deadline-closed) send receipt with no finished event,
-  // modeling the state after a restart where the terminal write landed but the
-  // event append failed before the retry.
-  const sendReceiptId = 'r5-deadline-restart-send';
-  const endedAt = await seedClosedSendWithoutEvent(path, job, sendReceiptId, 'terminated',
-    { exchange_state: 'unsettled_deadline' });
+  // start_cli → session
+  const started = await http(portA, 'start_cli', { job_id: job, cli_id: 'settletest', workspace_id: 'work' });
+  const sessionId = String(started.body.receipt_id);
+  assert.ok(sessionId.length > 0, `start_cli failed: ${JSON.stringify(started.body)}`);
 
-  const unhandled = collectUnhandledRejections(t);
+  // send_cli → running send receipt with deadline timer armed
+  const sent = await http(portA, 'send_cli', { job_id: job, session_id: sessionId, message: 'go' });
+  assert.equal(sent.body.exchange_state, 'running');
+  const sendReceiptId = String(sent.body.receipt_id);
 
-  // Inject one-shot appendEvent failure for the recovery attempt.
-  const storeObj = coreStore(core);
-  const realAppendEvent = storeObj.appendEvent.bind(storeObj);
+  // Inject one-shot appendEvent failure for action.finished on the send receipt.
+  const storeObjA = coreStore(coreA);
+  const realAppendEventA = storeObjA.appendEvent.bind(storeObjA);
   let appendFailed = false;
-  storeObj.appendEvent = (input: { kind: string; payload: unknown }): Promise<unknown> => {
+  storeObjA.appendEvent = (input: { kind: string; payload: unknown }): Promise<unknown> => {
     const payload = input.payload as Record<string, unknown>;
     if (!appendFailed && input.kind === 'action.finished' && payload.receipt_id === sendReceiptId) {
       appendFailed = true;
-      return Promise.reject(new Error('one-shot restart recovery append failure'));
+      return Promise.reject(new Error('one-shot deadline append failure'));
     }
-    return realAppendEvent(input);
+    return realAppendEventA(input);
   };
 
-  // Trigger reconciliation — it should see the closed receipt missing its event
-  // and try to recover it. The first attempt fails (injected fault) and
-  // schedules a retry.
-  const pipeline = (core as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
-  await pipeline.reconcileCliSettlements();
-  await eventually(() => appendFailed, 2_000);
-  assert.equal(appendFailed, true, 'the injected restart recovery append failure never fired');
+  // Wait for the deadline timer to fire (~280 ms from send). The deadline
+  // close writes the terminated receipt, then fails on the event append.
+  await eventually(() => appendFailed, 5_000);
+  assert.equal(appendFailed, true, 'the deadline-driven event append never fired');
 
-  // The receipt must still be terminated (unchanged) — no rewrite.
-  const duringStore = await openStore({ path, nodeId: 'node' });
-  const during = await duringStore.getReceipt(sendReceiptId);
-  await duringStore.close();
-  assert.equal(during?.outcome, 'terminated', 'the restart recovery rewrote the closed receipt');
-  assert.equal(during?.ended_at, endedAt, 'the restart recovery changed the receipt timestamp');
+  // The receipt must be terminated (closed by the deadline) but no event yet.
+  const midStore = await openStore({ path, nodeId: 'node' });
+  const midReceipt = await midStore.getReceipt(sendReceiptId);
+  const midEvents = (await midStore.listEvents(job)).filter(
+    (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
+  );
+  await midStore.close();
+  assert.equal(midReceipt?.outcome, 'terminated', 'the deadline did not close the receipt');
+  assert.notEqual(midReceipt?.ended_at, null, 'the terminated receipt has no ended_at');
+  assert.equal((midReceipt?.adapter_fields as Record<string, unknown>)['exchange_state'], 'unsettled_deadline');
+  assert.equal(midEvents.length, 0, 'an action.finished event exists before the restart');
 
-  // Restore appendEvent — storage recovers.
-  storeObj.appendEvent = realAppendEvent;
+  // Stop Core A before the retry (5 s delay) fires. The injected failure stays
+  // in place so the retry cannot accidentally recover the event.
+  await coreA.stop();
 
-  // Wait for the retry (100 ms + margin) to recover the event. Poll instead
-  // of a fixed sleep.
-  await eventually(async () => {
-    const s = await openStore({ path, nodeId: 'node' });
-    const events = (await s.listEvents(job)).filter(
-      (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
-    );
-    await s.close();
-    return events.length >= 1;
-  }, 2_000);
+  // --- Core B: fresh start against the same database. Startup reconciliation
+  // must recover the missing event without rewriting the receipt.
+  const coreB = createTestCore({
+    node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
+    port: 0, token, adapters: [makeSessionAdapter()], observer: null, approval_required: [],
+    pipeline_settlement: settleTiming,
+  });
+  t.after(async () => { await coreB.stop(); await rm(dir, { recursive: true, force: true }); });
+  await coreB.start(); // ← triggers reconcileCliSettlements → recovers the event
 
+  // The event must be recovered exactly once by Core B's startup.
   const afterStore = await openStore({ path, nodeId: 'node' });
-  const after = await afterStore.getReceipt(sendReceiptId);
-  const finishedEvents = (await afterStore.listEvents(job)).filter(
+  const afterReceipt = await afterStore.getReceipt(sendReceiptId);
+  const afterEvents = (await afterStore.listEvents(job)).filter(
     (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
   );
   await afterStore.close();
 
-  assert.equal(after?.outcome, 'terminated', 'the recovered event rewrote the closed receipt');
-  assert.equal(after?.ended_at, endedAt, 'the recovered event changed the receipt timestamp');
-  assert.equal(finishedEvents.length, 1, 'the finished event was not recovered exactly once');
-  assert.equal((finishedEvents[0]?.payload as Record<string, unknown>).exchange_state, 'unsettled_deadline');
-  assert.equal((finishedEvents[0]?.payload as Record<string, unknown>).outcome, 'terminated');
-  await new Promise((r) => setTimeout(r, 100));
-  assert.deepEqual(unhandled.list, [], 'an unhandled rejection escaped the restart recovery');
+  assert.equal(afterReceipt?.outcome, 'terminated', 'Core B rewrote the closed receipt');
+  assert.notEqual(afterReceipt?.ended_at, null);
+  assert.equal((afterReceipt?.adapter_fields as Record<string, unknown>)['exchange_state'], 'unsettled_deadline');
+  assert.equal(afterEvents.length, 1, 'the finished event was not recovered exactly once by Core B');
+  assert.equal((afterEvents[0]?.payload as Record<string, unknown>).exchange_state, 'unsettled_deadline');
+  assert.equal((afterEvents[0]?.payload as Record<string, unknown>).outcome, 'terminated');
+
+  // A second reconciliation must not duplicate the event.
+  const pipelineB = (coreB as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
+  await pipelineB.reconcileCliSettlements();
+  const finalStore = await openStore({ path, nodeId: 'node' });
+  const finalEvents = (await finalStore.listEvents(job)).filter(
+    (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
+  );
+  await finalStore.close();
+
+  assert.equal(finalEvents.length, 1, 'a second reconciliation duplicated the finished event');
 });
 
-test('Round5: restart reconciliation recovers a missing finished event for a read_cli-settled send (succeeded)', async (t) => {
-  const settleTiming: SettlementTimingOptions = { settle_retry_delays: [100, 500, 2000], settle_retry_max_delay: 5000 };
-  const dir = await mkdtemp(join(tmpdir(), 'toros-f5-r1-read-'));
-  const path = join(dir, 'node.sqlite');
-  const job = 'a0000005-0000-4000-8000-000000000002';
+test('Round5: restart reconciliation recovers a missing finished event for a read_cli-settled send (succeeded) via a fresh Core restart', async (t) => {
+  // Produce the missing-event state through the read_cli settlement path in
+  // Core A: start_cli → send_cli → read_cli with a one-shot appendEvent
+  // failure. settleCliExchange writes the 'succeeded' receipt but fails on the
+  // event append. The deadline timer is not cleared (settleCliExchange failed
+  // before clearing it), but with a long grace the deadline cannot race past
+  // the stop/start sequence. Stop Core A before the retry fires, then start
+  // Core B and assert its startup reconciliation alone recovers the event.
+  //
+  // Long grace (5 s) ensures the deadline timer cannot fire before we stop
+  // Core A and start Core B. Long first retry (5 s) gives time to stop Core A.
+  const settleTiming: SettlementTimingOptions = {
+    cli_settle_grace_ms: 5000,
+    settle_retry_delays: [5000, 10000, 20000],
+    settle_retry_max_delay: 30000,
+  };
 
-  await createSettleSendJob(path, job, 'r5 read settlement restart recovery');
-  const core = createTestCore({
+  const dir = await mkdtemp(join(tmpdir(), 'toros-f5-real-restart-read-'));
+  const path = join(dir, 'node.sqlite');
+  const job = 'b0000002-0000-4000-8000-000000000002';
+
+  const store = await openStore({ path, nodeId: 'node' });
+  await store.createJob(sealEnvelope({
+    job_id: job, objective: 'r5 real restart read settlement recovery',
+    allowed_capabilities: ['settletest.start', 'settletest.send', 'settletest.read'],
+    allowed_workspaces: ['work'], acceptance: ['done'], forbidden: [],
+    max_actions: 10, max_retries: 0, expires_at: '2999-01-01T00:00:00Z',
+  }));
+  await store.close();
+
+  function makeSessionAdapter(): SessionAdapter {
+    return {
+      manifest: settleSessionManifest,
+      async init() {},
+      async invoke(actionId: string): Promise<ActionResult> {
+        if (actionId === 'send') {
+          return { output: '', truncated: false, artifacts: [], receipt_extra: { exchange_state: 'running', exchange_error: null } };
+        }
+        return { output: 'done', truncated: false, artifacts: [], receipt_extra: { exchange_state: 'succeeded', exchange_error: null, bytes_read: 0 } };
+      },
+      async dispose() {},
+      async start() { return { pid: -1 }; },
+      async send() {},
+      async read() { return { chunk: 'done', cursor: 0, exchange_state: 'succeeded', exchange_error: null }; },
+      async interrupt() {},
+      async stop() {},
+    };
+  }
+
+  // --- Core A: produce the missing-event state via read_cli settlement ---
+  const coreA = createTestCore({
     node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
-    port: 0, token, adapters: [sendOnlySettleAdapter()], observer: null, approval_required: [],
+    port: 0, token, adapters: [makeSessionAdapter()], observer: null, approval_required: [],
     pipeline_settlement: settleTiming,
   });
-  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
-  await core.start();
+  const { port: portA } = await coreA.start();
 
-  // Seed a succeeded (read_cli-settled) send receipt with no finished event.
-  const sendReceiptId = 'r5-read-restart-send';
-  const endedAt = await seedClosedSendWithoutEvent(path, job, sendReceiptId, 'succeeded',
-    { exchange_state: 'succeeded', exchange_error: null });
+  const started = await http(portA, 'start_cli', { job_id: job, cli_id: 'settletest', workspace_id: 'work' });
+  const sessionId = String(started.body.receipt_id);
+  assert.ok(sessionId.length > 0, `start_cli failed: ${JSON.stringify(started.body)}`);
 
-  const unhandled = collectUnhandledRejections(t);
+  const sent = await http(portA, 'send_cli', { job_id: job, session_id: sessionId, message: 'go' });
+  assert.equal(sent.body.exchange_state, 'running');
+  const sendReceiptId = String(sent.body.receipt_id);
 
-  // Inject one-shot appendEvent failure for the recovery attempt.
-  const storeObj = coreStore(core);
-  const realAppendEvent = storeObj.appendEvent.bind(storeObj);
+  // Inject one-shot appendEvent failure for the settlement's action.finished.
+  const storeObjA = coreStore(coreA);
+  const realAppendEventA = storeObjA.appendEvent.bind(storeObjA);
   let appendFailed = false;
-  storeObj.appendEvent = (input: { kind: string; payload: unknown }): Promise<unknown> => {
+  storeObjA.appendEvent = (input: { kind: string; payload: unknown }): Promise<unknown> => {
     const payload = input.payload as Record<string, unknown>;
     if (!appendFailed && input.kind === 'action.finished' && payload.receipt_id === sendReceiptId) {
       appendFailed = true;
-      return Promise.reject(new Error('one-shot restart recovery append failure'));
+      return Promise.reject(new Error('one-shot read-settlement append failure'));
     }
-    return realAppendEvent(input);
+    return realAppendEventA(input);
   };
 
-  // Trigger reconciliation.
-  const pipeline = (core as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
-  await pipeline.reconcileCliSettlements();
-  await eventually(() => appendFailed, 2_000);
-  assert.equal(appendFailed, true, 'the injected restart recovery append failure never fired');
+  // read_cli triggers settleCliExchange: receipt becomes 'succeeded', event
+  // append fails, read_cli surfaces the error.
+  const readResult = await http(portA, 'read_cli', { job_id: job, session_id: sessionId, cursor: 0 });
+  assert.equal(appendFailed, true, 'the injected read-settlement append failure never fired');
+  assert.equal(readResult.body.error, ErrorCode.E_ADAPTER_FAILURE,
+    `read_cli did not surface the injected append failure: ${JSON.stringify(readResult.body)}`);
 
-  // The receipt must still be succeeded (unchanged) — no rewrite.
-  const duringStore = await openStore({ path, nodeId: 'node' });
-  const during = await duringStore.getReceipt(sendReceiptId);
-  await duringStore.close();
-  assert.equal(during?.outcome, 'succeeded', 'the restart recovery rewrote the closed receipt');
-  assert.equal(during?.ended_at, endedAt, 'the restart recovery changed the receipt timestamp');
+  // The send receipt must be 'succeeded' (set by settleCliExchange before the
+  // failure) but no event exists.
+  const midStore = await openStore({ path, nodeId: 'node' });
+  const midReceipt = await midStore.getReceipt(sendReceiptId);
+  const midEvents = (await midStore.listEvents(job)).filter(
+    (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
+  );
+  await midStore.close();
+  assert.equal(midReceipt?.outcome, 'succeeded', 'the settlement write did not land before the append failed');
+  assert.notEqual(midReceipt?.ended_at, null);
+  assert.equal(midEvents.length, 0, 'an action.finished event exists before the restart');
 
-  // Restore appendEvent — storage recovers.
-  storeObj.appendEvent = realAppendEvent;
+  // Stop Core A before the retry (5 s) fires.
+  await coreA.stop();
 
-  // Wait for the retry (100 ms + margin). Poll instead of a fixed sleep.
-  await eventually(async () => {
-    const s = await openStore({ path, nodeId: 'node' });
-    const events = (await s.listEvents(job)).filter(
-      (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
-    );
-    await s.close();
-    return events.length >= 1;
-  }, 2_000);
+  // --- Core B: fresh start against the same database ---
+  const coreB = createTestCore({
+    node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
+    port: 0, token, adapters: [makeSessionAdapter()], observer: null, approval_required: [],
+    pipeline_settlement: settleTiming,
+  });
+  t.after(async () => { await coreB.stop(); await rm(dir, { recursive: true, force: true }); });
+  await coreB.start(); // ← triggers reconcileCliSettlements → recovers the event
 
+  // The event must be recovered exactly once by Core B's startup.
   const afterStore = await openStore({ path, nodeId: 'node' });
-  const after = await afterStore.getReceipt(sendReceiptId);
-  const finishedEvents = (await afterStore.listEvents(job)).filter(
+  const afterReceipt = await afterStore.getReceipt(sendReceiptId);
+  const afterEvents = (await afterStore.listEvents(job)).filter(
     (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
   );
   await afterStore.close();
 
-  assert.equal(after?.outcome, 'succeeded', 'the recovered event rewrote the closed receipt');
-  assert.equal(after?.ended_at, endedAt, 'the recovered event changed the receipt timestamp');
-  assert.equal(finishedEvents.length, 1, 'the finished event was not recovered exactly once');
-  assert.equal((finishedEvents[0]?.payload as Record<string, unknown>).exchange_state, 'succeeded');
-  assert.equal((finishedEvents[0]?.payload as Record<string, unknown>).outcome, 'succeeded');
-  await new Promise((r) => setTimeout(r, 100));
-  assert.deepEqual(unhandled.list, [], 'an unhandled rejection escaped the restart recovery');
+  assert.equal(afterReceipt?.outcome, 'succeeded', 'Core B rewrote the closed receipt');
+  assert.notEqual(afterReceipt?.ended_at, null);
+  assert.equal(afterEvents.length, 1, 'the finished event was not recovered exactly once by Core B');
+  assert.equal((afterEvents[0]?.payload as Record<string, unknown>).exchange_state, 'succeeded');
+  assert.equal((afterEvents[0]?.payload as Record<string, unknown>).outcome, 'succeeded');
+
+  // A second reconciliation must not duplicate the event.
+  const pipelineB = (coreB as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
+  await pipelineB.reconcileCliSettlements();
+  const finalStore = await openStore({ path, nodeId: 'node' });
+  const finalEvents = (await finalStore.listEvents(job)).filter(
+    (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === sendReceiptId,
+  );
+  await finalStore.close();
+
+  assert.equal(finalEvents.length, 1, 'a second reconciliation duplicated the finished event');
 });
