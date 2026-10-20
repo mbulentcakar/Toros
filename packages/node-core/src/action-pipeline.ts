@@ -589,9 +589,22 @@ export function createActionPipeline(deps: {
             reject(timedOut);
           }, timeoutMs);
         });
+        // The deadline rejects with E_TIMEOUT when the timer fires. A handler
+        // must exist from the moment the promise is created (Round 3 item 1):
+        // if a resolver or invoke throws SYNCHRONOUSLY, `Promise.race` is never
+        // constructed, so it never attaches a rejection handler — and the timer
+        // firing later (while the catch path awaits failure persistence) would
+        // be an unhandled rejection that terminates Core under Node's default
+        // `--unhandled-rejections=throw`. This no-op handler keeps the promise
+        // observed; the races below still race the original `deadline`.
+        void deadline.catch(() => {});
         async function withinTimeout<T>(work: () => Promise<T>): Promise<T> {
           try {
-            const outcome = await Promise.race([work(), deadline]);
+            // `work()` is invoked inside the `try` (Round 3 item 1), so a
+            // synchronous throw is caught exactly like a rejected promise —
+            // no escape path leaves `deadline` without a rejection handler.
+            const workPromise = work();
+            const outcome = await Promise.race([workPromise, deadline]);
             if (didTimeOut) throw timedOut;
             return outcome;
           } catch (error: unknown) {

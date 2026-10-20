@@ -542,3 +542,85 @@ test('the CLI send/read path keeps the send receipt counts', async (t) => {
   assert.equal(fields['targets_allowed'], 2, 'the send receipt lost its targets_allowed count to a later read');
   assert.equal(fields['targets_denied'], 0);
 });
+
+// ---------------------------------------------------------------------------
+// Test 9 — a synchronous resolver throw must not leak an unhandled rejection
+// (round 3 item 1). The resolver throws BEFORE `withinTimeout` constructs its
+// `Promise.race`, so `deadline` never gets a handler from the race. With the
+// failure-persistence write delayed past the action timeout, the deadline timer
+// fires mid-catch; without `void deadline.catch(() => {})` its rejection is
+// unhandled and would terminate Core under `--unhandled-rejections=throw`.
+// ---------------------------------------------------------------------------
+
+test('a resolver that throws synchronously, with a slow failure write, produces no unhandled rejection and clears the deadline timer', async (t) => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+  process.on('unhandledRejection', onUnhandled);
+  t.after(() => process.removeListener('unhandledRejection', onUnhandled));
+
+  // 80 ms is the action's timeout; nothing else in this fixture arms an 80 ms
+  // timer, so the handles recorded here are exactly the deadline timers. Capture
+  // both the armed handle and the clear to prove the `finally` really cleared it.
+  const deadlineTimeoutMs = 80;
+  const armedDeadlines = new Set<NodeJS.Timeout>();
+  const clearedHandles = new Set<NodeJS.Timeout>();
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = ((handler: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+    const handle = realSetTimeout(handler as (...args: never[]) => void, delay, ...args as never[]);
+    if (delay === deadlineTimeoutMs) armedDeadlines.add(handle);
+    return handle;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = ((handle: NodeJS.Timeout) => {
+    clearedHandles.add(handle);
+    realClearTimeout(handle);
+  }) as unknown as typeof clearTimeout;
+  t.after(() => { globalThis.setTimeout = realSetTimeout; globalThis.clearTimeout = realClearTimeout; });
+
+  const adapter: Adapter = {
+    manifest: fulfillableManifest({ default_timeout_ms: deadlineTimeoutMs }),
+    resolver: {
+      // NOT `async`: throwing without awaiting is the synchronous throw the
+      // round-3 finding is about (an `async` function would return a rejected
+      // promise instead, which the race would already have handled).
+      resolve(): Promise<readonly ResolvedTarget[]> {
+        throw new Error('synchronous resolver boom');
+      },
+    },
+    async init() {},
+    async invoke(): Promise<ActionResult> { return { output: 'ok', truncated: false, artifacts: [], receipt_extra: {} }; },
+    async dispose() {},
+  };
+  const f = await fixture(adapter, { allowed_apps: [{ image_sha256: 'a'.repeat(64) }] });
+  t.after(() => finish(f));
+
+  // Delay the failure-persistence write past the 80 ms deadline, so the timer
+  // fires while the catch path awaits the store (the exact window the finding
+  // describes: SQLite busy retries yield the event loop).
+  const storeObj = (f.core as unknown as { store: { putReceipt: (r: unknown) => Promise<unknown> } }).store;
+  const realPutReceipt = storeObj.putReceipt.bind(storeObj);
+  storeObj.putReceipt = (r: unknown): Promise<unknown> => {
+    if ((r as { readonly outcome?: string }).outcome === 'failed') return sleep(200).then(() => realPutReceipt(r));
+    return realPutReceipt(r);
+  };
+
+  const response = await invoke(f.port, f.job);
+  assert.equal(response.body.error, ErrorCode.E_ADAPTER_FAILURE, `expected E_ADAPTER_FAILURE, got ${JSON.stringify(response.body)}`);
+
+  // Let any stray rejection surface and the (already-cleared) timer's window pass.
+  await sleep(150);
+  assert.equal(unhandled.length, 0, `unhandled rejections observed: ${unhandled.map(String).join(' | ')}`);
+
+  const checkStore = await openStore({ path: f.path, nodeId: 'node' });
+  const receipts = await checkStore.listReceipts(f.job);
+  await checkStore.close();
+  assert.equal(receipts.length, 1, 'a closed receipt was not written');
+  assert.equal(receipts[0]?.outcome, 'failed');
+  assert.notEqual(receipts[0]?.ended_at, null, 'the receipt was left running');
+
+  assert.ok(armedDeadlines.size >= 1, 'the shared deadline timer was never armed');
+  assert.ok(
+    [...armedDeadlines].some((handle) => clearedHandles.has(handle)),
+    'the deadline timer was not cleared in the finally block',
+  );
+});
