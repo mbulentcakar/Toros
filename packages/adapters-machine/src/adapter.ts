@@ -68,6 +68,12 @@ export interface MachineAdapterOptions {
   readonly access?: AccessCheck;
   /** Source of the PATH value (AR-08). Default reads `process.env.PATH`; tests inject a fixed value. */
   readonly pathEnv?: () => string;
+  /**
+   * Wall-clock source, ms since epoch, for the drive-reader cache (AR-F5 round
+   * 2). Default `Date.now`; tests inject a fake so they can advance time without
+   * sleeping past the 5-minute TTL.
+   */
+  readonly now?: () => number;
 }
 
 /** SPEC §12.1 — the well-known Excel installation path on Oruc / YOGA. */
@@ -213,6 +219,25 @@ const FIXED_DRIVES_COMMAND =
 /** Captured stdout/stderr ceiling for the PowerShell drive query. */
 const MAX_DRIVE_OUTPUT_BYTES = 1024 * 1024;
 
+/**
+ * The drive reader's own ceiling, ms, regardless of the action timeout. A slow
+ * PowerShell start must not eat the whole action budget and leave nothing for
+ * the probes (AR-F5 round 2); it never gets more than this.
+ */
+const MAX_DRIVE_READER_BUDGET_MS = 3_000;
+
+/**
+ * Successful drive reads are cached per adapter instance for this long.
+ * Drive types rarely change; a failure is never cached (fail closed, so the
+ * next invoke re-reads rather than reusing a stale empty result).
+ */
+const DRIVE_CACHE_TTL_MS = 5 * 60 * 1_000;
+
+/** The reader's budget: `min(3_000, floor(timeout_ms / 2))` (AR-F5 round 2). */
+function driveReaderBudget(timeoutMs: number): number {
+  return Math.min(MAX_DRIVE_READER_BUDGET_MS, Math.floor(timeoutMs / 2));
+}
+
 /** Absolute path to Windows PowerShell, built from `SystemRoot`. */
 function powershellExe(env: NodeJS.ProcessEnv = process.env): string {
   const systemRoot = env['SystemRoot'] ?? env['SYSTEMROOT'];
@@ -277,16 +302,36 @@ function createPowerShellDriveTypes(): DriveTypes {
     });
 }
 
-/** Fail-closed resolution of the fixed-drive set (empty on any failure or abort). */
+/**
+ * Fail-closed resolution of the fixed-drive set (empty on any failure or
+ * abort). Carries a per-instance cache: a successful read is reused for
+ * `DRIVE_CACHE_TTL_MS`, a failure is never cached. The reader is given the
+ * bounded `driveReaderBudget(timeout_ms)`, not the whole action timeout.
+ */
 async function resolveFixedDrives(
   nodePlatform: NodePlatform,
   driveReader: DriveTypes,
   signal: AbortSignal,
   timeoutMs: number,
+  now: () => number,
+  cache: { letters?: readonly string[]; cachedAtMs?: number },
 ): Promise<ReadonlySet<string>> {
   if (nodePlatform !== 'win32' || signal.aborted) return new Set<string>();
+
+  const cachedAtMs = cache.cachedAtMs;
+  const cachedLetters = cache.letters;
+  if (
+    cachedLetters !== undefined &&
+    cachedAtMs !== undefined &&
+    now() - cachedAtMs < DRIVE_CACHE_TTL_MS
+  ) {
+    return new Set(cachedLetters.map((letter) => letter.toLowerCase()));
+  }
+
   try {
-    const letters = await driveReader(signal, timeoutMs);
+    const letters = await driveReader(signal, driveReaderBudget(timeoutMs));
+    cache.letters = letters;
+    cache.cachedAtMs = now();
     return new Set(letters.map((letter) => letter.toLowerCase()));
   } catch {
     return new Set<string>();
@@ -396,6 +441,10 @@ export function createMachineAdapter(options: MachineAdapterOptions): Adapter {
   const driveReader: DriveTypes = options.driveTypes ?? createPowerShellDriveTypes();
   const accessFn: AccessCheck = options.access ?? fsAccess;
   const pathEnvFn: () => string = options.pathEnv ?? (() => process.env['PATH'] ?? '');
+  const nowFn: () => number = options.now ?? (() => Date.now());
+
+  // Per-adapter-instance cache for a *successful* drive read (AR-F5 round 2).
+  const driveCache: { letters?: readonly string[]; cachedAtMs?: number } = {};
 
   const adapter: Adapter = {
     manifest,
@@ -446,6 +495,8 @@ export function createMachineAdapter(options: MachineAdapterOptions): Adapter {
           driveReader,
           ctx.signal,
           options.timeout_ms,
+          nowFn,
+          driveCache,
         );
         const pathFilter = filterPathEntries(pathEnvFn(), options.node_platform, fixedDrives);
         pathEntriesSkipped = pathFilter.skipped;

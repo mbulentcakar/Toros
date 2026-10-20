@@ -17,6 +17,7 @@ import {
   type DriveTypes,
   type MachineProbe,
 } from '../src/adapter.js';
+import { makeTestAdapter } from './helpers.js';
 import type { AdapterContext, NodePlatform, TargetDecisions } from '@toros/contracts';
 
 // ---------------------------------------------------------------------------
@@ -42,6 +43,20 @@ function parseOutput(result: { output: string }): Record<string, unknown> {
 /** A DriveTypes seam returning a fixed set of lowercase drive letters. */
 function fixedDriveTypes(letters: readonly string[]): DriveTypes {
   return async () => letters;
+}
+
+/**
+ * Fixed-drive letters that make `process.execPath` (used by the `*_PROBE` file
+ * fixtures) resolve as a local fixed path on whatever host runs the suite. On
+ * non-Windows the drive-type reader is never consulted, so this returns an
+ * empty list — the value is inert. On Windows it returns the single drive
+ * letter of the node executable, so a `file` probe of `process.execPath` is
+ * still detected as present while the reader seam stays a pure fake.
+ */
+function execPathFixedDrives(): readonly string[] {
+  if (process.platform !== 'win32') return [];
+  const match = /^([A-Za-z]):[\\/]/.exec(process.execPath);
+  return match === null ? [] : [match[1]!.toLowerCase()];
 }
 
 /** An AccessCheck seam that records every path it is asked about and succeeds. */
@@ -103,12 +118,13 @@ const ABSENT_FILE_PROBE: MachineProbe = {
 
 describe('machine.inventory', () => {
   it('registered + present probe → usable', async () => {
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: process.platform as NodePlatform,
       probes: [NODE_FILE_PROBE],
       registered_adapter_ids: () => ['node-finder'],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes(execPathFixedDrives()),
     });
 
     const result = await adapter.invoke('inventory', {}, makeCtx());
@@ -124,12 +140,13 @@ describe('machine.inventory', () => {
   });
 
   it('present probe with backs_adapter NOT registered → missing_adapter', async () => {
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: process.platform as NodePlatform,
       probes: [ORPHAN_PROBE],
       registered_adapter_ids: () => ['some-other-adapter'],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes(execPathFixedDrives()),
     });
 
     const result = await adapter.invoke('inventory', {}, makeCtx());
@@ -146,12 +163,13 @@ describe('machine.inventory', () => {
   });
 
   it('probe whose platforms exclude node_platform → unsupported_platform', async () => {
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: 'linux',
       probes: [WIN32_ONLY_PROBE],
       registered_adapter_ids: () => [],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes([]),
     });
 
     const result = await adapter.invoke('inventory', {}, makeCtx());
@@ -168,12 +186,13 @@ describe('machine.inventory', () => {
   });
 
   it('absent executable → missing_prerequisite with reason', async () => {
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: process.platform as NodePlatform,
       probes: [ABSENT_EXEC_PROBE],
       registered_adapter_ids: () => [],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes([]),
     });
 
     const result = await adapter.invoke('inventory', {}, makeCtx());
@@ -190,12 +209,13 @@ describe('machine.inventory', () => {
   });
 
   it('absent file → missing_prerequisite with reason', async () => {
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: process.platform as NodePlatform,
       probes: [ABSENT_FILE_PROBE],
       registered_adapter_ids: () => [],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes([]),
     });
 
     const result = await adapter.invoke('inventory', {}, makeCtx());
@@ -212,12 +232,13 @@ describe('machine.inventory', () => {
   });
 
   it('registered adapter id with no probe → registered', async () => {
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: process.platform as NodePlatform,
       probes: [],
       registered_adapter_ids: () => ['chrome', 'excel'],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes([]),
     });
 
     const result = await adapter.invoke('inventory', {}, makeCtx());
@@ -235,12 +256,13 @@ describe('machine.inventory', () => {
   });
 
   it('capability_filter narrows the result set', async () => {
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: process.platform as NodePlatform,
       probes: [NODE_FILE_PROBE, ABSENT_EXEC_PROBE],
       registered_adapter_ids: () => ['node-finder'],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes(execPathFixedDrives()),
     });
 
     // Without filter, both probes appear.
@@ -278,12 +300,13 @@ describe('machine.inventory', () => {
       backs_adapter: 'node-finder',
       detect: { kind: 'file', path: process.execPath },
     };
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: process.platform as NodePlatform,
       probes: [probe],
       registered_adapter_ids: () => ['node-finder'],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes(execPathFixedDrives()),
     });
 
     const result = await adapter.invoke(
@@ -306,7 +329,7 @@ describe('machine.inventory', () => {
     const exeName = process.platform === 'win32' ? 'torostestbin.exe' : 'torostestbin';
     await writeFile(join(dir, exeName), '');
     try {
-      const adapter = createMachineAdapter({
+      const adapter = makeTestAdapter({
         node_platform: process.platform as NodePlatform,
         probes: [{
           id: 'testbin',
@@ -318,6 +341,7 @@ describe('machine.inventory', () => {
         registered_capabilities: () => [],
         timeout_ms: 5_000,
         pathEnv: () => dir,
+        driveTypes: fixedDriveTypes(execPathFixedDrives()),
       });
       const entries = parseOutput(await adapter.invoke('inventory', {}, makeCtx()))['entries'] as Array<Record<string, unknown>>;
       assert.equal(entries.length, 1);
@@ -331,12 +355,13 @@ describe('machine.inventory', () => {
 
   it('output is valid JSON with receipt_extra fields', async () => {
     const probes = [NODE_FILE_PROBE, ABSENT_FILE_PROBE];
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: process.platform as NodePlatform,
       probes,
       registered_adapter_ids: () => ['node-finder'],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes(execPathFixedDrives()),
     });
 
     const result = await adapter.invoke('inventory', {}, makeCtx());
@@ -362,12 +387,13 @@ describe('machine.inventory', () => {
     const controller = new AbortController();
     controller.abort(); // aborted before invoke
 
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: process.platform as NodePlatform,
       probes: [NODE_FILE_PROBE, ABSENT_EXEC_PROBE, ABSENT_FILE_PROBE],
       registered_adapter_ids: () => ['node-finder'],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes([]),
     });
 
     const result = await adapter.invoke('inventory', {}, makeCtx(controller.signal));
@@ -390,7 +416,7 @@ describe('machine.inventory', () => {
 describe('machine.inventory — AR-08 local-fixed PATH filtering', () => {
   it('drops UNC, device, relative and drive-relative PATH entries without touching them', async () => {
     const { access, calls } = recordingAccess();
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: 'win32',
       probes: [{
         id: 'findme',
@@ -423,7 +449,7 @@ describe('machine.inventory — AR-08 local-fixed PATH filtering', () => {
 
   it('probes a fixed local PATH entry and skips a non-fixed drive letter', async () => {
     const { access, calls } = recordingAccess();
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: 'win32',
       probes: [{
         id: 'findme',
@@ -461,7 +487,7 @@ describe('machine.inventory — AR-08 local-fixed PATH filtering', () => {
 
     const { access, calls } = recordingAccess();
     let driveCalls = 0;
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: 'win32',
       probes: [{
         id: 'findme',
@@ -490,7 +516,7 @@ describe('machine.inventory — AR-08 local-fixed PATH filtering', () => {
 
   it('treats every drive as non-fixed when the drive-type reader fails', async () => {
     const { access, calls } = recordingAccess();
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: 'win32',
       probes: [{
         id: 'findme',
@@ -520,7 +546,7 @@ describe('machine.inventory — AR-08 local-fixed PATH filtering', () => {
 
   it('a file probe whose fixed path is not local-fixed is never touched', async () => {
     const { access, calls } = recordingAccess();
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: 'win32',
       probes: [{
         id: 'remoteme',
@@ -552,12 +578,13 @@ describe('machine.inventory — AR-08 local-fixed PATH filtering', () => {
 describe('machine.inventory — AR-09 job-scoped filter', () => {
   it('resolver returns one capability target per registered capability id', async () => {
     const capabilityIds = ['machine.inventory', 'desktop.state', 'desktop.inspect', 'excel.read_range'];
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: 'win32',
       probes: [],
       registered_adapter_ids: () => ['machine', 'desktop', 'excel'],
       registered_capabilities: () => capabilityIds,
       timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes([]),
     });
 
     const resolver = adapter.resolver;
@@ -575,12 +602,13 @@ describe('machine.inventory — AR-09 job-scoped filter', () => {
   });
 
   it('a job with only machine.inventory sees other adapters as unauthorized, bare', async () => {
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: 'win32',
       probes: [],
       registered_adapter_ids: () => ['machine', 'desktop'],
       registered_capabilities: () => ['machine.inventory', 'desktop.state', 'desktop.inspect'],
       timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes([]),
     });
 
     const decisions: TargetDecisions = new Map([
@@ -609,12 +637,13 @@ describe('machine.inventory — AR-09 job-scoped filter', () => {
   });
 
   it('a job with machine.inventory and desktop.state reports the desktop entry in full', async () => {
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: 'win32',
       probes: [],
       registered_adapter_ids: () => ['machine', 'desktop'],
       registered_capabilities: () => ['machine.inventory', 'desktop.state', 'desktop.inspect'],
       timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes([]),
     });
 
     const decisions: TargetDecisions = new Map([
@@ -641,12 +670,13 @@ describe('machine.inventory — AR-09 job-scoped filter', () => {
 
 describe('machine adapter manifest', () => {
   it('declares process.spawn and fs.read', async () => {
-    const adapter = createMachineAdapter({
+    const adapter = makeTestAdapter({
       node_platform: 'win32',
       probes: [],
       registered_adapter_ids: () => [],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes([]),
     });
 
     assert.deepEqual(
@@ -655,5 +685,138 @@ describe('machine adapter manifest', () => {
     );
 
     await adapter.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — test helper guard (AR-F5 round 2)
+// ---------------------------------------------------------------------------
+
+describe('machine.inventory — test helper guard', () => {
+  it('makeTestAdapter throws when driveTypes is not injected', () => {
+    // A unit test that forgets the driveTypes seam would otherwise fall back to
+    // the production PowerShell reader and silently start a child process. The
+    // guard must make that failure loud instead of letting it regress.
+    assert.throws(
+      () =>
+        makeTestAdapter({
+          node_platform: 'win32',
+          probes: [],
+          registered_adapter_ids: () => [],
+          registered_capabilities: () => [],
+          timeout_ms: 5_000,
+        }),
+      /must inject driveTypes/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — drive reader budget & cache (AR-F5 round 2)
+// ---------------------------------------------------------------------------
+
+describe('machine.inventory — drive reader budget & cache', () => {
+  it('gives the reader a bounded budget and caches a successful read for 5 minutes', async () => {
+    let calls = 0;
+    let lastBudgetMs: number | undefined;
+    const reader: DriveTypes = (signal, timeoutMs) => {
+      calls++;
+      lastBudgetMs = timeoutMs;
+      assert.equal(signal.aborted, false);
+      return Promise.resolve(['c']);
+    };
+
+    let clockMs = 0;
+    const adapter = makeTestAdapter({
+      node_platform: 'win32',
+      probes: [],
+      registered_adapter_ids: () => [],
+      registered_capabilities: () => [],
+      timeout_ms: 5_000,
+      driveTypes: reader,
+      now: () => clockMs,
+    });
+
+    await adapter.invoke('inventory', {}, makeCtx());
+    assert.equal(calls, 1, 'first invoke reads the drive type');
+    // budget = min(3000, floor(5000 / 2)) = 2500
+    assert.equal(lastBudgetMs, 2_500, 'reader got its own bounded budget, not the action timeout');
+
+    await adapter.invoke('inventory', {}, makeCtx());
+    assert.equal(calls, 1, 'second invoke within TTL is served from cache');
+
+    // Just inside the 5-minute TTL: still cached.
+    clockMs = 5 * 60 * 1_000 - 1;
+    await adapter.invoke('inventory', {}, makeCtx());
+    assert.equal(calls, 1, 'still within TTL → cache');
+
+    // One past the TTL: cache is stale, reader is called again.
+    clockMs = 5 * 60 * 1_000 + 1;
+    await adapter.invoke('inventory', {}, makeCtx());
+    assert.equal(calls, 2, 'past TTL → re-read');
+
+    await adapter.dispose();
+  });
+
+  it('never caches a failed drive read, so each invoke re-reads', async () => {
+    let calls = 0;
+    const reader: DriveTypes = () => {
+      calls++;
+      return Promise.reject(new Error('powershell unavailable'));
+    };
+
+    const adapter = makeTestAdapter({
+      node_platform: 'win32',
+      probes: [],
+      registered_adapter_ids: () => [],
+      registered_capabilities: () => [],
+      timeout_ms: 5_000,
+      driveTypes: reader,
+      now: () => 0,
+    });
+
+    await adapter.invoke('inventory', {}, makeCtx());
+    await adapter.invoke('inventory', {}, makeCtx());
+
+    // A failure is never cached: both invokes reached the reader.
+    assert.equal(calls, 2, 'a failed drive read must not be cached');
+
+    await adapter.dispose();
+  });
+
+  it('does not cache across separate adapter instances', async () => {
+    let calls = 0;
+    const reader: DriveTypes = () => {
+      calls++;
+      return Promise.resolve(['c']);
+    };
+
+    const a = makeTestAdapter({
+      node_platform: 'win32',
+      probes: [],
+      registered_adapter_ids: () => [],
+      registered_capabilities: () => [],
+      timeout_ms: 5_000,
+      driveTypes: reader,
+      now: () => 0,
+    });
+    await a.invoke('inventory', {}, makeCtx());
+    assert.equal(calls, 1);
+
+    // A fresh instance has no cache.
+    const b = makeTestAdapter({
+      node_platform: 'win32',
+      probes: [],
+      registered_adapter_ids: () => [],
+      registered_capabilities: () => [],
+      timeout_ms: 5_000,
+      driveTypes: reader,
+      now: () => 0,
+    });
+    await b.invoke('inventory', {}, makeCtx());
+    assert.equal(calls, 2, 'cache is per instance, not shared');
+
+    await a.dispose();
+    await b.dispose();
   });
 });
