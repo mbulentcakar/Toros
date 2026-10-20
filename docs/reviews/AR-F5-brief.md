@@ -54,3 +54,22 @@ implementer is never the reviewer.
 - Delete every `packages/*/dist`, then `npm run typecheck`: 0 errors.
 - `npm test` without `TOROS_REAL_TESTS`: 0 failed; every skip has its reason.
 - CI green on the PR head.
+
+## Round 2 — CI failure on 32999e1 (2026-10-20)
+
+CI `Root` fails `machine.inventory › registered + present probe → usable`. It took 5,007 ms and got
+`missing_prerequisite`. The test did not inject `driveTypes`, so it spawned the real PowerShell
+reader. That reader timed out on the runner and failed closed, as designed, but two things are
+wrong.
+
+1. **Unit tests never spawn (P2).** Every test in `packages/adapters-machine/test/` passes a fake
+   `driveTypes`, unless it is explicitly about the production reader. The production-reader test
+   (fixed letters come back as a non-empty array on Windows) is gated behind
+   `TOROS_REAL_TESTS=1`. Add a guard to the test helper: an adapter built in a test without
+   `driveTypes` throws, so this cannot regress silently.
+2. **The drive reader does not eat the whole action budget (P2).** Today it gets the full
+   action timeout, so a slow PowerShell start leaves no time for the probes. Give it its own
+   bound: `min(3_000, floor(timeout_ms / 2))`. On timeout it fails closed, as now. Cache a
+   **successful** result per adapter instance for 5 minutes, because drive types rarely change.
+   A failure is never cached. Test both the cache and the no-cache-on-failure rule with a fake
+   reader and an injected clock.
