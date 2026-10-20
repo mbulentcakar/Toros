@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 
 import { ErrorCode, TorosError } from '@toros/contracts';
 
-import { runPowerShell, parseIdentity, type ProbeSpawn } from '../src/probe.js';
+import { runPowerShell, parseIdentity, DESKTOP_UIA_PS1, type ProbeSpawn } from '../src/probe.js';
 
 // ---------------------------------------------------------------------------
 // AR-F4 acceptance for the runPowerShell wrapper: pre-abort refusal, output
@@ -334,4 +334,23 @@ test('parseIdentity rejects a malformed identity (returns null)', () => {
   assert.equal(parseIdentity({ ...validIdentity(), signature: 'valid', signer: null }), null);
   assert.equal(parseIdentity({ ...validIdentity(), signature: 'invalid', signer: 'Contoso' }), null);
   assert.equal(parseIdentity({ ...validIdentity(), image_path: '' }), null);
+});
+// ---------------------------------------------------------------------------
+// F3b: the embedded script is a TypeScript template literal, so every `\` in
+// the source reaches PowerShell as `\`. A halved backslash broke the image-path
+// checks once, and only a native run noticed (`Contains('\.\')` became
+// `Contains('.')`, which drops every window). Pin the exact PowerShell text
+// that leaves this module, so the class is caught without a desktop.
+// ---------------------------------------------------------------------------
+
+test('the emitted script carries the image-path checks with their backslashes intact', () => {
+  const lines = DESKTOP_UIA_PS1.split('\n').map((line) => line.trim());
+  // String.raw keeps every backslash below exactly as PowerShell must see it.
+  const driveRoot = String.raw`if ($imagePath -notmatch '^[A-Za-z]:\\') { return $null }`;
+  const namespaces = String.raw`if ($imagePath.StartsWith('\\') -or $imagePath.Contains('\?\') -or $imagePath.Contains('\.\')) { return $null }`;
+  const trailing = String.raw`if ($imagePath -match '[. ](\\|$)') { return $null }`;
+  assert.ok(lines.includes(driveRoot), `drive-root check must reach PowerShell as: ${driveRoot}`);
+  assert.ok(lines.includes(namespaces), `UNC and namespace checks must reach PowerShell as: ${namespaces}`);
+  assert.ok(lines.includes(trailing), `trailing dot/space check must reach PowerShell as: ${trailing}`);
+  assert.ok(!DESKTOP_UIA_PS1.includes(".Contains('.')"), "no check may collapse to Contains('.')");
 });

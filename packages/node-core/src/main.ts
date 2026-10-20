@@ -8,9 +8,8 @@
  * `packages/policy`, the persistence in `packages/store`, and nothing here
  * decides anything — a process entrypoint is a bad place to hide behaviour.
  */
-import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -38,7 +37,7 @@ interface RuntimeProfile {
 import { createNodeCore, type ObserverDeps } from './index.js';
 import { createCoordinatorSupervisor } from './coordinator-supervisor.js';
 import { approvalTtlMinutes } from './approvals.js';
-import { validateDesktopAuthorizedApps } from './desktop-config.js';
+import { validateDesktopAuthorizedApps, resolveNodeSessionId } from './desktop-config.js';
 
 interface FileConfig {
   readonly node_id: string;
@@ -104,64 +103,6 @@ async function loadConfig(path: string): Promise<FileConfig> {
     throw new Error(`${path}: at least one workspace is required`);
   }
   return { ...config, approval_ttl_minutes: approvalTtlMinutes(config.approval_ttl_minutes, path) };
-}
-
-/**
- * The fixed, parameter-free PowerShell that reports the Windows session id of
- * the process named by the single integer argument. No caller value reaches
- * this source; the only input is the numeric pid, passed as a positional argv.
- */
-const NODE_SESSION_ID_PS1 = `# toros-node-session-id.ps1 — fixed. Reads the session id of the pid in $args[0].
-$ErrorActionPreference = 'Stop'
-Add-Type @"
-using System; using System.Runtime.InteropServices;
-public static class TorosSession {
-  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool ProcessIdToSessionId(uint dwProcessId, out uint pSessionId);
-}
-"@
-if ($args.Count -lt 1) { exit 2 }
-$targetPid = 0
-if (-not [long]::TryParse([string]$args[0], [ref]$targetPid)) { exit 2 }
-$sid = 0u
-if ([TorosSession]::ProcessIdToSessionId([uint32]$targetPid, [ref]$sid)) { [Console]::WriteLine([string]$sid) } else { exit 1 }
-`;
-
-/**
- * Determine Node Core's own Windows session id once at startup (amendment A8,
- * F3b): a small fixed PowerShell call to `ProcessIdToSessionId(process.pid)`.
- * Returns null on any failure — every `app` target then fails closed — after
- * writing one log line, never an error that would stop the node from serving
- * non-desktop work.
- */
-export async function resolveNodeSessionId(pid: number, systemRoot: string | undefined): Promise<number | null> {
-  const powershell = systemRoot !== undefined && systemRoot.length > 0
-    ? join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-    : 'powershell.exe';
-  const dir = await mkdtemp(join(tmpdir(), 'toros-session-'));
-  const scriptPath = join(dir, 'session.ps1');
-  try {
-    await writeFile(scriptPath, NODE_SESSION_ID_PS1, 'utf8');
-    const stdout = await runFixedScript(powershell, scriptPath, [String(pid)]);
-    const parsed = Number(stdout.trim());
-    if (Number.isSafeInteger(parsed) && parsed >= 0) return parsed;
-    return null;
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
-function runFixedScript(powershell: string, scriptPath: string, args: readonly string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      powershell,
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args],
-      { shell: false, windowsHide: true, timeout: 30_000, maxBuffer: 1024 * 1024 },
-      (error, stdout, _stderr) => {
-        if (error) { reject(error); return; }
-        resolve(stdout);
-      },
-    );
-  });
 }
 
 /**

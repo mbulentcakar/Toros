@@ -150,6 +150,12 @@ describe('AR-F3b Native Core Integration (two-phase over a real Core)', () => {
     await check.close();
     const persistedText = JSON.stringify({ receipts, events });
 
+    // Both actions went through the real pipeline: each must persist a closed
+    // receipt and emit an action.finished event.
+    assert.ok(receipts.length >= 2, 'state and inspect must each write a closed receipt');
+    const finishedEvents = events.filter((e) => e.kind === 'action.finished');
+    assert.ok(finishedEvents.length >= 2, 'state and inspect must each emit an action.finished event');
+
     for (const canary of [fixture.canaryPwd, fixture.canaryTxt, fixture.canaryLbl]) {
       assert.ok(!actionOutputText.includes(canary), `canary "${canary}" must NOT appear in any action output`);
       assert.ok(!persistedText.includes(canary), `canary "${canary}" must NOT appear in any persisted receipt or event`);

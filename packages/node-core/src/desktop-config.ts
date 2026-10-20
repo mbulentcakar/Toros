@@ -1,3 +1,8 @@
+import { execFile } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type { AppRule } from '@toros/contracts';
 
 /**
@@ -91,4 +96,86 @@ export function validateDesktopAuthorizedApps(value: unknown, configPath: string
     throw new Error(`${configPath}: adapters.desktop.authorized_apps[${i}] must have exactly one rule shape`);
   }
   return rules;
+}
+
+// ---------------------------------------------------------------------------
+// Node session id (amendment A8, F3b): a small fixed PowerShell call.
+// ---------------------------------------------------------------------------
+
+/**
+ * The fixed, parameter-free PowerShell that reports the Windows session id of
+ * the process named by the single integer argument. No caller value reaches
+ * this source; the only input is the numeric pid, passed as a positional argv.
+ *
+ * Written for Windows PowerShell 5.1: the `u` numeric-literal suffix does not
+ * exist there, and `[ref]` requires the target variable to be the exact type
+ * `TryParse` writes, so both are declared `[uint32]` before use.
+ */
+export const NODE_SESSION_ID_PS1 = `# toros-node-session-id.ps1 — fixed. Reads the session id of the pid in $args[0].
+$ErrorActionPreference = 'Stop'
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public static class TorosSession {
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool ProcessIdToSessionId(uint dwProcessId, out uint pSessionId);
+}
+"@
+if ($args.Count -lt 1) { exit 2 }
+[uint32]$targetPid = 0
+if (-not [uint32]::TryParse([string]$args[0], [ref]$targetPid) -or $targetPid -eq 0) { exit 2 }
+[uint32]$sid = 0
+if ([TorosSession]::ProcessIdToSessionId($targetPid, [ref]$sid)) { [Console]::WriteLine([string]$sid) } else { exit 1 }
+`;
+
+/**
+ * Runs the fixed session-id script. `execFile` is wrapped so a test can inject
+ * a fake runner without spawning PowerShell or writing a temp directory.
+ */
+export type NodeSessionIdRunner = (
+  powershell: string,
+  scriptPath: string,
+  args: readonly string[],
+) => Promise<string>;
+
+/** The real runner: a fixed PowerShell process, shell-less, bounded. */
+export function defaultNodeSessionIdRunner(): NodeSessionIdRunner {
+  return (powershell: string, scriptPath: string, args: readonly string[]): Promise<string> =>
+    new Promise((resolve, reject) => {
+      execFile(
+        powershell,
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args],
+        { shell: false, windowsHide: true, timeout: 30_000, maxBuffer: 1024 * 1024 },
+        (error, stdout, _stderr) => {
+          if (error) { reject(error); return; }
+          resolve(stdout);
+        },
+      );
+    });
+}
+
+/**
+ * Determine Node Core's own Windows session id once at startup (amendment A8,
+ * F3b): a small fixed PowerShell call to `ProcessIdToSessionId(process.pid)`.
+ * Returns null on any failure — every `app` target then fails closed — after
+ * writing one log line, never an error that would stop the node from serving
+ * non-desktop work.
+ */
+export async function resolveNodeSessionId(
+  pid: number,
+  systemRoot: string | undefined,
+  runner: NodeSessionIdRunner = defaultNodeSessionIdRunner(),
+): Promise<number | null> {
+  const powershell = systemRoot !== undefined && systemRoot.length > 0
+    ? join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    : 'powershell.exe';
+  const dir = await mkdtemp(join(tmpdir(), 'toros-session-'));
+  const scriptPath = join(dir, 'session.ps1');
+  try {
+    await writeFile(scriptPath, NODE_SESSION_ID_PS1, 'utf8');
+    const stdout = await runner(powershell, scriptPath, [String(pid)]);
+    const parsed = Number(stdout.trim());
+    if (Number.isSafeInteger(parsed) && parsed >= 0) return parsed;
+    return null;
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
 }

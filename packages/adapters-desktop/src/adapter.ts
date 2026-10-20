@@ -127,6 +127,8 @@ interface StoredEnumeration {
   /** Issuance time in ms epoch; a handle is valid for at most 60 s. */
   issued_at: number;
   session_state: 'active' | 'locked' | 'disconnected';
+  /** Whether the probe truncated its enumeration (the cap was hit). */
+  truncated: boolean;
   /** opaque window_id → entry (windows that passed the global bound). */
   windows: Map<string, EnumerationEntry>;
 }
@@ -287,6 +289,7 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
         freshness_token: randomUUID(),
         issued_at: now(),
         session_state: result.session_state,
+        truncated: false,
         windows: new Map(),
       });
       return [];
@@ -317,6 +320,7 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
       freshness_token: randomUUID(),
       issued_at: now(),
       session_state: 'active',
+      truncated: result.truncated,
       windows: entries,
     });
 
@@ -402,6 +406,7 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
     const output = JSON.stringify({
       session: 'active',
       freshness_token: enumeration.freshness_token,
+      truncated: enumeration.truncated,
       windows,
       ...(changed > 0 ? { changed } : {}),
     });
@@ -413,7 +418,7 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
       receipt_extra: {
         window_count: windows.length,
         session: 'active',
-        truncated: false,
+        truncated: enumeration.truncated,
         changed,
       },
     };

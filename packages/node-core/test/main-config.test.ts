@@ -9,8 +9,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { promises as fsPromises } from 'node:fs';
 
-import { validateDesktopAuthorizedApps } from '../src/desktop-config.js';
+import {
+  validateDesktopAuthorizedApps,
+  resolveNodeSessionId,
+  NODE_SESSION_ID_PS1,
+  type NodeSessionIdRunner,
+} from '../src/desktop-config.js';
 
 test('accepts a valid AppRule[] (hash, signer+product, path)', () => {
   const rules = validateDesktopAuthorizedApps(
@@ -90,4 +96,47 @@ test('rejects a non-absolute image_path', () => {
 test('rejects over-long or empty signer / product_name', () => {
   assert.throws(() => validateDesktopAuthorizedApps([{ signer: '', product_name: 'x' }], 'c'), /signer/);
   assert.throws(() => validateDesktopAuthorizedApps([{ signer: 'x', product_name: 'x'.repeat(513) }], 'c'), /product_name/);
+});
+
+// ---------------------------------------------------------------------------
+// Node session id (amendment A8, F3b): resolveNodeSessionId with an injected
+// runner — process-free, no PowerShell, no temp dir left behind.
+// ---------------------------------------------------------------------------
+
+test('NODE_SESSION_ID_PS1 uses Windows PowerShell 5.1 syntax only', () => {
+  // The `u` numeric-literal suffix is a parse error in Windows PowerShell 5.1;
+  // both TryParse targets must be declared [uint32] before [ref] use.
+  assert.ok(!/\b\d+u\b/.test(NODE_SESSION_ID_PS1), 'the script must not use a u literal suffix');
+  assert.ok(NODE_SESSION_ID_PS1.includes('[uint32]::TryParse'), 'the script must use [uint32]::TryParse');
+  assert.ok(NODE_SESSION_ID_PS1.includes('[uint32]$targetPid = 0'), 'the target pid must be a pre-declared [uint32]');
+  assert.ok(NODE_SESSION_ID_PS1.includes('[uint32]$sid = 0'), 'the session id must be a pre-declared [uint32]');
+  assert.ok(!/\$\w+\s*=\s*0u/.test(NODE_SESSION_ID_PS1), 'no variable may be assigned a u-suffixed literal');
+});
+
+test('resolveNodeSessionId returns the session id the runner prints, writing the fixed script', async () => {
+  let capturedArgs: readonly string[] = [];
+  let capturedScript: string | undefined;
+  const runner: NodeSessionIdRunner = async (_powershell, scriptPath, args) => {
+    capturedArgs = args;
+    capturedScript = await fsPromises.readFile(scriptPath, 'utf8');
+    return '7\n';
+  };
+
+  const id = await resolveNodeSessionId(4242, 'C:\\Windows', runner);
+  assert.equal(id, 7, 'the printed session id must parse to a number');
+  assert.deepEqual(capturedArgs, ['4242'], 'the pid must be passed as a single positional arg');
+  assert.equal(capturedScript, NODE_SESSION_ID_PS1, 'the fixed script must be written unchanged into the temp dir');
+});
+
+test('resolveNodeSessionId returns null for a non-numeric or negative runner output', async () => {
+  const noop: NodeSessionIdRunner = async () => 'garbage';
+  assert.equal(await resolveNodeSessionId(1, undefined, noop), null);
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => '-3'), null);
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => '1.5'), null);
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => 'NaN'), null);
+});
+
+test('resolveNodeSessionId rejects when the runner throws, and still cleans up', async () => {
+  const failing: NodeSessionIdRunner = async () => { throw new Error('powershell failed'); };
+  await assert.rejects(resolveNodeSessionId(4242, undefined, failing), /powershell failed/);
 });

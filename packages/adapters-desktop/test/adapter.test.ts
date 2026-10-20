@@ -7,6 +7,7 @@ import {
   type RawWindow,
   type RawControl,
 } from '../src/adapter.js';
+import { DESKTOP_UIA_PS1 } from '../src/probe.js';
 import type { AdapterContext, AppIdentity, JsonValue } from '@toros/contracts';
 import { createRegistry } from '@toros/registry';
 
@@ -334,5 +335,113 @@ describe('F3b desktop adapter — session enum + inspect scope', () => {
     await adapter.resolver!.resolve('inspect', { window_id: key2, freshness_token: tok2.freshness_token }, ctx);
     const denied = await adapter.invoke('inspect', { window_id: key2, freshness_token: tok2.freshness_token }, { ...ctx, target_decisions: deniedMap(key2) });
     assert.equal((JSON.parse(denied.output) as Record<string, unknown>).status, 'denied');
+  });
+});
+
+describe('F3b desktop adapter — inspect TOCTOU and absent target_decisions', () => {
+  it('re-verifies at inspect: a changed pid, created_at or hash returns unavailable', async () => {
+    const resolved = makeIdentity();
+    const cases: ReadonlyArray<{ readonly name: string; readonly overrides: Partial<AppIdentity> }> = [
+      { name: 'pid', overrides: { pid: 9999 } },
+      { name: 'created_at', overrides: { created_at: '2026-02-02T02:02:02.000Z' } },
+      { name: 'image_sha256', overrides: { image_sha256: 'b'.repeat(64) } },
+    ];
+
+    for (const c of cases) {
+      // A fresh adapter + probe per case: the live identity the probe reports at
+      // inspect differs from what was resolved, so the inspect must be unavailable.
+      const probe = makeFakeProbe([makeRawWindow({ identity: resolved })], 'active', makeIdentity(c.overrides), []);
+      const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+      const ctx = fakeContext();
+      const targets = await adapter.resolver!.resolve('state', {}, ctx);
+      const key = (targets[0]! as { key: string }).key;
+      const tokenBody = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
+      const token = tokenBody.freshness_token;
+
+      const inspectTargets = await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: token }, ctx);
+      const dec = allowedMap(...inspectTargets.map((t) => (t as { key: string }).key));
+      const result = await adapter.invoke('inspect', { window_id: key, freshness_token: token }, { ...ctx, target_decisions: dec });
+      assert.equal((JSON.parse(result.output) as Record<string, unknown>).status, 'unavailable', `a changed ${c.name} must be unavailable`);
+    }
+  });
+
+  it('absent ctx.target_decisions publishes no windows', async () => {
+    const probe = makeFakeProbe([makeRawWindow()]);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctx = fakeContext();
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    assert.equal(targets.length, 1, 'the window must resolve as a target');
+
+    // Invoke with NO target_decisions property: Core has given no decision, so
+    // nothing may be published (fail closed).
+    const result = await adapter.invoke('state', {}, ctx);
+    const body = JSON.parse(result.output) as Record<string, unknown>;
+    assert.equal(body.session, 'active');
+    assert.equal((body.windows as unknown[]).length, 0, 'nothing may publish without target_decisions');
+  });
+});
+
+describe('F3b desktop adapter — restored F2 unit coverage', () => {
+  it('static guard: the probe never reads the UIA Name property (Current.Name / NameProperty)', () => {
+    // F2's AR-01 guarantee: control METADATA only, never the accessibility Name.
+    // The script must not touch AutomationElement.Current.Name or NameProperty.
+    assert.ok(!DESKTOP_UIA_PS1.includes('Current.Name'), 'the script must never read AutomationElement.Current.Name');
+    assert.ok(!DESKTOP_UIA_PS1.includes('.Current.Name'), 'the script must never read .Current.Name');
+    assert.ok(!DESKTOP_UIA_PS1.includes('NameProperty'), 'the script must never reference the UIA NameProperty');
+  });
+
+  it('control_filter matches by type and automation_id only (case-insensitive substring)', async () => {
+    const controls: RawControl[] = [
+      { native_id: 'r1', control_type: 'Button', automation_id: 'OkBtn', enabled: true, patterns: [] },
+      { native_id: 'r2', control_type: 'Edit', automation_id: 'NameField', enabled: true, patterns: [] },
+      { native_id: 'r3', control_type: 'Button', automation_id: 'CancelBtn', enabled: true, patterns: [] },
+    ];
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), controls);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctx = fakeContext();
+
+    // By type.
+    const t1 = await adapter.resolver!.resolve('state', {}, ctx);
+    const key1 = (t1[0]! as { key: string }).key;
+    const tok1 = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key1) })).output) as { freshness_token: string };
+    await adapter.resolver!.resolve('inspect', { window_id: key1, freshness_token: tok1.freshness_token }, ctx);
+    const byType = await adapter.invoke('inspect', { window_id: key1, freshness_token: tok1.freshness_token, control_filter: 'button' }, { ...ctx, target_decisions: allowedMap(key1) });
+    const typeControls = (JSON.parse(byType.output) as { controls: Array<{ type: string }> }).controls;
+    assert.equal(typeControls.length, 2, 'two Button controls match the type filter');
+    assert.ok(typeControls.every((c) => c.type.toLowerCase().includes('button')));
+
+    // By automation_id.
+    const t2 = await adapter.resolver!.resolve('state', {}, ctx);
+    const key2 = (t2[0]! as { key: string }).key;
+    const tok2 = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key2) })).output) as { freshness_token: string };
+    await adapter.resolver!.resolve('inspect', { window_id: key2, freshness_token: tok2.freshness_token }, ctx);
+    const byId = await adapter.invoke('inspect', { window_id: key2, freshness_token: tok2.freshness_token, control_filter: 'namefield' }, { ...ctx, target_decisions: allowedMap(key2) });
+    const idControls = (JSON.parse(byId.output) as { controls: Array<{ automation_id?: string }> }).controls;
+    assert.equal(idControls.length, 1, 'exactly one control matches by automation_id');
+    assert.equal(idControls[0]!.automation_id, 'NameField');
+  });
+
+  it('paginates the filtered controls and reports next_page', async () => {
+    const controls: RawControl[] = [0, 1, 2, 3, 4].map((i) => ({
+      native_id: `r${i}`,
+      control_type: 'CheckBox',
+      automation_id: `cb${i}`,
+      enabled: true,
+      patterns: [],
+    }));
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), controls);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctx = fakeContext();
+
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    const key = (targets[0]! as { key: string }).key;
+    const tok = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
+    await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: tok.freshness_token }, ctx);
+
+    // Page 1 of size 2 → first two controls, next_page = 2.
+    const page1 = await adapter.invoke('inspect', { window_id: key, freshness_token: tok.freshness_token, page: 1, page_size: 2 }, { ...ctx, target_decisions: allowedMap(key) });
+    const p1 = JSON.parse(page1.output) as { controls: Array<{ control_id: string }>; next_page?: number };
+    assert.equal(p1.controls.length, 2, 'page 1 must hold two controls');
+    assert.equal(p1.next_page, 2, 'more pages must remain after page 1');
   });
 });

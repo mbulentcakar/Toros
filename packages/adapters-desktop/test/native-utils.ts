@@ -166,6 +166,11 @@ export function startFixture(options: {
     let copyPath: string;
     try {
       tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'toros-fixture-'));
+      // `%TEMP%` can be reported as an 8.3 short path (e.g. NAME~1); expand it to
+      // the canonical long form so the fixture's image path satisfies Core's
+      // canonical-long-path rules and matches what QueryFullProcessImageName
+      // actually returns for the spawned process.
+      tempDir = fs.realpathSync.native(tempDir);
       copyPath = path.join(tempDir, `toros-fixture-${randomBytes(6).toString('hex')}.exe`);
       fs.copyFileSync(getPowershellPath(), copyPath);
     } catch (err) {

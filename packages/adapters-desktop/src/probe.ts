@@ -66,7 +66,6 @@ public class TorosNative {
   [DllImport("kernel32.dll", SetLastError=true)] public static extern bool ProcessIdToSessionId(uint dwProcessId, out uint pSessionId);
   [DllImport("kernel32.dll", SetLastError=true)] public static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
   [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr hObject);
-  [DllImport("kernel32.dll")] public static extern uint WTSGetActiveConsoleSessionId();
   [DllImport("wtsapi32.dll", SetLastError=true)] public static extern bool WTSQuerySessionInformation(IntPtr hServer, uint sessionId, int wtsInfoClass, out IntPtr ppBuffer, out uint pBytesReturned);
   [DllImport("wtsapi32.dll")] public static extern void WTSFreeMemory(IntPtr pMemory);
   public static string InputDesktopName() {
@@ -103,17 +102,20 @@ public class TorosNative {
     uint sid; if (!ProcessIdToSessionId((uint)pid, out sid)) return -1;
     return (int)sid;
   }
-  public static int ActiveConsoleSession() {
-    return (int)WTSGetActiveConsoleSessionId();
-  }
   public static string SessionConnectState() {
-    uint sid = WTSGetActiveConsoleSessionId();
-    if (sid == 0xFFFFFFFF) { sid = SessionId((int)Process.GetCurrentProcess().Id); }
+    // AR-04: resolve the CURRENT process's session id, then require that
+    // session's connect state to be WTSActive (0), which holds for both an
+    // active console session and an active RDP session. Any other state, a
+    // negative session id, or a failed query is 'disconnected'. The explicit
+    // negative check guards the int -> uint cast so C# 5 (PowerShell 5.1
+    // Add-Type) compiles it: an int is never implicitly widened into uint.
+    int mySid = SessionId(Process.GetCurrentProcess().Id);
+    if (mySid < 0) return "disconnected";
     IntPtr buf; uint bytes;
-    if (!WTSQuerySessionInformation(IntPtr.Zero, sid, 8, out buf, out bytes)) return "unknown";
+    if (!WTSQuerySessionInformation(IntPtr.Zero, (uint)mySid, 8, out buf, out bytes)) return "disconnected";
     int state = Marshal.ReadInt32(buf);
     WTSFreeMemory(buf);
-    switch (state) { case 0: return "active"; case 2: return "connected"; case 5: return "disconnected"; default: return "other"; }
+    return state == 0 ? "active" : "disconnected";
   }
   public static string FileSha256(string path) {
     using (var sha = SHA256.Create())
@@ -157,13 +159,14 @@ if ($null -ne $req.PSObject.Properties['restrict_to_pid']) {
   $restrictPid = $restrictParsed
 }
 try {
-  # Session proof (AR-04): the input desktop must be openable and named 'Default'.
-  # Node Core's own session must be the active console session or an RDP session
-  # whose connect state is WTSActive; otherwise discovery is unavailable.
+  # Session proof (AR-04): the CURRENT process's session (ProcessIdToSessionId)
+  # must have connect state WTSActive (0) — covers an active console session and
+  # an active RDP session. Any other state means 'disconnected'. Only then is the
+  # input desktop checked: unopenable, or not named 'Default', means 'locked'.
+  $connectState = [TorosNative]::SessionConnectState()
+  if ($connectState -ne 'active') { Emit @{ session_state = 'disconnected' }; return }
   $deskName = [TorosNative]::InputDesktopName()
   if ($null -eq $deskName -or $deskName -ne 'Default') { Emit @{ session_state = 'locked' }; return }
-  $connectState = [TorosNative]::SessionConnectState()
-  if ($connectState -ne 'active' -and $connectState -ne 'connected') { Emit @{ session_state = 'disconnected' }; return }
 
   # Hashing cache: keyed by (path, size, last-write) so each file is hashed once
   # per run even when several windows share one image.
@@ -171,22 +174,29 @@ try {
 
   # Reads the identity of one window's owning process, returning $null on any
   # failure (access denied, process gone, hashing failed). Never falls back to a
-  # basename. Emits all fields exactly as the Core validator requires them.
-  function ReadIdentity($pid) {
-    if ($pid -le 0) { return $null }
-    $imagePath = [TorosNative]::FullImagePath($pid)
+  # basename. Emits all fields exactly as the Core validator requires them —
+  # including the canonical-long-path rules Core enforces, so a path the resolver
+  # would refuse is dropped here (counted) instead of failing the whole action.
+  function ReadIdentity($winPid) {
+    if ($winPid -le 0) { return $null }
+    $imagePath = [TorosNative]::FullImagePath($winPid)
     if ($null -eq $imagePath -or $imagePath.Length -eq 0) { return $null }
-    # Canonical long path: an absolute drive path with backslashes only, no
-    # namespace prefix (\\?\ or \\.\), no UNC root, no forward slashes. Refuse
+    # Canonical long path (Core's isValidWindowsImagePath): an absolute drive
+    # path with a backslash after the drive colon, backslashes only, no
+    # namespace prefix (\\?\ or \\.\), no UNC root, no forward slash, no segment
+    # ending in a dot or a space, and no 8.3 short-name segment (~digit). Refuse
     # anything else rather than normalise a short name.
-    if ($imagePath.StartsWith('\\\\?\\') -or $imagePath.StartsWith('\\\\.\\') -or $imagePath.StartsWith('\\\\')) { return $null }
-    if ($imagePath -notmatch '^[A-Za-z]:[^/]*$') { return $null }
+    if ($imagePath -notmatch '^[A-Za-z]:\\\\') { return $null }
+    if ($imagePath.StartsWith('\\\\') -or $imagePath.Contains('\\?\\') -or $imagePath.Contains('\\.\\')) { return $null }
+    if ($imagePath.Contains('/')) { return $null }
+    if ($imagePath -match '[. ](\\\\|$)') { return $null }
+    if ($imagePath -match '~[0-9]') { return $null }
     $fi = $null; try { $fi = Get-Item -LiteralPath $imagePath -ErrorAction Stop } catch { return $null }
     $cacheKey = $imagePath + '|' + $fi.Length + '|' + $fi.LastWriteTimeUtc.Ticks
     $sha = $null
     if ($hashCache.ContainsKey($cacheKey)) { $sha = $hashCache[$cacheKey] }
     else { try { $sha = [TorosNative]::FileSha256($imagePath) } catch { return $null }; $hashCache[$cacheKey] = $sha }
-    $sig = $null; try { $sig = Get-AuthenticodeSignature -FilePath $imagePath } catch { $sig = $null }
+    $sig = $null; try { $sig = Get-AuthenticodeSignature -LiteralPath $imagePath } catch { $sig = $null }
     $sigStatus = 'unsigned'; $signer = $null
     if ($null -ne $sig) {
       $status = [string]$sig.Status
@@ -208,11 +218,16 @@ try {
     }
     $product = $null; try { $product = [string]$fi.VersionInfo.ProductName } catch { }
     if ([string]::IsNullOrWhiteSpace($product)) { $product = $null }
-    $proc = $null; try { $proc = Get-Process -Id $pid -ErrorAction Stop } catch { return $null }
-    $createdAt = $proc.StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-    $sessId = [TorosNative]::SessionId($pid)
+    $proc = $null; try { $proc = Get-Process -Id $winPid -ErrorAction Stop } catch { return $null }
+    # The creation time read can throw on protected/exiting processes; a failure
+    # drops the window rather than aborting the whole probe. The format string is
+    # rendered with InvariantCulture so a locale with a '.' time separator cannot
+    # produce a timestamp Core's UTC validator rejects.
+    $createdAt = $null
+    try { $createdAt = $proc.StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [System.Globalization.CultureInfo]::InvariantCulture) } catch { return $null }
+    $sessId = [TorosNative]::SessionId($winPid)
     if ($sessId -lt 0) { return $null }
-    return @{ pid=$pid; created_at=$createdAt; image_path=$imagePath; image_sha256=[string]$sha.ToLowerInvariant(); signature=$sigStatus; signer=$signer; product_name=$product; session_id=$sessId }
+    return @{ pid=$winPid; created_at=$createdAt; image_path=$imagePath; image_sha256=[string]$sha.ToLowerInvariant(); signature=$sigStatus; signer=$signer; product_name=$product; session_id=$sessId }
   }
 
   if ([string]$req.action -eq 'enumerate_windows') {
@@ -238,12 +253,26 @@ try {
       $nh = if ($hwnd -ne 0) { [string]$hwnd } else { 'rid:' + $rid }
       # pid comes from GetWindowThreadProcessId on the NATIVE handle, not the UIA
       # provider, so it cannot be spoofed by the UIA element tree.
-      $pid = 0
-      if ($hwnd -ne 0) { $pid = [TorosNative]::WindowPid([IntPtr]$hwnd) }
-      $identity = ReadIdentity($pid)
-      if ($null -eq $identity) { $unavailable++ }
+      $winPid = 0
+      if ($hwnd -ne 0) { $winPid = [TorosNative]::WindowPid([IntPtr]$hwnd) }
+      # Native-side re-check of the test-only binding: a window whose NATIVE pid
+      # (GetWindowThreadProcessId) differs from the restricted pid is skipped too,
+      # so a UIA provider cannot smuggle a mismatched ProcessId past the guard.
+      if ($null -ne $restrictPid -and [int64]$winPid -ne $restrictPid) {
+        try { $c = $walker.GetNextSibling($c) } catch { $c = $null }
+        continue
+      }
+      $identity = ReadIdentity($winPid)
+      if ($null -eq $identity) {
+        # No identity means no publishable window: never read its text, never
+        # emit it, never count it toward the cap. Only the unavailable counter
+        # records it.
+        $unavailable++
+        try { $c = $walker.GetNextSibling($c) } catch { $c = $null }
+        continue
+      }
       $w = @{ native_handle=$nh; z_order=$z; foreground=($hwnd -ne 0 -and $hwnd -eq $fg) }
-      if ($null -ne $identity) { $w['identity'] = $identity }
+      $w['identity'] = $identity
       if ($hwnd -ne 0) {
         $wt = [TorosNative]::WindowText([IntPtr]$hwnd)
         if ($null -ne $wt) { $w['title'] = $wt }
@@ -273,10 +302,12 @@ try {
       try { $c = $walker.GetNextSibling($c) } catch { $c = $null }
     }
     if ($null -eq $target) { Emit @{ closed = $true }; return }
-    $pid = 0
+    $winPid = 0
     $hwndT = [int64]$target.Current.NativeWindowHandle
-    if ($hwndT -ne 0) { $pid = [TorosNative]::WindowPid([IntPtr]$hwndT) }
-    $identity = ReadIdentity($pid)
+    if ($hwndT -ne 0) { $winPid = [TorosNative]::WindowPid([IntPtr]$hwndT) }
+    # Native-side re-check of the test-only binding, mirroring enumerate_windows.
+    if ($null -ne $restrictPid -and [int64]$winPid -ne $restrictPid) { Emit @{ closed = $true }; return }
+    $identity = ReadIdentity($winPid)
     $depth = [int]$req.depth; $maxc = [int]$req.max_controls
     if ($maxc -le 0) { $maxc = [int]::MaxValue }
     $cwalker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
@@ -497,6 +528,21 @@ function isValidUtcTimestamp(value: string): boolean {
 }
 
 /**
+ * A canonical Windows absolute drive path, as `QueryFullProcessImageName` returns
+ * it — the exact rules Core's `isValidWindowsImagePath` enforces. The adapter must
+ * refuse, not normalise, anything else (an 8.3 `%TEMP%` short name, a namespace
+ * prefix, a UNC root, a forward-slash separator, a trailing dot/space segment).
+ */
+function isValidWindowsImagePath(value: string): boolean {
+  if (!/^[A-Za-z]:\\/.test(value)) return false;
+  if (value.startsWith('\\\\') || value.includes('\\?\\') || value.includes('\\.\\')) return false;
+  if (value.includes('/')) return false;
+  if (/[. ](?:\\|$)/.test(value)) return false;
+  if (/~[0-9]/.test(value)) return false;
+  return true;
+}
+
+/**
  * Parses the identity object the PowerShell emitted into the `AppIdentity` shape
  * the adapter threads to Core. Because the adapter's normalisation is what Core's
  * validator then checks, every field is coerced to the exact contract spelling:
@@ -509,7 +555,7 @@ export function parseIdentity(raw: Record<string, unknown>): AppIdentity | null 
   const created_at = raw['created_at'];
   if (typeof created_at !== 'string' || !isValidUtcTimestamp(created_at)) return null;
   const image_path = raw['image_path'];
-  if (typeof image_path !== 'string' || image_path.length === 0) return null;
+  if (typeof image_path !== 'string' || !isValidWindowsImagePath(image_path)) return null;
   const image_sha256 = raw['image_sha256'];
   if (typeof image_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(image_sha256)) return null;
   const signature = raw['signature'];
