@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, relative, resolve } from 'node:path';
 
 import {
@@ -81,6 +81,10 @@ const MAX_ITEMS = 100;
 const MAX_FIELDS = 20;
 const MAX_DOCUMENT_RULES = 6;
 const MAX_DOCUMENT_BYTES = 100 * 1024 * 1024;
+// Windows refuses to rename onto a file any other handle has open (a viewer, the cockpit, Defender,
+// the search indexer). Those holds are brief, so the atomic replace retries with a bounded backoff.
+const REPLACE_ATTEMPTS = 10;
+const REPLACE_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 
 function now(): string { return new Date().toISOString(); }
 function fail(message: string): never { throw new TorosError(ErrorCode.E_SCHEMA, message, {}); }
@@ -114,6 +118,19 @@ function asObject(value: unknown, message: string): Record<string, unknown> {
 function delayMs(minSeconds: number, maxSeconds: number): number {
   return Math.round((minSeconds + Math.random() * (maxSeconds - minSeconds)) * 1_000);
 }
+async function replaceFile(temporary: string, path: string): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try { await rename(temporary, path); return; }
+    catch (error: unknown) {
+      const code = error instanceof Error && 'code' in error ? error.code : undefined;
+      if (process.platform !== 'win32' || typeof code !== 'string' || !REPLACE_RETRY_CODES.has(code) || attempt >= REPLACE_ATTEMPTS) {
+        await rm(temporary, { force: true }).catch(() => undefined);
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(100, 10 * 2 ** (attempt - 1))));
+    }
+  }
+}
 
 export class BrowserAcquisitionController {
   private readonly acquisitions = new Map<string, MutableAcquisition>();
@@ -121,6 +138,9 @@ export class BrowserAcquisitionController {
   private timer: NodeJS.Timeout | null = null;
   private busy = false;
   private saving: Promise<void> = Promise.resolve();
+  private readonly manifestWrites = new Map<string, Promise<void>>();
+  /** Acquisitions whose latest state could not be persisted; reconcile writes them again. */
+  private readonly unpersisted = new Set<string>();
 
   constructor(private readonly deps: BrowserAcquisitionDeps) {
     this.statePath = deps.db_path === ':memory:' ? null : `${deps.db_path}.browser-acquisitions.json`;
@@ -167,7 +187,8 @@ export class BrowserAcquisitionController {
   async stop(): Promise<void> {
     if (this.timer !== null) clearInterval(this.timer);
     this.timer = null;
-    await this.saving;
+    await this.flushUnpersisted();
+    await Promise.all([this.saving, ...this.manifestWrites.values()].map((write) => write.catch(() => undefined)));
   }
 
   list(): readonly BrowserAcquisitionRecord[] {
@@ -269,6 +290,7 @@ export class BrowserAcquisitionController {
 
   private async reconcile(): Promise<void> {
     if (this.busy) return;
+    await this.flushUnpersisted();
     const record = [...this.acquisitions.values()].find((candidate) => candidate.state === 'running' || candidate.state === 'waiting');
     if (record === undefined) return;
     if (record.state === 'waiting' && record.next_run_at !== null && Date.now() < Date.parse(record.next_run_at)) return;
@@ -360,7 +382,6 @@ export class BrowserAcquisitionController {
         document.content_type = typeof output['mime_type'] === 'string' ? output['mime_type'].slice(0, 128) : null;
         document.path = relative(resolve(workspace.root), resolve(artifact.path)).replaceAll('\\', '/');
         document.sha256 = artifact.sha256; document.bytes = artifact.bytes; document.duplicate_of = duplicate?.path ?? null; document.error = null;
-        await this.saveAndManifest(record);
       } catch (error: unknown) {
         const detail = error instanceof TorosError ? error.detail : {};
         const workerCode = typeof detail['worker_code'] === 'string' ? detail['worker_code'] : 'download_failed';
@@ -374,17 +395,17 @@ export class BrowserAcquisitionController {
         await this.saveAndManifest(record);
         throw error;
       }
+      // Outside the try: a failed write must not relabel bytes that already landed as download_failed.
+      await this.saveAndManifest(record);
     }
 
     item.state = 'completed'; item.ended_at = now(); item.error = null;
     item.error_code = null; item.retry_after_seconds = null;
     record.consecutive_rate_limits = 0;
     record.current_item += 1; record.updated_at = now(); record.error = null;
-    if (record.current_item >= record.items.length) await this.complete(record);
-    else {
-      record.state = 'waiting'; record.next_run_at = new Date(Date.now() + delayMs(record.min_delay_seconds, record.max_delay_seconds)).toISOString();
-      await this.saveAndManifest(record);
-    }
+    if (record.current_item >= record.items.length) { await this.complete(record); return; }
+    record.state = 'waiting'; record.next_run_at = new Date(Date.now() + delayMs(record.min_delay_seconds, record.max_delay_seconds)).toISOString();
+    await this.persistSettled(record);
   }
 
   private async handleFailure(record: MutableAcquisition, item: MutableItem, error: unknown): Promise<void> {
@@ -424,15 +445,41 @@ export class BrowserAcquisitionController {
   }
 
   private async complete(record: MutableAcquisition): Promise<void> {
-    record.state = 'completed'; record.error = null; record.next_run_at = null; record.updated_at = now();
+    // Close the job first: if that fails the record is still running, and the next reconcile
+    // reaches complete() again because current_item is past the last item.
     const job = await this.deps.store().getJob(record.job_id);
     if (job !== null && !isTerminal(job.state)) await this.deps.store().setJobState(job.job_id, 'proposed');
-    await this.saveAndManifest(record);
+    record.state = 'completed'; record.error = null; record.next_run_at = null; record.updated_at = now();
+    await this.persistSettled(record);
+  }
+
+  /**
+   * Persist a record whose item outcome is already settled. A write failure here is not an item
+   * attempt: it must never reach handleFailure and reopen a completed item as paused or exhausted.
+   * The in-memory record stays authoritative and reconcile writes it again.
+   */
+  private async persistSettled(record: MutableAcquisition): Promise<void> {
+    try { await this.saveAndManifest(record); }
+    catch (error: unknown) {
+      this.unpersisted.add(record.acquisition_id);
+      console.error('browser acquisition state could not be persisted; will retry', record.acquisition_id, error);
+    }
+  }
+
+  private async flushUnpersisted(): Promise<void> {
+    for (const id of [...this.unpersisted]) {
+      const record = this.acquisitions.get(id);
+      if (record === undefined) { this.unpersisted.delete(id); continue; }
+      try { await this.saveAndManifest(record); }
+      catch (error: unknown) { console.error('browser acquisition state could not be persisted; will retry', id, error); }
+    }
   }
 
   private async saveAndManifest(record: MutableAcquisition): Promise<void> {
     await this.save();
     await this.writeManifest(record);
+    // Both stores now hold this record's latest state (save() writes every acquisition).
+    this.unpersisted.delete(record.acquisition_id);
   }
 
   private async writeManifest(record: MutableAcquisition): Promise<void> {
@@ -441,21 +488,31 @@ export class BrowserAcquisitionController {
     const path = resolve(workspace.root, record.manifest_path);
     const root = resolve(workspace.root);
     if (!(path === root || path.startsWith(`${root}\\`) || path.startsWith(`${root}/`))) fail('acquisition manifest escaped its workspace');
-    await mkdir(dirname(path), { recursive: true });
-    const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-    await writeFile(temporary, JSON.stringify(publicRecord(record), null, 2), 'utf8');
-    await rename(temporary, path);
+    // Snapshot now and serialise per record, so writes land in call order and the last one wins.
+    const data = JSON.stringify(publicRecord(record), null, 2);
+    const previous = this.manifestWrites.get(record.acquisition_id) ?? Promise.resolve();
+    const write = previous.catch(() => undefined).then(async () => {
+      await mkdir(dirname(path), { recursive: true });
+      const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+      await writeFile(temporary, data, 'utf8');
+      await replaceFile(temporary, path);
+    });
+    this.manifestWrites.set(record.acquisition_id, write);
+    try { await write; }
+    finally { if (this.manifestWrites.get(record.acquisition_id) === write) this.manifestWrites.delete(record.acquisition_id); }
   }
 
   private async save(): Promise<void> {
     if (this.statePath === null) return;
     const data = JSON.stringify({ version: 1, acquisitions: [...this.acquisitions.values()] } satisfies PersistedAcquisitions, null, 2);
     const path = this.statePath;
-    this.saving = this.saving.then(async () => {
+    // catch() first: one failed write must not reject every later save chained behind it.
+    const write = this.saving.catch(() => undefined).then(async () => {
       await mkdir(dirname(path), { recursive: true });
       const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-      await writeFile(temporary, data, 'utf8'); await rename(temporary, path);
+      await writeFile(temporary, data, 'utf8'); await replaceFile(temporary, path);
     });
-    await this.saving;
+    this.saving = write;
+    await write;
   }
 }
