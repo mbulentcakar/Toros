@@ -299,3 +299,20 @@ Codex: REQUEST CHANGES (four P2, two P3). All six are accepted.
      failed-invoke counts (item 3), and invoke still called when every target is denied.
 
 Acceptance as before: a clean typecheck, `npm test` 0 failed, and CI green.
+
+## F3a round 3 — after the Codex review of d38af62 (2026-10-20)
+
+Codex: all six round-2 items fixed. One new P2:
+
+1. **The shared deadline can reject unhandled (P2).** In `action-pipeline.ts`, `withinTimeout`
+   evaluates `work()` before it builds `Promise.race`. When a resolver (or `invoke`) throws
+   **synchronously**, `deadline` never gets a handler. If the timer then fires while the catch
+   path awaits failure persistence (SQLite busy retries can yield), the rejection is unhandled.
+   Under Node's default `--unhandled-rejections=throw`, that can terminate Core.
+   - **Fix:** right after creating `deadline`, attach `void deadline.catch(() => {});` and keep
+     the original promise for the races. Make `withinTimeout` call `work()` inside the `try`, so
+     a synchronous throw is handled like a rejected promise.
+   - **Regression:** a resolver that throws synchronously, a failure-event write delayed past the
+     action timeout (inject a slow `appendEvent` or `putReceipt`), and a `process.on('unhandledRejection')`
+     probe. Assert zero unhandled rejections, a closed receipt, and a cleared timer. Prove that
+     the test fails without the `.catch` line.
