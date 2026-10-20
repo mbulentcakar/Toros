@@ -311,7 +311,11 @@ class PolicyImpl implements Policy {
    */
   private decideTarget(envelope: JobEnvelope, target: ResolvedTarget): 'allowed' | 'denied' {
     if (target.kind === 'capability') {
-      return envelope.allowed_capabilities.includes(target.capability) ? 'allowed' : 'denied';
+      // RR-03: a forbidden capability is denied even when the envelope allows
+      // it. `forbidden` is a belt-and-braces layer over the allowlist, and it
+      // wins when both speak.
+      if (!envelope.allowed_capabilities.includes(target.capability)) return 'denied';
+      return isForbidden(envelope, target.capability) ? 'denied' : 'allowed';
     }
 
     const identity = target.identity;
@@ -322,18 +326,13 @@ class PolicyImpl implements Policy {
     if (apps === undefined || apps.length === 0) return 'denied';
     if (!apps.some((rule) => appRuleMatches(rule, identity))) return 'denied';
 
-    // Rule 2: no forbidden term may match the image basename, product name or
-    // signer, using the same token matching as `isForbidden`. This wins even
-    // when a rule matched — the allowlist does not override `forbidden`.
-    //
-    // `path.win32.basename` on purpose: `identity.image_path` is a Windows
-    // contract value, so the basename must be extracted with Windows separator
-    // semantics. The host's own `path.basename` on a POSIX node leaves a
-    // backslash path intact and would then tokenise it as one string, letting a
-    // forbidden token in a DIRECTORY incorrectly deny the executable's own
-    // name.
-    const basename = path.win32.basename(identity.image_path);
-    if (isForbidden(envelope, basename)
+    // Rule 2: no forbidden term may match the FULL image path (every folder and
+    // the file name), the product name, or the signer, using the same sequence
+    // matching as `isForbidden`. This wins even when a rule matched — the
+    // allowlist does not override `forbidden`. The whole path is checked, not
+    // just the basename, because a job that forbids a directory must not let a
+    // different executable in that directory slip through.
+    if (isForbidden(envelope, identity.image_path)
       || isForbidden(envelope, identity.product_name ?? '')
       || isForbidden(envelope, identity.signer ?? '')) {
       return 'denied';

@@ -291,6 +291,12 @@ export function sealEnvelope(input: unknown): SealedEnvelope {
     if (typeof term !== 'string' || term.length === 0) {
       throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `forbidden[${i}] must be a non-empty string`, { field: 'forbidden' });
     }
+    // A term such as `"--"` produces no alphanumeric word, so it could never
+    // match a candidate (see `isForbidden`). Refuse it at seal time rather than
+    // let an operator write a forbidden term that is silently inert.
+    if (tokenize(term).length === 0) {
+      throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `forbidden[${i}] must contain at least one alphanumeric word`, { field: 'forbidden' });
+    }
     if (forbidSet.has(term)) {
       throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `forbidden contains duplicate: ${term}`, { field: 'forbidden' });
     }
@@ -486,27 +492,55 @@ export function assertRetries(envelope: JobEnvelope, retriesUsed: number): void 
 // ---------------------------------------------------------------------------
 
 /**
- * True when `term` appears in the envelope's `forbidden` list, matched
- * case-insensitively against whole tokens.
+ * Split `text` into lower-case alphanumeric words: lower-case it, split on runs
+ * of characters that are not `[a-z0-9]`, and drop empty tokens. Both the
+ * forbidden term and the candidate it is matched against go through this, so a
+ * term and candidate spelled with different separators still agree
+ * (`desktop.inspect`, `desktop_inspect`, and `desktop inspect` all tokenise to
+ * `['desktop', 'inspect']`).
+ */
+function tokenize(text: string): string[] {
+  return text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+/**
+ * True when `needle`'s words appear as a contiguous run in `haystack`'s words.
+ */
+function containsRun(haystack: readonly string[], needle: readonly string[]): boolean {
+  if (needle.length === 0 || haystack.length < needle.length) return false;
+  for (let start = 0; start <= haystack.length - needle.length; start++) {
+    let matches = true;
+    for (let offset = 0; offset < needle.length; offset++) {
+      if (haystack[start + offset] !== needle[offset]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return true;
+  }
+  return false;
+}
+
+/**
+ * True when any forbidden term's words appear as a contiguous run in `term`'s
+ * words, case-insensitively (RR-01, token-sequence matching).
  *
- * The haystack (term) is split on characters that are not [a-z0-9]. Each token
- * is lowercased and compared against each forbidden entry (also lowered). This
- * means `forbidden: ["push"]` matches `git push`, `PUSH`, and `force-push`,
- * but NOT `pushover` — a substring match would deny unrelated actions and
- * teach operators to keep the list short, which is the opposite of what it
- * is for.
+ * The old behaviour lower-cased each forbidden entry whole and compared it
+ * against each single token of the candidate, so a multi-word term
+ * (`powershell.exe`, `Microsoft Windows`) never matched — `microsoft windows`
+ * is not one token. Matching on token sequences fixes that while keeping a
+ * single-word term exactly as before and still refusing substrings: `deploy`
+ * does not match `redeploy`, and `power` does not match `powershell`.
  */
 export function isForbidden(envelope: JobEnvelope, term: string): boolean {
   if (envelope.forbidden.length === 0) return false;
 
-  // Split the term on characters that are not [a-z0-9].
-  const tokens = term.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const candidateTokens = tokenize(term);
 
   for (const forbidden of envelope.forbidden) {
-    const lowered = forbidden.toLowerCase();
-    for (const token of tokens) {
-      if (token === lowered) return true;
-    }
+    // A sealed envelope refuses zero-token entries, but `isForbidden` also runs
+    // against hand-built envelopes in tests; an empty term list is simply inert.
+    if (containsRun(candidateTokens, tokenize(forbidden))) return true;
   }
 
   return false;
