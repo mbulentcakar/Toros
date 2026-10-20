@@ -249,33 +249,35 @@ function powershellExe(env: NodeJS.ProcessEnv = process.env): string {
  * The production drive reader: one `execFile` of Windows PowerShell per call,
  * `shell: false`, `-NoProfile -NonInteractive -Command` with the fixed command.
  * Honors `signal` and the action timeout, caps the output size, and fails
- * closed — any error, timeout, abort, or oversized output yields an empty list
- * so every drive letter is treated as non-fixed (probe nothing, count the skip).
+ * closed — any error, timeout, abort, or oversized output **rejects**, so
+ * `resolveFixedDrives` never caches a failed read and every drive letter is
+ * treated as non-fixed (probe nothing, count the skip).
  */
 function createPowerShellDriveTypes(): DriveTypes {
   return (signal: AbortSignal, timeoutMs: number): Promise<readonly string[]> =>
-    new Promise<readonly string[]>((resolvePromise) => {
+    new Promise<readonly string[]>((resolvePromise, rejectPromise) => {
       if (signal.aborted) {
-        resolvePromise([]);
+        rejectPromise(new Error('drive reader aborted before spawn'));
         return;
       }
       let settled = false;
       let child: ReturnType<typeof execFile> | undefined;
       let timer: NodeJS.Timeout | undefined;
-      const finish = (letters: readonly string[]): void => {
+      const finish = (err: Error | undefined, letters: readonly string[]): void => {
         if (settled) return;
         settled = true;
         if (timer !== undefined) clearTimeout(timer);
         signal.removeEventListener('abort', onAbort);
-        resolvePromise(letters);
+        if (err !== undefined) rejectPromise(err);
+        else resolvePromise(letters);
       };
       const onAbort = (): void => {
         child?.kill();
-        finish([]);
+        finish(new Error('drive reader aborted'), []);
       };
       timer = setTimeout(() => {
         child?.kill();
-        finish([]);
+        finish(new Error('drive reader timed out'), []);
       }, timeoutMs);
       signal.addEventListener('abort', onAbort, { once: true });
       try {
@@ -285,7 +287,7 @@ function createPowerShellDriveTypes(): DriveTypes {
           { shell: false, windowsHide: true, timeout: timeoutMs, maxBuffer: MAX_DRIVE_OUTPUT_BYTES },
           (error, stdout) => {
             if (error) {
-              finish([]);
+              finish(error, []);
               return;
             }
             const letters: string[] = [];
@@ -293,11 +295,11 @@ function createPowerShellDriveTypes(): DriveTypes {
               const trimmed = line.trim().toLowerCase();
               if (/^[a-z]$/.test(trimmed)) letters.push(trimmed);
             }
-            finish(letters);
+            finish(undefined, letters);
           },
         );
-      } catch {
-        finish([]);
+      } catch (err) {
+        finish(err instanceof Error ? err : new Error(String(err)), []);
       }
     });
 }
@@ -330,8 +332,14 @@ async function resolveFixedDrives(
 
   try {
     const letters = await driveReader(signal, driveReaderBudget(timeoutMs));
-    cache.letters = letters;
-    cache.cachedAtMs = now();
+    // Cache only a result that is non-empty AND obtained without an abort in
+    // flight. Every Windows node has at least its system fixed drive, so an
+    // empty list is a failure signal and must not be cached; an aborted read
+    // is likewise re-run next invoke (AR-F5 round 3, P1).
+    if (!signal.aborted && letters.length > 0) {
+      cache.letters = letters;
+      cache.cachedAtMs = now();
+    }
     return new Set(letters.map((letter) => letter.toLowerCase()));
   } catch {
     return new Set<string>();
@@ -576,25 +584,22 @@ export function createMachineAdapter(options: MachineAdapterOptions): Adapter {
       // AR-09 — job-scoped inventory. Core supplies a decision per resolved
       // capability target; an entry is reported in full only when at least one
       // capability backed by its adapter was allowed. Otherwise it is reduced
-      // to `{ id, readiness: 'unauthorized' }`. When no decisions are present
-      // (a direct unit invocation that skipped the resolve step), no filter is
-      // applied — production always runs the resolve step first.
-      let publicEntries: PublicEntry[] = internalEntries.map(toPublicEntry);
-      const decisions = ctx.target_decisions;
-      if (decisions !== undefined) {
-        const allowedAdapters = new Set<string>();
-        for (const [key, decision] of decisions) {
-          if (decision === 'allowed') {
-            const adapterId = key.split('.')[0];
-            if (adapterId !== undefined) allowedAdapters.add(adapterId);
-          }
+      // to `{ id, readiness: 'unauthorized' }`. Absent `target_decisions` is
+      // treated as an empty decision map, so without explicit decisions every
+      // entry fails closed to `unauthorized` (AR-F5 round 3, P2).
+      const decisions = ctx.target_decisions ?? new Map<string, 'allowed' | 'denied'>();
+      const allowedAdapters = new Set<string>();
+      for (const [key, decision] of decisions) {
+        if (decision === 'allowed') {
+          const adapterId = key.split('.')[0];
+          if (adapterId !== undefined) allowedAdapters.add(adapterId);
         }
-        publicEntries = internalEntries.map((entry) =>
-          allowedAdapters.has(entry.adapterId)
-            ? toPublicEntry(entry)
-            : { id: entry.id, readiness: 'unauthorized' },
-        );
       }
+      const publicEntries: PublicEntry[] = internalEntries.map((entry) =>
+        allowedAdapters.has(entry.adapterId)
+          ? toPublicEntry(entry)
+          : { id: entry.id, readiness: 'unauthorized' },
+      );
 
       // Apply capability_filter substring match on id and backs_adapter.
       let filteredEntries = publicEntries;
