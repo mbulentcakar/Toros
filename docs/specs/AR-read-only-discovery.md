@@ -85,8 +85,9 @@ to be false the correct response is to stop and say so (00-CONTRACTS §1), not t
   `always_requires_approval: false`, `path_fields: []`. Read-only actions are already exempt from
   the approval gate; nothing special is needed.
 - **Permissions reuse the existing enum.** `machine.inventory`:
-  `['process.spawn', 'fs.read']`. `desktop.*`: `['process.spawn', 'app.automation']` (same as
-  Spec V). No new `Permission` value, so `packages/contracts` stays frozen.
+  `['process.spawn', 'fs.read']`. `desktop.*`: `['process.spawn', 'app.automation', 'fs.read',
+  'fs.write']` — `fs.read`/`fs.write` are declared (AR-11) because the probe reads and writes only
+  its own `mkdtemp` directory. No new `Permission` value, so `packages/contracts` stays frozen.
 - **The envelope already carries the scope this slice needs.** `allowed_capabilities`,
   `allowed_workspaces`, `forbidden`, `max_actions`, `max_retries`, `expires_at`
   (`packages/contracts/src/envelope.ts`), and — added by A8 — the optional `allowed_apps` for the
@@ -159,20 +160,28 @@ action's `input_schema`; the output shapes are the adapter's contract with its c
 
 ### `desktop.state`  (package `@toros/adapters-desktop`)
 
-- **Input:** `{ session_scope: string }` — the authorized interactive session identifier. Loopback
-  presence is **not** authentication (invariant 1).
-- **Output:** `{ freshness_token, windows: [{ window_id (opaque), z_order, foreground: bool,
-  app_in_scope: bool, title? }], session_state: 'active'|'locked'|'disconnected' }`. `title` is
-  present only where `app_in_scope` is true. `freshness_token` is a per-enumeration nonce the
-  adapter mints and later validates.
-- **Bounds:** bounded window count; a locked or disconnected session returns `session_state` and
-  **no window list** — it is `unavailable`, not an empty success.
-- **Permissions:** `['process.spawn', 'app.automation']`. **Receipt fields:** `window_count`,
-  `session_state`, `truncated`.
+- **Input:** `{ session_scope: 'interactive' }` — the enum value `"interactive"` (amendment A8,
+  F3b). Any other value is schema-rejected (`E_SCHEMA`).
+- **Output (active):** `{ session: 'active', freshness_token, windows: [{ window_id (opaque),
+  z_order, foreground: bool, title? }], changed? }`. Settlement is now two-phase (A8): only
+  windows Core allowed against the envelope's `allowed_apps` are published, and only those whose
+  OS identity re-verifies (pid, creation time, SHA-256) at execute time. A window that changed
+  is dropped and counted in `changed`.
+- **Output (unavailable):** `{ session: 'unavailable', reason: 'locked' | 'disconnected', windows: [] }`
+  — a locked or disconnected session returns this shape and **no window list**.
+- **Identity (AR-10):** the owning application is identified as the OS observes it — pid, creation
+  time, canonical long image path (`QueryFullProcessImageName`), image SHA-256, Authenticode
+  signature + subject CN, version-resource ProductName, and session id — never by a spoofable
+  process basename.
+- **Bounds:** bounded window count; a window whose identity cannot be read is dropped (not
+  basename-fell-back).
+- **Permissions:** `['process.spawn', 'app.automation', 'fs.read', 'fs.write']`. **Receipt fields:**
+  `window_count`, `session`, `reason`, `truncated`, `changed`.
 
 ### `desktop.inspect`  (package `@toros/adapters-desktop`)
 
-- **Input:** `{ window_id, freshness_token, depth?, control_filter?, page?, page_size? }`.
+- **Input:** `{ session_scope: 'interactive', window_id, freshness_token, depth?, control_filter?,
+  page?, page_size? }`.
 - **Output:** `{ controls: [{ control_id (opaque), type, automation_id?, enabled, patterns[] }],
   truncated: bool, next_page? }`. Control output is structure only; UIA `Name` is **never read or
   emitted** for controls (AR-F2 remediation for AR-01). `automation_id` is included only when it is
@@ -181,12 +190,17 @@ action's `input_schema`; the output shapes are the adapter's contract with its c
   a future Spec V `invoke` can be planned without this action performing one. Window titles in
   `desktop.state` come from native window text (`GetWindowText` on the top-level handle, capped at 256
   characters), not UIA `Name`.
-- **Failure modes, each explicit and tested:** `window_id` unknown → `E_STALE_HANDLE`;
-  `freshness_token` stale or reused → `refresh_required` (return this, do **not** guess another
-  window — invariant 4); window's app not in authorized scope → `denied`; window closed since
-  enumeration → `unavailable`.
-- **Permissions:** `['process.spawn', 'app.automation']`. **Receipt fields:** `control_count`,
-  `truncated`, `depth`.
+- **Two-phase (A8):** `desktop.inspect` resolves its single window from the handle and inspects
+  only on an `allowed` decision; a denied decision returns `denied`. At execute time it re-verifies
+  pid, creation time and SHA-256 against the resolved identity — a mismatch is `unavailable`, never
+  the new owner's tree.
+- **Failure modes, each explicit and tested:** `window_id` unknown, `freshness_token` stale,
+  reused, expired, or from a foreign job/actor → `refresh_required` (the **same shape** for all of
+  them, so a caller cannot probe which case it hit — invariant 4); window's app not allowed →
+  `denied`; window closed since enumeration, or its identity changed → `unavailable`. Handles are
+  per `(job_id, actor)`, **single-use**, valid for at most 60 s.
+- **Permissions:** `['process.spawn', 'app.automation', 'fs.read', 'fs.write']`. **Receipt
+  fields:** `status`, `control_count`, `truncated`, `depth`.
 
 **Automation mechanism (both `desktop.*` actions), per Spec V's established discipline:** drive
 `System.Windows.Automation` from PowerShell — parameters written to a JSON file in the session

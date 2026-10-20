@@ -24,5 +24,8 @@
   },
   "dependencies": {
     "@toros/contracts": "*"
+  },
+  "devDependencies": {
+    "@toros/registry": "*"
   }
 }

@@ -8,12 +8,13 @@
  * `packages/policy`, the persistence in `packages/store`, and nothing here
  * decides anything — a process entrypoint is a bad place to hide behaviour.
  */
-import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { Adapter, NodePlatform, SecurityObserver, Workspace } from '@toros/contracts';
+import type { Adapter, AppRule, NodePlatform, SecurityObserver, Workspace } from '@toros/contracts';
 import { createClaudeAdapter, createCodexAdapter, createGeminiAdapter, createGrokAdapter } from '@toros/adapters-cli';
 import { createExcelAdapter } from '@toros/adapters-app';
 import { createChromeWorkerAdapter } from '@toros/adapters-chrome';
@@ -37,6 +38,7 @@ interface RuntimeProfile {
 import { createNodeCore, type ObserverDeps } from './index.js';
 import { createCoordinatorSupervisor } from './coordinator-supervisor.js';
 import { approvalTtlMinutes } from './approvals.js';
+import { validateDesktopAuthorizedApps } from './desktop-config.js';
 
 interface FileConfig {
   readonly node_id: string;
@@ -54,7 +56,7 @@ readonly chrome?: {
         readonly allowed_domains: readonly string[];
         readonly extension_dir?: string;
       };
-      readonly desktop?: { readonly authorized_apps: readonly string[] };
+      readonly desktop?: { authorized_apps: AppRule[] };
     };
   readonly runtime_profiles?: Readonly<Record<string, RuntimeProfile>>;
   readonly numbat?: { readonly records_path?: string };
@@ -102,6 +104,64 @@ async function loadConfig(path: string): Promise<FileConfig> {
     throw new Error(`${path}: at least one workspace is required`);
   }
   return { ...config, approval_ttl_minutes: approvalTtlMinutes(config.approval_ttl_minutes, path) };
+}
+
+/**
+ * The fixed, parameter-free PowerShell that reports the Windows session id of
+ * the process named by the single integer argument. No caller value reaches
+ * this source; the only input is the numeric pid, passed as a positional argv.
+ */
+const NODE_SESSION_ID_PS1 = `# toros-node-session-id.ps1 — fixed. Reads the session id of the pid in $args[0].
+$ErrorActionPreference = 'Stop'
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public static class TorosSession {
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool ProcessIdToSessionId(uint dwProcessId, out uint pSessionId);
+}
+"@
+if ($args.Count -lt 1) { exit 2 }
+$targetPid = 0
+if (-not [long]::TryParse([string]$args[0], [ref]$targetPid)) { exit 2 }
+$sid = 0u
+if ([TorosSession]::ProcessIdToSessionId([uint32]$targetPid, [ref]$sid)) { [Console]::WriteLine([string]$sid) } else { exit 1 }
+`;
+
+/**
+ * Determine Node Core's own Windows session id once at startup (amendment A8,
+ * F3b): a small fixed PowerShell call to `ProcessIdToSessionId(process.pid)`.
+ * Returns null on any failure — every `app` target then fails closed — after
+ * writing one log line, never an error that would stop the node from serving
+ * non-desktop work.
+ */
+export async function resolveNodeSessionId(pid: number, systemRoot: string | undefined): Promise<number | null> {
+  const powershell = systemRoot !== undefined && systemRoot.length > 0
+    ? join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    : 'powershell.exe';
+  const dir = await mkdtemp(join(tmpdir(), 'toros-session-'));
+  const scriptPath = join(dir, 'session.ps1');
+  try {
+    await writeFile(scriptPath, NODE_SESSION_ID_PS1, 'utf8');
+    const stdout = await runFixedScript(powershell, scriptPath, [String(pid)]);
+    const parsed = Number(stdout.trim());
+    if (Number.isSafeInteger(parsed) && parsed >= 0) return parsed;
+    return null;
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+function runFixedScript(powershell: string, scriptPath: string, args: readonly string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      powershell,
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args],
+      { shell: false, windowsHide: true, timeout: 30_000, maxBuffer: 1024 * 1024 },
+      (error, stdout, _stderr) => {
+        if (error) { reject(error); return; }
+        resolve(stdout);
+      },
+    );
+  });
 }
 
 /**
@@ -229,6 +289,29 @@ async function main(): Promise<void> {
   const path = configPath();
   const config = await loadConfig(path);
 
+  // Validate + normalise the desktop application config (amendment A8, F3b): a
+  // bare string entry (the old basename form) refuses to start here, naming the
+  // new AppRule format.
+  if (config.adapters?.desktop !== undefined) {
+    config.adapters.desktop.authorized_apps = validateDesktopAuthorizedApps(config.adapters.desktop.authorized_apps, path) ?? [];
+  }
+
+  // Determine Node Core's own Windows session id once at startup (F3b): policy
+  // needs it to require a resolved app to live in the same session. On failure —
+  // or off-Windows — it is null, so every `app` target fails closed; log one line
+  // and keep serving non-desktop work.
+  let desktopSessionId: number | null = null;
+  if (config.adapters?.desktop !== undefined && process.platform === 'win32') {
+    try {
+      desktopSessionId = await resolveNodeSessionId(process.pid, process.env['SystemRoot'] ?? process.env['SYSTEMROOT']);
+    } catch (error: unknown) {
+      desktopSessionId = null;
+    }
+    if (desktopSessionId === null) {
+      console.info('desktop adapter enabled but the node session id could not be resolved; desktop app targets will be denied');
+    }
+  }
+
   // Strict `=== true` is deliberate and fail-closed: an omitted key, `false`, or
   // a non-boolean (e.g. the string "false" from a hand-edited config) all leave
   // the coordinator OFF. Do not loosen this to a truthiness check.
@@ -271,6 +354,7 @@ async function main(): Promise<void> {
     approval_required: config.approval_required ?? [],
     approval_ttl_minutes: config.approval_ttl_minutes ?? 60,
     ...(config.operator_token === undefined ? {} : { operator_token: config.operator_token }),
+    ...(desktopSessionId === null ? {} : { desktop_session_id: desktopSessionId }),
   });
 
   const { port, registered_capabilities } = await core.start();
@@ -299,6 +383,12 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
+// Start unconditionally at module load: the entrypoint must never depend on how
+// `process.argv[1]` was spelled (drive-letter casing, a relative path, a junction
+// or symlinked install, or a launcher shim could all make an import.meta.url
+// comparison fail and silently exit). The exported config helpers live in
+// `desktop-config.ts` and are imported from there for testing, so neither they
+// nor any test need to import this module.
 main().catch((error: unknown) => {
   console.error('Toros Node Core failed to start:', error instanceof Error ? error.message : error);
   process.exit(1);

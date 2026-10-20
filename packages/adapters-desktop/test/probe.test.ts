@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 
 import { ErrorCode, TorosError } from '@toros/contracts';
 
-import { runPowerShell, type ProbeSpawn } from '../src/probe.js';
+import { runPowerShell, parseIdentity, type ProbeSpawn } from '../src/probe.js';
 
 // ---------------------------------------------------------------------------
 // AR-F4 acceptance for the runPowerShell wrapper: pre-abort refusal, output
@@ -285,4 +285,53 @@ test('a cleanup failure logs only the basename and the error code, and keeps the
   assert.ok(log.includes('EACCES'), `the cleanup log omitted the error code: ${log}`);
   assert.ok(!log.includes(tmpdir()), `the cleanup log leaked the temp directory path: ${log}`);
   assert.ok(!log.includes('permission denied'), `the cleanup log leaked the raw error message: ${log}`);
+});
+
+// ---------------------------------------------------------------------------
+// F3b — parseIdentity normalises the script's identity output into the exact
+// AppIdentity shape Core's validator accepts. Process-free unit tests.
+// ---------------------------------------------------------------------------
+
+function validIdentity(): Record<string, unknown> {
+  return {
+    pid: 4242,
+    created_at: '2026-01-01T00:00:00.000Z',
+    image_path: 'C:\\Program Files\\App\\app.exe',
+    image_sha256: 'a'.repeat(64),
+    signature: 'valid',
+    signer: 'Contoso Corp',
+    product_name: 'Contoso Editor',
+    session_id: 2,
+  };
+}
+
+test('parseIdentity accepts a well-formed identity verbatim', () => {
+  const result = parseIdentity(validIdentity());
+  assert.deepEqual(result, {
+    pid: 4242,
+    created_at: '2026-01-01T00:00:00.000Z',
+    image_path: 'C:\\Program Files\\App\\app.exe',
+    image_sha256: 'a'.repeat(64),
+    signature: 'valid',
+    signer: 'Contoso Corp',
+    product_name: 'Contoso Editor',
+    session_id: 2,
+  });
+});
+
+test('parseIdentity maps a non-valid signature to a null signer', () => {
+  const unsigned = parseIdentity({ ...validIdentity(), signature: 'unsigned', signer: null });
+  assert.equal(unsigned?.signature, 'unsigned');
+  assert.equal(unsigned?.signer, null);
+});
+
+test('parseIdentity rejects a malformed identity (returns null)', () => {
+  assert.equal(parseIdentity({ ...validIdentity(), pid: 0 }), null);
+  assert.equal(parseIdentity({ ...validIdentity(), pid: 1.5 }), null);
+  assert.equal(parseIdentity({ ...validIdentity(), session_id: -1 }), null);
+  assert.equal(parseIdentity({ ...validIdentity(), created_at: 'garbage' }), null);
+  assert.equal(parseIdentity({ ...validIdentity(), image_sha256: 'A'.repeat(64) }), null);
+  assert.equal(parseIdentity({ ...validIdentity(), signature: 'valid', signer: null }), null);
+  assert.equal(parseIdentity({ ...validIdentity(), signature: 'invalid', signer: 'Contoso' }), null);
+  assert.equal(parseIdentity({ ...validIdentity(), image_path: '' }), null);
 });

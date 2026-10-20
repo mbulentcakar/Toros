@@ -7,12 +7,18 @@ import { ErrorCode, TorosError } from '@toros/contracts';
 
 import { parseScriptJson } from './json.js';
 import type { UiaProbe } from './adapter.js';
+import type { AppIdentity } from '@toros/contracts';
 
-/** Raw data from the OS layer — native handles, real titles. Never leaves the adapter as-is. */
+/**
+ * Raw data from the OS layer — native handles, real titles, and the OS-observed
+ * identity of the owning process. Never leaves the adapter as-is: the identity
+ * becomes a two-phase resolve target and the title is redacted by scope.
+ */
 export interface RawWindow {
   readonly native_handle: string;
   readonly title?: string;
-  readonly process_name: string;
+  /** OS-observed identity of the owning process (amendment A8). */
+  readonly identity: AppIdentity;
   readonly z_order: number;
   readonly foreground: boolean;
 }
@@ -26,18 +32,21 @@ export interface RawControl {
 }
 
 /**
- * The fixed, parameter-free PowerShell script that drives read-only UIA discovery.
+ * The fixed, parameter-free PowerShell script that drives read-only UIA discovery
+ * and OS identity. Every input is read as *data* from `input.json` in the script's
+ * own directory; no value is interpolated into this text. Titles come from
+ * GetWindowText on the native handle (never UIA Name). The script reads control
+ * METADATA only (type, automation_id, enabled, supported patterns) — never a
+ * ValuePattern value and never UIA Name.
  *
- * Every input is read as *data* from `input.json` in the script's own directory;
- * no value is interpolated into this text. Titles come from GetWindowText on the
- * native handle (never UIA Name). The script reads control METADATA only
- * (type, automation_id, enabled, supported patterns) — never a ValuePattern value
- * and never UIA Name.
- *
- * Live-validated on a real Windows 11 desktop: enumerate returns real
- * process names + foreground + native window text titles; inspect walks the
- * ControlView tree (RuntimeId cycle guard, depth-bounded, document pre-order);
- * the locked/secure desktop is detected via OpenInputDesktop.
+ * F3b adds the OS-observed process identity the two-phase resolve (amendment A8)
+ * needs: pid from GetWindowThreadProcessId (native, not UIA), creation time,
+ * the canonical long image path from QueryFullProcessImageName, the SHA-256 of
+ * that file, the Authenticode signature + subject CN, the version-resource
+ * ProductName, and the session id from ProcessIdToSessionId. Any read failure
+ * drops the window with a counted `identity_unavailable` — it never falls back
+ * to a basename. Each (image path, file size, last-write time) is hashed once per
+ * run.
  */
 export const DESKTOP_UIA_PS1 = `# toros-desktop-uia.ps1 — fixed, parameter-free. Inputs via input.json; nothing is interpolated.
 $ErrorActionPreference = 'Stop'
@@ -45,20 +54,28 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Web.Extensions
 Add-Type @"
-using System; using System.Runtime.InteropServices; using System.Text;
+using System; using System.Runtime.InteropServices; using System.Text; using System.Security.Cryptography; using System.IO; using System.Diagnostics;
 public class TorosNative {
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
   [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr h);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern bool GetUserObjectInformation(IntPtr h, int index, StringBuilder pv, uint n, out uint need);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+  [DllImport("user32.dll", SetLastError=true)] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+  [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags, StringBuilder lpExeName, ref uint lpdwSize);
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool ProcessIdToSessionId(uint dwProcessId, out uint pSessionId);
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+  [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr hObject);
+  [DllImport("kernel32.dll")] public static extern uint WTSGetActiveConsoleSessionId();
+  [DllImport("wtsapi32.dll", SetLastError=true)] public static extern bool WTSQuerySessionInformation(IntPtr hServer, uint sessionId, int wtsInfoClass, out IntPtr ppBuffer, out uint pBytesReturned);
+  [DllImport("wtsapi32.dll")] public static extern void WTSFreeMemory(IntPtr pMemory);
   public static string InputDesktopName() {
     IntPtr d = OpenInputDesktop(0, false, 0x0001);
     if (d == IntPtr.Zero) return null;
     try { var sb = new StringBuilder(256); uint need; if (GetUserObjectInformation(d, 2, sb, 256, out need)) return sb.ToString(); return null; }
     finally { CloseDesktop(d); }
   }
-  public static string GetWindowText(IntPtr hWnd) {
+  public static string WindowText(IntPtr hWnd) {
     if (hWnd == IntPtr.Zero) return null;
     var sb = new StringBuilder(512);
     int len = GetWindowText(hWnd, sb, 512);
@@ -66,6 +83,41 @@ public class TorosNative {
     string s = sb.ToString();
     if (s.Length > 256) return s.Substring(0, 256);
     return s;
+  }
+  public static int WindowPid(IntPtr hWnd) {
+    uint pid; GetWindowThreadProcessId(hWnd, out pid);
+    return (int)pid;
+  }
+  public static string FullImagePath(int pid) {
+    if (pid <= 0) return null;
+    IntPtr h = OpenProcess(0x1000, false, (uint)pid); // PROCESS_QUERY_LIMITED_INFORMATION
+    if (h == IntPtr.Zero) return null;
+    try {
+      var sb = new StringBuilder(1024); uint size = (uint)sb.Capacity;
+      if (!QueryFullProcessImageName(h, 0, sb, ref size)) return null;
+      return sb.ToString();
+    } finally { CloseHandle(h); }
+  }
+  public static int SessionId(int pid) {
+    if (pid <= 0) return -1;
+    uint sid; if (!ProcessIdToSessionId((uint)pid, out sid)) return -1;
+    return (int)sid;
+  }
+  public static int ActiveConsoleSession() {
+    return (int)WTSGetActiveConsoleSessionId();
+  }
+  public static string SessionConnectState() {
+    uint sid = WTSGetActiveConsoleSessionId();
+    if (sid == 0xFFFFFFFF) { sid = SessionId((int)Process.GetCurrentProcess().Id); }
+    IntPtr buf; uint bytes;
+    if (!WTSQuerySessionInformation(IntPtr.Zero, sid, 8, out buf, out bytes)) return "unknown";
+    int state = Marshal.ReadInt32(buf);
+    WTSFreeMemory(buf);
+    switch (state) { case 0: return "active"; case 2: return "connected"; case 5: return "disconnected"; default: return "other"; }
+  }
+  public static string FileSha256(string path) {
+    using (var sha = SHA256.Create())
+    using (var fs = File.OpenRead(path)) { return BitConverter.ToString(sha.ComputeHash(fs)).Replace("-", "").ToLowerInvariant(); }
   }
 }
 "@
@@ -105,9 +157,63 @@ if ($null -ne $req.PSObject.Properties['restrict_to_pid']) {
   $restrictPid = $restrictParsed
 }
 try {
-  # Locked / secure desktop: input desktop inaccessible or not 'Default'.
+  # Session proof (AR-04): the input desktop must be openable and named 'Default'.
+  # Node Core's own session must be the active console session or an RDP session
+  # whose connect state is WTSActive; otherwise discovery is unavailable.
   $deskName = [TorosNative]::InputDesktopName()
   if ($null -eq $deskName -or $deskName -ne 'Default') { Emit @{ session_state = 'locked' }; return }
+  $connectState = [TorosNative]::SessionConnectState()
+  if ($connectState -ne 'active' -and $connectState -ne 'connected') { Emit @{ session_state = 'disconnected' }; return }
+
+  # Hashing cache: keyed by (path, size, last-write) so each file is hashed once
+  # per run even when several windows share one image.
+  $hashCache = @{}
+
+  # Reads the identity of one window's owning process, returning $null on any
+  # failure (access denied, process gone, hashing failed). Never falls back to a
+  # basename. Emits all fields exactly as the Core validator requires them.
+  function ReadIdentity($pid) {
+    if ($pid -le 0) { return $null }
+    $imagePath = [TorosNative]::FullImagePath($pid)
+    if ($null -eq $imagePath -or $imagePath.Length -eq 0) { return $null }
+    # Canonical long path: an absolute drive path with backslashes only, no
+    # namespace prefix (\\?\ or \\.\), no UNC root, no forward slashes. Refuse
+    # anything else rather than normalise a short name.
+    if ($imagePath.StartsWith('\\\\?\\') -or $imagePath.StartsWith('\\\\.\\') -or $imagePath.StartsWith('\\\\')) { return $null }
+    if ($imagePath -notmatch '^[A-Za-z]:[^/]*$') { return $null }
+    $fi = $null; try { $fi = Get-Item -LiteralPath $imagePath -ErrorAction Stop } catch { return $null }
+    $cacheKey = $imagePath + '|' + $fi.Length + '|' + $fi.LastWriteTimeUtc.Ticks
+    $sha = $null
+    if ($hashCache.ContainsKey($cacheKey)) { $sha = $hashCache[$cacheKey] }
+    else { try { $sha = [TorosNative]::FileSha256($imagePath) } catch { return $null }; $hashCache[$cacheKey] = $sha }
+    $sig = $null; try { $sig = Get-AuthenticodeSignature -FilePath $imagePath } catch { $sig = $null }
+    $sigStatus = 'unsigned'; $signer = $null
+    if ($null -ne $sig) {
+      $status = [string]$sig.Status
+      if ($status -eq 'Valid') {
+        if ($null -ne $sig.SignerCertificate) {
+          $cn = $sig.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+          if (-not [string]::IsNullOrWhiteSpace([string]$cn)) { $sigStatus = 'valid'; $signer = [string]$cn }
+        }
+        if ($sigStatus -ne 'valid') {
+          # A valid signature whose subject CN could not be read must not become
+          # an unsigned identity: drop the window rather than misreport the signer.
+          return $null
+        }
+      } elseif ($status -eq 'HashMismatch') {
+        $sigStatus = 'invalid'
+      } else {
+        $sigStatus = 'unsigned'
+      }
+    }
+    $product = $null; try { $product = [string]$fi.VersionInfo.ProductName } catch { }
+    if ([string]::IsNullOrWhiteSpace($product)) { $product = $null }
+    $proc = $null; try { $proc = Get-Process -Id $pid -ErrorAction Stop } catch { return $null }
+    $createdAt = $proc.StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    $sessId = [TorosNative]::SessionId($pid)
+    if ($sessId -lt 0) { return $null }
+    return @{ pid=$pid; created_at=$createdAt; image_path=$imagePath; image_sha256=[string]$sha.ToLowerInvariant(); signature=$sigStatus; signer=$signer; product_name=$product; session_id=$sessId }
+  }
 
   if ([string]$req.action -eq 'enumerate_windows') {
     $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)
@@ -117,28 +223,36 @@ try {
     $ws = New-Object 'System.Collections.Generic.List[object]'
     $truncated = $false
     $z = 0
+    $unavailable = 0
     $fg = [TorosNative]::GetForegroundWindow().ToInt64()
     $c = $null; try { $c = $walker.GetFirstChild($root) } catch { }
     while ($null -ne $c) {
       if ($ws.Count -ge $maxw) { $truncated = $true; break }
-      if ($null -ne $restrictPid -and [int64]$c.Current.ProcessId -ne $restrictPid) {
+      $cPid = 0; try { $cPid = [int]$c.Current.ProcessId } catch { }
+      if ($null -ne $restrictPid -and [int64]$cPid -ne $restrictPid) {
         try { $c = $walker.GetNextSibling($c) } catch { $c = $null }
         continue
       }
       $hwnd = [int64]$c.Current.NativeWindowHandle
       $rid = ($c.GetRuntimeId() | ForEach-Object { [string]$_ }) -join ','
       $nh = if ($hwnd -ne 0) { [string]$hwnd } else { 'rid:' + $rid }
-      $pn = ''; try { $pn = [string](Get-Process -Id $c.Current.ProcessId -ErrorAction Stop).ProcessName } catch { }
-      $w = @{ native_handle=$nh; process_name=$pn; z_order=$z; foreground=($hwnd -ne 0 -and $hwnd -eq $fg) }
+      # pid comes from GetWindowThreadProcessId on the NATIVE handle, not the UIA
+      # provider, so it cannot be spoofed by the UIA element tree.
+      $pid = 0
+      if ($hwnd -ne 0) { $pid = [TorosNative]::WindowPid([IntPtr]$hwnd) }
+      $identity = ReadIdentity($pid)
+      if ($null -eq $identity) { $unavailable++ }
+      $w = @{ native_handle=$nh; z_order=$z; foreground=($hwnd -ne 0 -and $hwnd -eq $fg) }
+      if ($null -ne $identity) { $w['identity'] = $identity }
       if ($hwnd -ne 0) {
-        $wt = [TorosNative]::GetWindowText([IntPtr]$hwnd)
+        $wt = [TorosNative]::WindowText([IntPtr]$hwnd)
         if ($null -ne $wt) { $w['title'] = $wt }
       }
       [void]$ws.Add($w)
       $z++
       try { $c = $walker.GetNextSibling($c) } catch { $c = $null }
     }
-    Emit @{ session_state='active'; windows=$ws.ToArray(); truncated=$truncated }
+    Emit @{ session_state='active'; windows=$ws.ToArray(); truncated=$truncated; identity_unavailable=$unavailable }
   }
   elseif ([string]$req.action -eq 'inspect_window') {
     $want = [string]$req.native_handle
@@ -147,7 +261,8 @@ try {
     $target = $null
     $c = $null; try { $c = $walker.GetFirstChild($root) } catch { }
     while ($null -ne $c) {
-      if ($null -ne $restrictPid -and [int64]$c.Current.ProcessId -ne $restrictPid) {
+      $cPid = 0; try { $cPid = [int]$c.Current.ProcessId } catch { }
+      if ($null -ne $restrictPid -and [int64]$cPid -ne $restrictPid) {
         try { $c = $walker.GetNextSibling($c) } catch { $c = $null }
         continue
       }
@@ -158,7 +273,10 @@ try {
       try { $c = $walker.GetNextSibling($c) } catch { $c = $null }
     }
     if ($null -eq $target) { Emit @{ closed = $true }; return }
-    $pn = ''; try { $pn = [string](Get-Process -Id $target.Current.ProcessId -ErrorAction Stop).ProcessName } catch { }
+    $pid = 0
+    $hwndT = [int64]$target.Current.NativeWindowHandle
+    if ($hwndT -ne 0) { $pid = [TorosNative]::WindowPid([IntPtr]$hwndT) }
+    $identity = ReadIdentity($pid)
     $depth = [int]$req.depth; $maxc = [int]$req.max_controls
     if ($maxc -le 0) { $maxc = [int]::MaxValue }
     $cwalker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
@@ -199,7 +317,9 @@ try {
       }
       $curr = $next
     }
-    Emit @{ closed=$false; process_name=$pn; controls=$controls.ToArray(); truncated=$truncated }
+    $out = @{ closed=$false; controls=$controls.ToArray(); truncated=$truncated }
+    if ($null -ne $identity) { $out['identity'] = $identity }
+    Emit $out
   }
   else { Emit @{ closed = $true } }
 }
@@ -358,6 +478,62 @@ export function runPowerShell(
   });
 }
 
+/** A valid ISO-8601 UTC timestamp ending in `Z` (mirrors Core's validator). */
+const UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z$/;
+
+function isValidUtcTimestamp(value: string): boolean {
+  const match = UTC_TIMESTAMP.exec(value);
+  if (match === null) return false;
+  const [, year, month, day, hour, minute, second] = match;
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)));
+  return (
+    date.getUTCFullYear() === Number(year)
+    && date.getUTCMonth() + 1 === Number(month)
+    && date.getUTCDate() === Number(day)
+    && date.getUTCHours() === Number(hour)
+    && date.getUTCMinutes() === Number(minute)
+    && date.getUTCSeconds() === Number(second)
+  );
+}
+
+/**
+ * Parses the identity object the PowerShell emitted into the `AppIdentity` shape
+ * the adapter threads to Core. Because the adapter's normalisation is what Core's
+ * validator then checks, every field is coerced to the exact contract spelling:
+ * the hash already lower-cases; here the created_at and integer fields are
+ * re-asserted so a script bug cannot smuggle a wrong shape past the adapter.
+ */
+export function parseIdentity(raw: Record<string, unknown>): AppIdentity | null {
+  const pid = raw['pid'];
+  if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) return null;
+  const created_at = raw['created_at'];
+  if (typeof created_at !== 'string' || !isValidUtcTimestamp(created_at)) return null;
+  const image_path = raw['image_path'];
+  if (typeof image_path !== 'string' || image_path.length === 0) return null;
+  const image_sha256 = raw['image_sha256'];
+  if (typeof image_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(image_sha256)) return null;
+  const signature = raw['signature'];
+  if (signature !== 'valid' && signature !== 'unsigned' && signature !== 'invalid') return null;
+  const signer = raw['signer'];
+  if (signature === 'valid') {
+    if (typeof signer !== 'string' || signer.length === 0) return null;
+  } else if (signer !== null && signer !== undefined) return null;
+  const product_name = raw['product_name'];
+  if (product_name !== null && product_name !== undefined && typeof product_name !== 'string') return null;
+  const session_id = raw['session_id'];
+  if (typeof session_id !== 'number' || !Number.isSafeInteger(session_id) || session_id < 0) return null;
+  return {
+    pid,
+    created_at,
+    image_path,
+    image_sha256,
+    signature,
+    signer: signature === 'valid' ? (signer as string) : null,
+    product_name: typeof product_name === 'string' ? product_name : null,
+    session_id,
+  };
+}
+
 /**
  * Creates the real PowerShell-backed UIA probe. Live-validated on Windows 11
  * 2026-09-16; the deferred quality items in the T3 review are addressed here.
@@ -405,28 +581,17 @@ export function createPowerShellUiaProbe(options: {
 
   return {
     async enumerateWindows(
-      sessionScope: string,
-      optsOrSignal?: { max_windows?: number } | AbortSignal,
-      maybeSignal?: AbortSignal,
+      opts: { max_windows?: number },
+      signal: AbortSignal,
     ): Promise<
       | { readonly session_state: 'active'; readonly windows: readonly RawWindow[]; readonly truncated: boolean }
       | { readonly session_state: 'locked' | 'disconnected' }
     > {
-      let maxWindows = 200;
-      let signal: AbortSignal;
-      if (optsOrSignal instanceof AbortSignal) {
-        signal = optsOrSignal;
-      } else {
-        if (optsOrSignal && typeof optsOrSignal.max_windows === 'number') {
-          maxWindows = optsOrSignal.max_windows;
-        }
-        signal = maybeSignal!;
-      }
+      const maxWindows = (opts && typeof opts.max_windows === 'number') ? opts.max_windows : 200;
 
       const output = await runPowerShell(
         {
           action: 'enumerate_windows',
-          session_scope: sessionScope,
           max_windows: maxWindows,
           ...(hasRestrictPid ? { restrict_to_pid: restrictPid } : {}),
         },
@@ -443,13 +608,23 @@ export function createPowerShellUiaProbe(options: {
       }
 
       const rawWindows = (output['windows'] as Array<Record<string, unknown>> | undefined) ?? [];
-      const windows: RawWindow[] = rawWindows.map((w) => ({
-        native_handle: typeof w['native_handle'] === 'string' ? w['native_handle'] : String(w['native_handle'] ?? ''),
-        ...(typeof w['title'] === 'string' ? { title: w['title'].slice(0, 256) } : {}),
-        process_name: typeof w['process_name'] === 'string' ? w['process_name'] : String(w['process_name'] ?? ''),
-        z_order: typeof w['z_order'] === 'number' ? w['z_order'] : Number(w['z_order'] ?? 0),
-        foreground: w['foreground'] === true,
-      }));
+      // Windows whose identity could not be read (access denied, process gone,
+      // hashing failed) are dropped here — the script already counts them in
+      // `identity_unavailable`, and they are never returned, never basename-fell-back.
+      const windows: RawWindow[] = [];
+      for (const w of rawWindows) {
+        const identity = typeof w['identity'] === 'object' && w['identity'] !== null
+          ? parseIdentity(w['identity'] as Record<string, unknown>)
+          : null;
+        if (identity === null) continue;
+        windows.push({
+          native_handle: typeof w['native_handle'] === 'string' ? w['native_handle'] : String(w['native_handle'] ?? ''),
+          ...(typeof w['title'] === 'string' ? { title: w['title'].slice(0, 256) } : {}),
+          identity,
+          z_order: typeof w['z_order'] === 'number' ? w['z_order'] : Number(w['z_order'] ?? 0),
+          foreground: w['foreground'] === true,
+        });
+      }
       const truncated = output['truncated'] === true;
 
       return { session_state: 'active', windows, truncated };
@@ -457,7 +632,7 @@ export function createPowerShellUiaProbe(options: {
 
     async inspectWindow(nativeHandle: string, opts: { depth: number; max_controls: number }, signal: AbortSignal): Promise<
       | { readonly closed: true }
-      | { readonly closed: false; readonly process_name: string; readonly controls: readonly RawControl[]; readonly truncated: boolean }
+      | { readonly closed: false; readonly identity: AppIdentity | null; readonly controls: readonly RawControl[]; readonly truncated: boolean }
     > {
       const output = await runPowerShell(
         {
@@ -492,10 +667,12 @@ export function createPowerShellUiaProbe(options: {
         patterns: Array.isArray(c['patterns']) ? (c['patterns'] as readonly string[]) : [],
       }));
 
-      const processName = typeof output['process_name'] === 'string' ? output['process_name'] : String(output['process_name'] ?? '');
+      const identity = typeof output['identity'] === 'object' && output['identity'] !== null
+        ? parseIdentity(output['identity'] as Record<string, unknown>)
+        : null;
       const truncated = output['truncated'] === true;
 
-      return { closed: false, process_name: processName, controls, truncated };
+      return { closed: false, identity, controls, truncated };
     },
   };
 }

@@ -79,6 +79,8 @@ export interface FixtureInstance {
   readonly hwnd: number;
   readonly pid: number;
   readonly process_name: string;
+  /** Absolute path to the renamed fixture executable copy (the OS image path). */
+  readonly image_path: string;
   /** Fresh temp dir holding the renamed fixture executable; removed on stopFixture. */
   readonly tempDir: string;
   readonly title: string;
@@ -253,6 +255,7 @@ export function startFixture(options: {
                 hwnd: ready.hwnd,
                 pid: childPid,
                 process_name: fixtureProcessName,
+                image_path: copyPath,
                 tempDir,
                 title,
                 canaryPwd,
