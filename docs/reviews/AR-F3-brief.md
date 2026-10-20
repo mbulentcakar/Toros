@@ -241,3 +241,17 @@ that their only resource is the probe's own `mkdtemp` directory.
   skip with its reason.
 - CI green on the PR head.
 - No secrets, local paths or machine names in the repository.
+
+## F3a clarifications (architect, 2026-10-20, before dispatch)
+
+1. **Where the session id comes from.** `PolicyOptions` (in `packages/policy`) gains
+   `desktop_session_id?: number | null`, and `CoreOptions` passes it through. Absent or `null`
+   means every `app` target is denied (fail closed). F3a does not compute it: `main.ts` leaves it
+   unset, which is safe, because no adapter has a resolver until F3b. F3b resolves it on Windows
+   at startup.
+2. **`authorizeTargets` is a method on `Policy`**, next to `decide`, so it sees the same options.
+   It stays deterministic and pure.
+3. **Where the counts go.** Core writes `targets_allowed` and `targets_denied` into the receipt's
+   `adapter_fields`, as **Core-reserved keys**. A manifest that declares either key in
+   `receipt_fields` is refused at registration (`E_ADAPTER_FAILURE`). There is no new top-level
+   `Receipt` field and no store schema change. Add the two reserved keys to A8's record.
