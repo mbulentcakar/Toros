@@ -1,23 +1,29 @@
 /**
  * Tests for @toros/adapters-machine.
  *
- * Every test injects a custom probe list and node_platform so the
- * readiness taxonomy is deterministic and independent of what is
- * actually installed on the test machine.
+ * Every test injects a custom probe list, node_platform, and the AR-08 /
+ * AR-09 seams (drive types, access, PATH) so the readiness taxonomy and the
+ * job-scoped filter are deterministic and independent of what is actually
+ * installed on the test machine.
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
-import { createMachineAdapter, type MachineProbe } from '../src/adapter.js';
-import type { AdapterContext, NodePlatform } from '@toros/contracts';
+import { join } from 'node:path';
+import {
+  createMachineAdapter,
+  type AccessCheck,
+  type DriveTypes,
+  type MachineProbe,
+} from '../src/adapter.js';
+import type { AdapterContext, NodePlatform, TargetDecisions } from '@toros/contracts';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeCtx(signal?: AbortSignal): AdapterContext {
+function makeCtx(signal?: AbortSignal, decisions?: TargetDecisions): AdapterContext {
   return {
     job_id: 'test-job',
     session_id: null,
@@ -25,11 +31,28 @@ function makeCtx(signal?: AbortSignal): AdapterContext {
     correlation_id: 'test-correlation',
     signal: signal ?? new AbortController().signal,
     actor: 'coordinator',
+    ...(decisions !== undefined ? { target_decisions: decisions } : {}),
   };
 }
 
 function parseOutput(result: { output: string }): Record<string, unknown> {
   return JSON.parse(result.output) as Record<string, unknown>;
+}
+
+/** A DriveTypes seam returning a fixed set of lowercase drive letters. */
+function fixedDriveTypes(letters: readonly string[]): DriveTypes {
+  return async () => letters;
+}
+
+/** An AccessCheck seam that records every path it is asked about and succeeds. */
+function recordingAccess(): { access: AccessCheck; calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    access: async (candidate: string): Promise<void> => {
+      calls.push(candidate);
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -75,7 +98,7 @@ const ABSENT_FILE_PROBE: MachineProbe = {
 };
 
 // ---------------------------------------------------------------------------
-// Tests
+// Tests — readiness taxonomy
 // ---------------------------------------------------------------------------
 
 describe('machine.inventory', () => {
@@ -84,6 +107,7 @@ describe('machine.inventory', () => {
       node_platform: process.platform as NodePlatform,
       probes: [NODE_FILE_PROBE],
       registered_adapter_ids: () => ['node-finder'],
+      registered_capabilities: () => [],
       timeout_ms: 5_000,
     });
 
@@ -104,6 +128,7 @@ describe('machine.inventory', () => {
       node_platform: process.platform as NodePlatform,
       probes: [ORPHAN_PROBE],
       registered_adapter_ids: () => ['some-other-adapter'],
+      registered_capabilities: () => [],
       timeout_ms: 5_000,
     });
 
@@ -125,6 +150,7 @@ describe('machine.inventory', () => {
       node_platform: 'linux',
       probes: [WIN32_ONLY_PROBE],
       registered_adapter_ids: () => [],
+      registered_capabilities: () => [],
       timeout_ms: 5_000,
     });
 
@@ -146,6 +172,7 @@ describe('machine.inventory', () => {
       node_platform: process.platform as NodePlatform,
       probes: [ABSENT_EXEC_PROBE],
       registered_adapter_ids: () => [],
+      registered_capabilities: () => [],
       timeout_ms: 5_000,
     });
 
@@ -167,6 +194,7 @@ describe('machine.inventory', () => {
       node_platform: process.platform as NodePlatform,
       probes: [ABSENT_FILE_PROBE],
       registered_adapter_ids: () => [],
+      registered_capabilities: () => [],
       timeout_ms: 5_000,
     });
 
@@ -188,6 +216,7 @@ describe('machine.inventory', () => {
       node_platform: process.platform as NodePlatform,
       probes: [],
       registered_adapter_ids: () => ['chrome', 'excel'],
+      registered_capabilities: () => [],
       timeout_ms: 5_000,
     });
 
@@ -210,6 +239,7 @@ describe('machine.inventory', () => {
       node_platform: process.platform as NodePlatform,
       probes: [NODE_FILE_PROBE, ABSENT_EXEC_PROBE],
       registered_adapter_ids: () => ['node-finder'],
+      registered_capabilities: () => [],
       timeout_ms: 5_000,
     });
 
@@ -252,6 +282,7 @@ describe('machine.inventory', () => {
       node_platform: process.platform as NodePlatform,
       probes: [probe],
       registered_adapter_ids: () => ['node-finder'],
+      registered_capabilities: () => [],
       timeout_ms: 5_000,
     });
 
@@ -270,13 +301,10 @@ describe('machine.inventory', () => {
 
   it('present executable found on PATH → usable', async () => {
     // Exercises the kind:'executable' PATH-walk success branch deterministically
-    // by putting a matching file on PATH. A stub that never resolves a PATH hit
-    // would fail this.
+    // by injecting a PATH seam that points at a directory holding the file.
     const dir = await mkdtemp(join(tmpdir(), 'toros-path-'));
     const exeName = process.platform === 'win32' ? 'torostestbin.exe' : 'torostestbin';
     await writeFile(join(dir, exeName), '');
-    const savedPath = process.env['PATH'];
-    process.env['PATH'] = `${dir}${delimiter}${savedPath ?? ''}`;
     try {
       const adapter = createMachineAdapter({
         node_platform: process.platform as NodePlatform,
@@ -287,7 +315,9 @@ describe('machine.inventory', () => {
           detect: { kind: 'executable', name: 'torostestbin' },
         }],
         registered_adapter_ids: () => ['testbin'],
+        registered_capabilities: () => [],
         timeout_ms: 5_000,
+        pathEnv: () => dir,
       });
       const entries = parseOutput(await adapter.invoke('inventory', {}, makeCtx()))['entries'] as Array<Record<string, unknown>>;
       assert.equal(entries.length, 1);
@@ -295,7 +325,6 @@ describe('machine.inventory', () => {
       assert.equal(entries[0]!['readiness'], 'usable');
       await adapter.dispose();
     } finally {
-      process.env['PATH'] = savedPath;
       await rm(dir, { recursive: true, force: true });
     }
   });
@@ -306,6 +335,7 @@ describe('machine.inventory', () => {
       node_platform: process.platform as NodePlatform,
       probes,
       registered_adapter_ids: () => ['node-finder'],
+      registered_capabilities: () => [],
       timeout_ms: 5_000,
     });
 
@@ -316,6 +346,7 @@ describe('machine.inventory', () => {
     assert.equal(output['node_platform'], process.platform);
     assert.ok(typeof output['observed_at'] === 'string');
     assert.ok(Array.isArray(output['entries']));
+    assert.ok(typeof output['path_entries_skipped'] === 'number');
 
     // receipt_extra: probe_count must equal the number of probes examined, not a
     // constant, so a hardcoded value would fail.
@@ -335,6 +366,7 @@ describe('machine.inventory', () => {
       node_platform: process.platform as NodePlatform,
       probes: [NODE_FILE_PROBE, ABSENT_EXEC_PROBE, ABSENT_FILE_PROBE],
       registered_adapter_ids: () => ['node-finder'],
+      registered_capabilities: () => [],
       timeout_ms: 5_000,
     });
 
@@ -346,6 +378,281 @@ describe('machine.inventory', () => {
     assert.equal(entries.length, 0);
     // Nothing was examined, so probe_count is 0 — not a constant.
     assert.equal(result.receipt_extra['probe_count'], 0);
+
+    await adapter.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — AR-08 local-fixed PATH filtering
+// ---------------------------------------------------------------------------
+
+describe('machine.inventory — AR-08 local-fixed PATH filtering', () => {
+  it('drops UNC, device, relative and drive-relative PATH entries without touching them', async () => {
+    const { access, calls } = recordingAccess();
+    const adapter = createMachineAdapter({
+      node_platform: 'win32',
+      probes: [{
+        id: 'findme',
+        platforms: ['win32'],
+        detect: { kind: 'executable', name: 'findme' },
+      }],
+      registered_adapter_ids: () => [],
+      registered_capabilities: () => [],
+      timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes(['c']),
+      access,
+      pathEnv: () => '\\\\server\\share;\\\\?\\C:\\device;relative;C:rel',
+    });
+
+    const result = await adapter.invoke('inventory', {}, makeCtx());
+    const output = parseOutput(result);
+    const entries = output['entries'] as Array<Record<string, unknown>>;
+
+    // None of the four dropped entries may have been touched.
+    assert.equal(calls.length, 0, `expected no access calls, got ${JSON.stringify(calls)}`);
+
+    // The probe walked an empty PATH, so it is missing_prerequisite.
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]!['readiness'], 'missing_prerequisite');
+
+    assert.equal(output['path_entries_skipped'], 4);
+
+    await adapter.dispose();
+  });
+
+  it('probes a fixed local PATH entry and skips a non-fixed drive letter', async () => {
+    const { access, calls } = recordingAccess();
+    const adapter = createMachineAdapter({
+      node_platform: 'win32',
+      probes: [{
+        id: 'findme',
+        platforms: ['win32'],
+        backs_adapter: 'findme',
+        detect: { kind: 'executable', name: 'findme' },
+      }],
+      registered_adapter_ids: () => ['findme'],
+      registered_capabilities: () => [],
+      timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes(['c']), // only C: is fixed
+      access,
+      pathEnv: () => 'C:\\tools;D:\\other',
+    });
+
+    const result = await adapter.invoke('inventory', {}, makeCtx());
+    const entries = parseOutput(result)['entries'] as Array<Record<string, unknown>>;
+    const output = parseOutput(result);
+
+    assert.equal(entries[0]!['readiness'], 'usable');
+
+    // C:\tools was probed (with the executable name resolved, .exe appended).
+    assert.equal(calls.length, 1, `expected exactly one access call, got ${JSON.stringify(calls)}`);
+    assert.equal(calls[0], 'C:\\tools\\findme.exe');
+
+    // The non-fixed D: entry was dropped and counted, never touched.
+    assert.equal(output['path_entries_skipped'], 1);
+
+    await adapter.dispose();
+  });
+
+  it('a pre-aborted signal causes zero access and zero drive-type calls', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const { access, calls } = recordingAccess();
+    let driveCalls = 0;
+    const adapter = createMachineAdapter({
+      node_platform: 'win32',
+      probes: [{
+        id: 'findme',
+        platforms: ['win32'],
+        detect: { kind: 'executable', name: 'findme' },
+      }],
+      registered_adapter_ids: () => [],
+      registered_capabilities: () => [],
+      timeout_ms: 5_000,
+      driveTypes: (async () => {
+        driveCalls++;
+        return ['c'];
+      }) as DriveTypes,
+      access,
+      pathEnv: () => 'C:\\tools',
+    });
+
+    const result = await adapter.invoke('inventory', {}, makeCtx(controller.signal));
+
+    assert.equal(calls.length, 0, 'access was called on a pre-aborted signal');
+    assert.equal(driveCalls, 0, 'drive-type reader was called on a pre-aborted signal');
+    assert.equal(result.receipt_extra['probe_count'], 0);
+
+    await adapter.dispose();
+  });
+
+  it('treats every drive as non-fixed when the drive-type reader fails', async () => {
+    const { access, calls } = recordingAccess();
+    const adapter = createMachineAdapter({
+      node_platform: 'win32',
+      probes: [{
+        id: 'findme',
+        platforms: ['win32'],
+        detect: { kind: 'executable', name: 'findme' },
+      }],
+      registered_adapter_ids: () => [],
+      registered_capabilities: () => [],
+      timeout_ms: 5_000,
+      // A throwing reader models a PowerShell failure: fail closed.
+      driveTypes: (async () => {
+        throw new Error('powershell unavailable');
+      }) as DriveTypes,
+      access,
+      pathEnv: () => 'C:\\tools;D:\\other',
+    });
+
+    const result = await adapter.invoke('inventory', {}, makeCtx());
+    const output = parseOutput(result);
+
+    // Both drive entries are dropped (nothing is known-fixed), nothing touched.
+    assert.equal(calls.length, 0, `expected no access calls, got ${JSON.stringify(calls)}`);
+    assert.equal(output['path_entries_skipped'], 2);
+
+    await adapter.dispose();
+  });
+
+  it('a file probe whose fixed path is not local-fixed is never touched', async () => {
+    const { access, calls } = recordingAccess();
+    const adapter = createMachineAdapter({
+      node_platform: 'win32',
+      probes: [{
+        id: 'remoteme',
+        platforms: ['win32'],
+        detect: { kind: 'file', path: '\\\\server\\share\\tool.exe' },
+      }],
+      registered_adapter_ids: () => [],
+      registered_capabilities: () => [],
+      timeout_ms: 5_000,
+      driveTypes: fixedDriveTypes(['c']),
+      access,
+      pathEnv: () => '',
+    });
+
+    const entries = parseOutput(await adapter.invoke('inventory', {}, makeCtx()))
+      ['entries'] as Array<Record<string, unknown>>;
+
+    assert.equal(calls.length, 0, 'a non-local-fixed file path was touched');
+    assert.equal(entries[0]!['readiness'], 'missing_prerequisite');
+
+    await adapter.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — AR-09 job-scoped inventory filter
+// ---------------------------------------------------------------------------
+
+describe('machine.inventory — AR-09 job-scoped filter', () => {
+  it('resolver returns one capability target per registered capability id', async () => {
+    const capabilityIds = ['machine.inventory', 'desktop.state', 'desktop.inspect', 'excel.read_range'];
+    const adapter = createMachineAdapter({
+      node_platform: 'win32',
+      probes: [],
+      registered_adapter_ids: () => ['machine', 'desktop', 'excel'],
+      registered_capabilities: () => capabilityIds,
+      timeout_ms: 5_000,
+    });
+
+    const resolver = adapter.resolver;
+    assert.ok(resolver, 'the machine adapter must expose an A8 resolver');
+    const targets = await resolver!.resolve('inventory', {}, makeCtx());
+
+    assert.equal(targets.length, capabilityIds.length);
+    for (const target of targets) {
+      assert.equal(target.kind, 'capability');
+      assert.equal(target.key, target.capability);
+      assert.ok(capabilityIds.includes(target.capability));
+    }
+
+    await adapter.dispose();
+  });
+
+  it('a job with only machine.inventory sees other adapters as unauthorized, bare', async () => {
+    const adapter = createMachineAdapter({
+      node_platform: 'win32',
+      probes: [],
+      registered_adapter_ids: () => ['machine', 'desktop'],
+      registered_capabilities: () => ['machine.inventory', 'desktop.state', 'desktop.inspect'],
+      timeout_ms: 5_000,
+    });
+
+    const decisions: TargetDecisions = new Map([
+      ['machine.inventory', 'allowed'],
+      ['desktop.state', 'denied'],
+      ['desktop.inspect', 'denied'],
+    ]);
+
+    const entries = parseOutput(await adapter.invoke('inventory', {}, makeCtx(undefined, decisions)))
+      ['entries'] as Array<Record<string, unknown>>;
+
+    const machine = entries.find((e) => e['id'] === 'machine');
+    assert.ok(machine);
+    assert.equal(machine['readiness'], 'registered', 'machine.inventory itself is always in full');
+
+    const desktop = entries.find((e) => e['id'] === 'desktop');
+    assert.ok(desktop);
+    assert.equal(desktop['readiness'], 'unauthorized');
+    assert.deepEqual(
+      Object.keys(desktop).sort(),
+      ['id', 'readiness'],
+      'an unauthorized entry must carry no reason, platforms, or backs_adapter',
+    );
+
+    await adapter.dispose();
+  });
+
+  it('a job with machine.inventory and desktop.state reports the desktop entry in full', async () => {
+    const adapter = createMachineAdapter({
+      node_platform: 'win32',
+      probes: [],
+      registered_adapter_ids: () => ['machine', 'desktop'],
+      registered_capabilities: () => ['machine.inventory', 'desktop.state', 'desktop.inspect'],
+      timeout_ms: 5_000,
+    });
+
+    const decisions: TargetDecisions = new Map([
+      ['machine.inventory', 'allowed'],
+      ['desktop.state', 'allowed'],
+      ['desktop.inspect', 'denied'],
+    ]);
+
+    const entries = parseOutput(await adapter.invoke('inventory', {}, makeCtx(undefined, decisions)))
+      ['entries'] as Array<Record<string, unknown>>;
+
+    const desktop = entries.find((e) => e['id'] === 'desktop');
+    assert.ok(desktop);
+    assert.equal(desktop['readiness'], 'registered', 'desktop.state allowed → desktop entry in full');
+    assert.ok(Array.isArray(desktop['platforms']), 'a full entry carries platforms');
+
+    await adapter.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — manifest
+// ---------------------------------------------------------------------------
+
+describe('machine adapter manifest', () => {
+  it('declares process.spawn and fs.read', async () => {
+    const adapter = createMachineAdapter({
+      node_platform: 'win32',
+      probes: [],
+      registered_adapter_ids: () => [],
+      registered_capabilities: () => [],
+      timeout_ms: 5_000,
+    });
+
+    assert.deepEqual(
+      [...adapter.manifest.required_permissions].sort(),
+      ['fs.read', 'process.spawn'],
+    );
 
     await adapter.dispose();
   });

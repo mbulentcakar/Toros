@@ -242,10 +242,17 @@ async function main(): Promise<void> {
   const registeredAdapterIds: { value: readonly string[] } = {
     value: baseAdapters.map((a) => a.manifest.id),
   };
+  // The machine adapter's A8 resolver reports one capability target per
+  // registered capability id. Like the adapter-id seed, it is replaced after
+  // start() with the ids that actually registered.
+  const registeredCapabilityIds: { value: readonly string[] } = {
+    value: [],
+  };
   const machine = createMachineAdapter({
     node_platform: process.platform as NodePlatform,
     probes: DEFAULT_MACHINE_PROBES,
     registered_adapter_ids: () => registeredAdapterIds.value,
+    registered_capabilities: () => registeredCapabilityIds.value,
     timeout_ms: 30_000,
   });
   const allAdapters = [...baseAdapters, machine];
@@ -282,6 +289,7 @@ async function main(): Promise<void> {
     if (adapterId !== undefined) liveAdapterIds.add(adapterId);
   }
   registeredAdapterIds.value = [...liveAdapterIds];
+  registeredCapabilityIds.value = registered_capabilities;
   // Never log the token, here or anywhere.
   console.info(`Toros Node Core listening on 127.0.0.1:${port} (node ${config.node_id}, coordinator ${coordinatorEnabled ? 'on' : 'off'})`);
 
