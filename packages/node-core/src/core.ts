@@ -8,7 +8,7 @@ import { createRegistry } from '@toros/registry';
 import { createRelay, type Relay } from '@toros/relay';
 import { openStore } from '@toros/store';
 
-import { createActionPipeline } from './action-pipeline.js';
+import { createActionPipeline, type SettlementTimingOptions } from './action-pipeline.js';
 import { approvalTtlMinutes, createApprovalRegistry, type ApprovalRegistry } from './approvals.js';
 import { BrowserAcquisitionController } from './browser-acquisition.js';
 import { createConversationGuard, type ConversationGuard } from './conversation-guard.js';
@@ -57,6 +57,7 @@ export class Core implements NodeCore {
    * of ours.
    */
   private readonly sessionJobs = new Map<string, string>();
+  private readonly actionPipeline: ReturnType<typeof createActionPipeline>;
   private readonly approvals: ApprovalRegistry;
   private readonly runCredentials: RunCredentials;
   private readonly activeCoordinatorStarts = new Set<string>();
@@ -76,6 +77,14 @@ export class Core implements NodeCore {
       store: () => this.getStore(),
       redactSecrets: (content) => this.runCredentials.redactSecrets(content),
     });
+    // `pipeline_settlement` is an internal test seam that intentionally has no
+    // entry on the public NodeCoreOptions type: tests construct a Core (or
+    // pipeline) with short settlement timings for their own instance, and
+    // production config never sets it, so the pipeline always runs the
+    // immutable production values. Plumbed through here and omitted when
+    // absent (exactOptionalPropertyTypes: passing an explicit undefined is a
+    // type error, so it is spread conditionally).
+    const settlement = (this.options as NodeCoreOptions & { readonly pipeline_settlement?: SettlementTimingOptions }).pipeline_settlement;
     const actionPipeline = createActionPipeline({
       node_id: options.node_id,
       adapters: options.adapters,
@@ -85,9 +94,11 @@ export class Core implements NodeCore {
       policy: () => this.getPolicy(),
       stageGraphs: () => this.getStageGraphs(),
       approvals: this.approvals,
+      ...(settlement === undefined ? {} : { settlement }),
       recordSession: (sessionId, jobId) => { this.sessionJobs.set(sessionId, jobId); },
       removeSession: (sessionId) => { this.sessionJobs.delete(sessionId); },
     });
+    this.actionPipeline = actionPipeline;
     this.tools = createToolRoutes({
       registeredCapabilities: () => this.registeredCapabilities,
       store: () => this.getStore(),
@@ -141,6 +152,14 @@ export class Core implements NodeCore {
       catch (error: unknown) { console.error('adapter registration failed', adapter.manifest.id, error instanceof Error ? error.message : String(error)); }
     }
     this.registeredCapabilities = registry.list();
+    // A restart must not leave a `send_cli` receipt open past its settlement
+    // deadline: the deadline timers are in-memory and died with the previous
+    // process, so every running send whose deadline has already passed is closed
+    // here exactly as the in-process deadline would have closed it (AR-F4 Round
+    // 2 item 2). A write failure here must not take the node down — the server
+    // is not up yet, and the normal exchange settlement still applies.
+    try { await this.actionPipeline.reconcileCliSettlements(); }
+    catch (error: unknown) { console.error('failed to reconcile cli settlement deadlines', error); }
     const chrome = this.options.adapters.find(isChromeWorkerAdapter);
     this.chromeWorker = chrome !== undefined && this.registeredCapabilities.includes('chrome.navigate') ? chrome : null;
     const gated = this.gatedCapabilities(registry);
