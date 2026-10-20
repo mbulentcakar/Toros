@@ -342,3 +342,52 @@ Found before the Codex review. Both block it.
    `validateDesktopAuthorizedApps` and the desktop config parsing into a separate module (for
    example `src/desktop-config.ts`). Import it from `main.ts` and from the test. Remove the
    guard, so `main.ts` behaves exactly as before at module load.
+
+## F3b round 3 — after the agy / Gemini 4 Argon review of 12bde22 (2026-10-20)
+
+Verdict: REQUEST CHANGES. The orchestrator confirmed the P1s natively: all 8 native tests fail at
+`Add-Type`; `0u` does not parse in Windows PowerShell 5.1; and assigning `$pid` throws. All six
+findings are accepted. The review is on #12.
+
+1. **The probe script must compile and run (P1).**
+   - Fix the C# `int`→`uint` conversion in `TorosNative`: check an `int` session id for `< 0`
+     before casting.
+   - Rename every PowerShell `$pid` variable and parameter to `$winPid` (`$PID` is a read-only
+     automatic variable; the output key stays `pid`).
+   - Review the whole script for any other assignment to an automatic variable, such as `$input`,
+     `$args`, `$host`, `$error`, `$matches` or `$_`.
+2. **`resolveNodeSessionId` must work on Windows PowerShell 5.1 (P1).** Use 5.1 syntax only:
+   `[uint32]$x = 0` with `[uint32]::TryParse(..., [ref]$x)`, and no `u` literal suffix. Move the
+   function into `desktop-config.ts` so tests can import it without starting Core, and add a unit
+   test with an injected runner.
+3. **Correct session proof (P1).**
+   - Take the session id from the current PowerShell process (`ProcessIdToSessionId`), not
+     `WTSGetActiveConsoleSessionId`.
+   - Query `WTSQuerySessionInformation(..., WTSConnectState = 8)` for **that** session. Require
+     `WTSActive` (0), which covers both an active console session and an active RDP session.
+     Any other state → `disconnected`.
+   - Only then check the input desktop: unopenable, or not `Default` → `locked`.
+   - Enum values: Active 0, Connected 1, ConnectQuery 2, Shadow 3, Disconnected 4, Idle 5,
+     Listen 6, Reset 7, Down 8, Init 9.
+4. **Identities Core will accept, and nothing published for a window without one (P2).**
+   - Enforce Core's `isValidWindowsImagePath` rules in both `ReadIdentity` (PowerShell) and
+     `parseIdentity` (TypeScript). A failure drops the window and counts it.
+   - In `enumerate_windows`, `continue` immediately when the identity is `$null`: no
+     `WindowText` read, no output, and no count toward the cap.
+   - Wrap the `StartTime` read and its formatting in `try/catch`, using `InvariantCulture`.
+   - Use `-LiteralPath` for `Get-AuthenticodeSignature`.
+   - In `native-utils`, resolve the fixture temp directory with `fs.realpathSync.native`, so an
+     8.3 `%TEMP%` path is expanded.
+5. **`desktop.state` keeps `truncated` (P2).** Store it on the enumeration, and return it in both
+   the output and `receipt_extra`.
+6. **The tests that were dropped are restored (P2).**
+   - Add unit tests for `desktop.inspect`'s re-verification: a mismatch in pid, `created_at` or
+     hash → `unavailable`.
+   - Add a unit test for absent `ctx.target_decisions` → nothing published.
+   - Restore F2's non-gated static guard against reading `Current.Name` / `NameProperty`, and its
+     control and pagination unit tests in `adapter.test.ts`.
+   - Restore `receipts.length >= 2` and the `action.finished` event assertion in
+     `desktop-native-core.test.ts`.
+
+The implementer cannot run the native suites, because opencode runs in WSL. The orchestrator runs
+them natively before the next review.
