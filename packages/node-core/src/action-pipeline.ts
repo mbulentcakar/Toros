@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import {
   ErrorCode, TorosError, digest,
   type ActionResult, type ActionSchema, type Adapter, type AdapterContext,
-  type CapabilityId, type JsonValue, type Receipt, type SessionAdapter, type Store, type Workspace,
+  type AppIdentity, type CapabilityId, type JsonValue, type Receipt, type ResolvedTarget, type SessionAdapter, type Store, type TargetDecisions, type Workspace,
 } from '@toros/contracts';
 import type { Policy } from '@toros/policy';
 
@@ -102,6 +102,176 @@ function declaredAdapterFields(adapter: Adapter, result: ActionResult): Readonly
     fields[key] = value;
   }
   return fields;
+}
+
+/**
+ * Receipt keys Core itself writes (amendment A8): the two-phase resolve reduces
+ * to counts, never identities. An adapter may not declare these in its
+ * manifest — Core owns them, and a manifest that claims one would let the
+ * adapter overwrite Core's audit value.
+ */
+export const CORE_RESERVED_RECEIPT_KEYS: ReadonlySet<string> = new Set(['targets_allowed', 'targets_denied']);
+
+/**
+ * Extract the Core-reserved keys already on a receipt (amendment A8, Round 2
+ * item 3). `settleCliExchange` and any later receipt rewrite must carry these
+ * forward verbatim rather than let a later read action's counts overwrite the
+ * send receipt's — the send is what the counts describe.
+ */
+function preservedCoreFields(receipt: Receipt): Readonly<Record<string, JsonValue>> {
+  const fields: Record<string, JsonValue> = {};
+  for (const key of CORE_RESERVED_RECEIPT_KEYS) {
+    const value = receipt.adapter_fields[key];
+    if (value !== undefined) fields[key] = value;
+  }
+  return fields;
+}
+
+/** The ceiling on resolved targets from one adapter resolve call (amendment A8). */
+const MAX_RESOLVED_TARGETS = 1000;
+
+function resolveFailure(message: string): TorosError {
+  return toros(ErrorCode.E_ADAPTER_FAILURE, message);
+}
+
+/**
+ * Validate the adapter's resolve output (amendment A8). It is untrusted — the
+ * adapter is reached only after the decision, but its resolve result is still
+ * adapter-supplied data, so nothing is taken on faith: an array of well-formed
+ * targets with unique, bounded keys, at most `MAX_RESOLVED_TARGETS` long.
+ * Anything else is E_ADAPTER_FAILURE.
+ */
+function validateResolvedTargets(value: unknown): readonly ResolvedTarget[] {
+  if (!Array.isArray(value)) throw resolveFailure('Adapter resolver returned a non-array result');
+  if (value.length > MAX_RESOLVED_TARGETS) {
+    throw resolveFailure(`Adapter resolver returned more than ${MAX_RESOLVED_TARGETS} targets`);
+  }
+  const seen = new Set<string>();
+  const targets: ResolvedTarget[] = [];
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      throw resolveFailure('Adapter resolver returned a malformed target');
+    }
+    const record = item as Record<string, unknown>;
+    const kind = record['kind'];
+    const key = record['key'];
+    if (typeof key !== 'string' || key.length === 0 || key.length > 128) {
+      throw resolveFailure('Adapter resolver returned a target with an invalid key');
+    }
+    if (seen.has(key)) throw resolveFailure('Adapter resolver returned duplicate target keys');
+    seen.add(key);
+
+    if (kind === 'app') {
+      targets.push({ kind: 'app', key, identity: validateAppIdentity(record['identity']) });
+    } else if (kind === 'capability') {
+      const capability = record['capability'];
+      if (typeof capability !== 'string' || capability.length === 0) {
+        throw resolveFailure('Adapter resolver returned a capability target with an invalid capability');
+      }
+      targets.push({ kind: 'capability', key, capability });
+    } else {
+      throw resolveFailure('Adapter resolver returned a target with an unknown kind');
+    }
+  }
+  return targets;
+}
+
+/** Lower-case hex SHA-256, exactly 64 characters (amendment A8). */
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+/**
+ * A valid ISO-8601 UTC timestamp ending in `Z` (amendment A8). The shape is
+ * checked first, then the calendar components are round-tripped through
+ * `Date.UTC` so a value like `2026-02-30` or `2026-01-01T24:00:00Z` — which
+ * `Date.parse` silently normalises — is refused rather than accepted as a
+ * different instant.
+ */
+const UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z$/;
+
+function isValidUtcTimestamp(value: string): boolean {
+  const match = UTC_TIMESTAMP.exec(value);
+  if (match === null) return false;
+  const [, year, month, day, hour, minute, second] = match;
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)));
+  return (
+    date.getUTCFullYear() === Number(year)
+    && date.getUTCMonth() + 1 === Number(month)
+    && date.getUTCDate() === Number(day)
+    && date.getUTCHours() === Number(hour)
+    && date.getUTCMinutes() === Number(minute)
+    && date.getUTCSeconds() === Number(second)
+  );
+}
+
+/**
+ * A canonical Windows absolute drive path, as `QueryFullProcessImageName`
+ * returns it (amendment A8). Rejects anything the resolver must not produce:
+ * a missing drive root, a namespace prefix (`\?\`, `\.\`), a UNC root, a
+ * forward-slash separator, a segment ending in `.` or a space, and an 8.3
+ * short-name segment (`~` followed by a digit). F3b guarantees this form;
+ * F3a refuses everything else.
+ */
+function isValidWindowsImagePath(value: string): boolean {
+  if (!/^[A-Za-z]:\\/.test(value)) return false;
+  if (value.startsWith('\\\\') || value.includes('\\?\\') || value.includes('\\.\\')) return false;
+  if (value.includes('/')) return false;
+  // A segment ending in a dot or a space (the character immediately before a
+  // separator, or a trailing one).
+  if (/[. ](?:\\|$)/.test(value)) return false;
+  // An 8.3 short-name segment: `~` followed by a digit.
+  if (/~[0-9]/.test(value)) return false;
+  return true;
+}
+
+function validateAppIdentity(value: unknown): AppIdentity {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw resolveFailure('Adapter resolver returned an app target with a malformed identity');
+  }
+  const id = value as Record<string, unknown>;
+
+  // A process id must be a positive safe integer: not fractional, not negative,
+  // not zero, and within the range JS integers can represent exactly.
+  const pid = id['pid'];
+  if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) {
+    throw resolveFailure('Adapter resolver returned an app identity with an invalid pid');
+  }
+  const created_at = id['created_at'];
+  if (typeof created_at !== 'string' || !isValidUtcTimestamp(created_at)) {
+    throw resolveFailure('Adapter resolver returned an app identity with an invalid created_at');
+  }
+  const image_path = id['image_path'];
+  if (typeof image_path !== 'string' || !isValidWindowsImagePath(image_path)) {
+    throw resolveFailure('Adapter resolver returned an app identity with an invalid image_path');
+  }
+  const image_sha256 = id['image_sha256'];
+  if (typeof image_sha256 !== 'string' || !SHA256_HEX.test(image_sha256)) {
+    throw resolveFailure('Adapter resolver returned an app identity with an invalid image_sha256');
+  }
+  const signature = id['signature'];
+  if (signature !== 'valid' && signature !== 'unsigned' && signature !== 'invalid') {
+    throw resolveFailure('Adapter resolver returned an app identity with an invalid signature');
+  }
+  const signer = id['signer'];
+  // Signature/signer consistency: `valid` must carry a non-empty signer; a
+  // non-valid signature must carry no signer at all.
+  if (signature === 'valid') {
+    if (typeof signer !== 'string' || signer.length === 0) {
+      throw resolveFailure('Adapter resolver returned an app identity with a valid signature but no signer');
+    }
+  } else if (signer !== null) {
+    throw resolveFailure('Adapter resolver returned a non-valid signature with a signer');
+  }
+  const product_name = id['product_name'];
+  if (product_name !== null && typeof product_name !== 'string') {
+    throw resolveFailure('Adapter resolver returned an app identity with an invalid product_name');
+  }
+  const session_id = id['session_id'];
+  // A session id must be a non-negative safe integer.
+  if (typeof session_id !== 'number' || !Number.isSafeInteger(session_id) || session_id < 0) {
+    throw resolveFailure('Adapter resolver returned an app identity with an invalid session_id');
+  }
+
+  return { pid, created_at, image_path, image_sha256, signature, signer, product_name, session_id };
 }
 
 /**
@@ -375,6 +545,12 @@ export function createActionPipeline(deps: {
       // timeout/cancellation — closes the receipt `failed`/`terminated` before
       // the error propagates, and success closes it `succeeded`. A receipt
       // never stays `running` after this call returns or throws.
+      // `adapterFields` (Core-reserved counts + declared adapter fields) and
+      // `deadlineTimer` are declared OUTSIDE the try because `catch` and
+      // `finally` are separate block scopes and cannot see a `let` bound inside
+      // the `try` block.
+      let adapterFields: Readonly<Record<string, JsonValue>> = {};
+      let deadlineTimer: NodeJS.Timeout | undefined;
       try {
         // Still before the adapter runs — a crash or a hung adapter must not
         // leave an action that spent budget with no record of it. INSIDE the
@@ -393,37 +569,50 @@ export function createActionPipeline(deps: {
         const controller = new AbortController();
         const timeoutMs = actionSchema?.timeout_ms ?? adapter.manifest.default_timeout_ms;
         const timedOut = toros(ErrorCode.E_TIMEOUT, `The action exceeded its ${timeoutMs}ms timeout`);
+        // ONE action deadline (Round 2 item 1): the controller and timer are
+        // created once, BEFORE the resolve, and the same deadline and abort are
+        // shared by resolve and invoke. Each phase previously armed its own
+        // `withinTimeout` timer, so an 80 ms action could run for ~160 ms across
+        // the two phases. A single deadline makes the action's ceiling the
+        // ceiling for both phases combined.
+        let didTimeOut = false;
+        const deadline = new Promise<never>((_, reject) => {
+          deadlineTimer = setTimeout(() => {
+            // Mark the action timed out BEFORE aborting the adapter's signal.
+            // Abort listeners run synchronously: an adapter that resolves (or
+            // rejects) its pending promise from its own abort listener would
+            // otherwise settle the race first and replace E_TIMEOUT with a
+            // success or its own error. Deciding the timeout before the abort
+            // makes E_TIMEOUT the only outcome the race can produce.
+            didTimeOut = true;
+            controller.abort();
+            reject(timedOut);
+          }, timeoutMs);
+        });
+        // The deadline rejects with E_TIMEOUT when the timer fires. A handler
+        // must exist from the moment the promise is created (Round 3 item 1):
+        // if a resolver or invoke throws SYNCHRONOUSLY, `Promise.race` is never
+        // constructed, so it never attaches a rejection handler — and the timer
+        // firing later (while the catch path awaits failure persistence) would
+        // be an unhandled rejection that terminates Core under Node's default
+        // `--unhandled-rejections=throw`. This no-op handler keeps the promise
+        // observed; the races below still race the original `deadline`.
+        void deadline.catch(() => {});
         async function withinTimeout<T>(work: () => Promise<T>): Promise<T> {
-          let timer: NodeJS.Timeout | undefined;
-          let didTimeOut = false;
           try {
-            try {
-              const outcome = await Promise.race([
-                work(),
-                new Promise<never>((_, reject) => {
-                  timer = setTimeout(() => {
-                    // Mark the action timed out BEFORE aborting the adapter's
-                    // signal. Abort listeners run synchronously: an adapter
-                    // that resolves (or rejects) its pending promise from its
-                    // own abort listener would otherwise settle the race first
-                    // and replace E_TIMEOUT with a success or its own error.
-                    // Deciding the timeout before the abort makes E_TIMEOUT the
-                    // only outcome the race can produce.
-                    didTimeOut = true;
-                    controller.abort();
-                    reject(timedOut);
-                  }, timeoutMs);
-                }),
-              ]);
-              if (didTimeOut) throw timedOut;
-              return outcome;
-            } catch (error: unknown) {
-              if (didTimeOut) throw timedOut;
-              throw error;
-            }
-          } finally { if (timer !== undefined) clearTimeout(timer); }
+            // `work()` is invoked inside the `try` (Round 3 item 1), so a
+            // synchronous throw is caught exactly like a rejected promise —
+            // no escape path leaves `deadline` without a rejection handler.
+            const workPromise = work();
+            const outcome = await Promise.race([workPromise, deadline]);
+            if (didTimeOut) throw timedOut;
+            return outcome;
+          } catch (error: unknown) {
+            if (didTimeOut) throw timedOut;
+            throw error;
+          }
         }
-        const context: AdapterContext = { job_id: jobId, session_id: sessionId, workspace, correlation_id: receiptId, signal: controller.signal };
+        const context: AdapterContext = { job_id: jobId, session_id: sessionId, workspace, correlation_id: receiptId, signal: controller.signal, actor };
         // Hand the adapter the SAME path policy approved, not the string the
         // caller wrote.
         //
@@ -437,10 +626,32 @@ export function createActionPipeline(deps: {
         // Substituting the resolved absolute form closes it: the argument the
         // adapter receives is exactly the one that was contained.
         const executedArgs = actionSchema === null ? actionArgs : resolvePathArgs(actionArgs, actionSchema, workspace.root);
+        // Two-phase resolve (amendment A8). For an adapter with a resolver, Core
+        // resolves the targets, decides each one against the envelope, and hands
+        // the decisions to invoke. The resolve runs under the same timeout and
+        // abort as invoke, and a resolve failure closes the receipt the same way
+        // an invoke failure does. An adapter without a resolver behaves exactly
+        // as before.
+        const resolver = adapter.resolver;
+        let invokeContext: AdapterContext = context;
+        if (resolver !== undefined) {
+          const rawTargets = await withinTimeout(() => resolver.resolve(actionId, executedArgs, context));
+          const targets = validateResolvedTargets(rawTargets);
+          const decisions = deps.policy().authorizeTargets(currentJob.envelope, capability, targets);
+          let allowed = 0;
+          let denied = 0;
+          for (const decision of decisions.values()) { if (decision === 'allowed') allowed += 1; else denied += 1; }
+          // Core records only the counts, never the identities (amendment A8),
+          // and records them IMMEDIATELY after authorization (Round 2 item 3) so
+          // a later invoke failure or timeout closes the receipt with them. The
+          // two reserved keys can never collide with an adapter field because
+          // registration refuses a manifest that declares them.
+          adapterFields = { targets_allowed: allowed, targets_denied: denied };
+          invokeContext = { ...context, target_decisions: decisions };
+        }
         let result: ActionResult;
-        let adapterFields: Readonly<Record<string, JsonValue>> = {};
         if (tool === 'start_cli') {
-          const startedSession = await withinTimeout(() => sessionAdapter(adapter).start({ ...context, session_id: receiptId }));
+          const startedSession = await withinTimeout(() => sessionAdapter(adapter).start({ ...invokeContext, session_id: receiptId }));
           await store.createSession({ session_id: receiptId, job_id: jobId, adapter_id: adapter.manifest.id, workspace_id: workspace.id, pid: startedSession.pid, started_at: started });
           // Index it for correlation before anything the child does can be
           // observed. The adapter named its working directory after this same
@@ -456,7 +667,7 @@ export function createActionPipeline(deps: {
           }
           result = { output: '', truncated: false, artifacts: [], receipt_extra: {} };
         } else {
-          result = await withinTimeout(() => adapter.invoke(actionId, executedArgs, context));
+          result = await withinTimeout(() => adapter.invoke(actionId, executedArgs, invokeContext));
           // stop_cli killed the process and left the session row untouched, so
           // persisted state kept showing a live pid and a null stopped_at —
           // across restarts. The lifecycle has to be recorded where it is read
@@ -466,7 +677,7 @@ export function createActionPipeline(deps: {
             await store.appendEvent({ node_id: deps.node_id, job_id: jobId, kind: 'session.stopped', payload: { session_id: sessionId, receipt_id: receiptId } });
           }
         }
-        adapterFields = declaredAdapterFields(adapter, result);
+        adapterFields = { ...adapterFields, ...declaredAdapterFields(adapter, result) };
         const exchangeState = adapterFields['exchange_state'];
         const exchangeError = adapterFields['exchange_error'];
         if (tool === 'read_cli' && sessionId !== null) {
@@ -502,10 +713,12 @@ export function createActionPipeline(deps: {
         return response;
       } catch (error: unknown) {
         const failed = error instanceof TorosError ? error : toros(ErrorCode.E_ADAPTER_FAILURE, 'The adapter failed');
-        receipt = { ...receipt, ended_at: now(), outcome: failed.code === ErrorCode.E_TIMEOUT || failed.code === ErrorCode.E_CANCELLED || failed.code === ErrorCode.E_OUTPUT_LIMIT ? 'terminated' : 'failed' };
+        receipt = { ...receipt, ended_at: now(), outcome: failed.code === ErrorCode.E_TIMEOUT || failed.code === ErrorCode.E_CANCELLED || failed.code === ErrorCode.E_OUTPUT_LIMIT ? 'terminated' : 'failed', adapter_fields: adapterFields };
         await store.putReceipt(receipt);
         await store.appendEvent({ node_id: deps.node_id, job_id: jobId, kind: 'action.finished', payload: { receipt_id: receiptId, outcome: receipt.outcome, error: failed.code } });
         throw failed;
+      } finally {
+        if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
       }
     } finally { locks.delete(jobId); }
   }
@@ -532,7 +745,7 @@ export function createActionPipeline(deps: {
     if (pending === null) return;
     const terminated = state === 'interrupted' || error === ErrorCode.E_TIMEOUT || error === ErrorCode.E_CANCELLED || error === ErrorCode.E_OUTPUT_LIMIT;
     const outcome: Receipt['outcome'] = state === 'succeeded' ? 'succeeded' : terminated ? 'terminated' : 'failed';
-    const settled: Receipt = { ...pending, ended_at: now(), outcome, adapter_fields: { ...pending.adapter_fields, ...adapterFields } };
+    const settled: Receipt = { ...pending, ended_at: now(), outcome, adapter_fields: { ...adapterFields, ...preservedCoreFields(pending) } };
     // Two durable steps close an exchange: the terminal receipt write and the
     // `action.finished` event. The deadline timer is cleared only once BOTH are
     // on disk (Round 3 item 1 kept it armed across a failed write; Round 4

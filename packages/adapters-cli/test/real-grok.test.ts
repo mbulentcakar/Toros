@@ -31,7 +31,7 @@ describe('grok adapter against Grok Build', { skip: enabled ? false : 'Set TOROS
   // for a moment after dispose(), so a bare rmdir races it with EBUSY.
   after(async () => { await adapter?.dispose(); await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
   it('starts and resumes a real Grok conversation without retaining prompt files', async () => {
-    const ctx: AdapterContext = { job_id: 'real-grok', session_id: 'grok', correlation_id: 'grok', workspace, signal: new AbortController().signal };
+    const ctx: AdapterContext = { job_id: 'real-grok', session_id: 'grok', correlation_id: 'grok', workspace, signal: new AbortController().signal, actor: 'coordinator' };
     await adapter.start(ctx); await adapter.send('grok', 'Reply with the single word ALPHA.');
     const first = await answer('grok'); assert.match(first.text, /ALPHA/);
     await adapter.send('grok', 'What word did you just say? Reply with that word only.');

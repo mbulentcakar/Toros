@@ -24,6 +24,7 @@ function makeCtx(signal?: AbortSignal): AdapterContext {
     workspace: { id: 'test-ws', root: '/tmp/test' },
     correlation_id: 'test-correlation',
     signal: signal ?? new AbortController().signal,
+    actor: 'coordinator',
   };
 }
 

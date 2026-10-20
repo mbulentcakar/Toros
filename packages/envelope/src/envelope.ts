@@ -15,6 +15,7 @@ import { timingSafeEqual } from 'node:crypto';
 import {
   type JsonValue,
   type JobEnvelope,
+  type AppRule,
   type SealedEnvelope,
   type CoordinatorResponse,
   type CoordinatorAction,
@@ -39,6 +40,20 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const RFC3339_OFFSET_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
 const CAPABILITY_ID_PATTERN = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
+
+/** Lower-case hex SHA-256, exactly 64 characters. */
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+/**
+ * Absolute path, as the envelope requires for an `image_path` rule. Accepts a
+ * drive-qualified Windows path (`C:\…`, `C:/…`), a UNC path (`\\…`, `//…`), or
+ * a POSIX root (`/…`). A bare `notepad.exe` or `.\foo` is relative and refused.
+ *
+ * Strict rather than liberal on purpose: a rule that names a relative path
+ * could be satisfied by different files depending on the process working
+ * directory, which is exactly the drift the allowlist exists to prevent.
+ */
+const ABSOLUTE_PATH_PATTERN = /^(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/)/;
 
 /** The same grammar as RFC3339_OFFSET_PATTERN, with the components captured. */
 const RFC3339_PARTS_PATTERN =
@@ -87,11 +102,89 @@ const ALLOWED_FIELDS: ReadonlySet<string> = new Set([
   'max_actions',
   'max_retries',
   'expires_at',
+  'allowed_apps',
 ]);
 
 // ---------------------------------------------------------------------------
 // sealEnvelope
 // ---------------------------------------------------------------------------
+
+/**
+ * Validate one `allowed_apps` rule (amendment A8). Each rule must be exactly one
+ * of the three `AppRule` shapes — no fewer keys, no extra keys, no unknown keys
+ * — because a rule that names two shapes at once is ambiguous and would let one
+ * envelope authorise with a weaker shape than its author intended.
+ */
+function validateAppRule(value: unknown, index: number): AppRule {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}] must be an object`, { field: 'allowed_apps' });
+  }
+  const rule = value as Record<string, unknown>;
+
+  for (const key of Object.keys(rule)) {
+    if (key !== 'image_sha256' && key !== 'signer' && key !== 'product_name' && key !== 'image_path') {
+      throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}] unknown property: ${key}`, { field: 'allowed_apps' });
+    }
+  }
+
+  const hasSha = 'image_sha256' in rule;
+  const hasSigner = 'signer' in rule;
+  const hasProduct = 'product_name' in rule;
+  const hasPath = 'image_path' in rule;
+
+  if (hasSha) {
+    if (hasSigner || hasProduct || hasPath) {
+      throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}] must have exactly one rule shape`, { field: 'allowed_apps' });
+    }
+    const sha = rule['image_sha256'];
+    if (typeof sha !== 'string' || !SHA256_PATTERN.test(sha)) {
+      throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}].image_sha256 must be 64 lower-case hex characters`, { field: 'allowed_apps' });
+    }
+    return { image_sha256: sha };
+  }
+
+  if (hasSigner || hasProduct) {
+    if (!hasSigner || !hasProduct || hasPath) {
+      throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}] signer and product_name must appear together`, { field: 'allowed_apps' });
+    }
+    const signer = rule['signer'];
+    const product = rule['product_name'];
+    if (typeof signer !== 'string' || signer.length === 0 || signer.length > 512) {
+      throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}].signer must be a non-empty string ≤ 512 characters`, { field: 'allowed_apps' });
+    }
+    if (typeof product !== 'string' || product.length === 0 || product.length > 512) {
+      throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}].product_name must be a non-empty string ≤ 512 characters`, { field: 'allowed_apps' });
+    }
+    return { signer, product_name: product };
+  }
+
+  if (hasPath) {
+    const p = rule['image_path'];
+    if (typeof p !== 'string' || p.length === 0 || p.length > 512) {
+      throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}].image_path must be a non-empty string ≤ 512 characters`, { field: 'allowed_apps' });
+    }
+    if (!ABSOLUTE_PATH_PATTERN.test(p)) {
+      throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}].image_path must be absolute`, { field: 'allowed_apps' });
+    }
+    return { image_path: p };
+  }
+
+  throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}] must have exactly one rule shape`, { field: 'allowed_apps' });
+}
+
+/**
+ * Validate the optional `allowed_apps` field, returning undefined when absent
+ * so the digest omits it entirely (an envelope without the field must seal to
+ * the same digest it always did). Returns the rules as a frozen array.
+ */
+function validateAllowedApps(value: unknown): readonly AppRule[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, 'allowed_apps must be an array', { field: 'allowed_apps' });
+  }
+  const rules = value.map((rule, index) => validateAppRule(rule, index));
+  return Object.freeze(rules);
+}
 
 /**
  * Parses and validates untrusted input. On success the envelope is sealed with
@@ -239,6 +332,9 @@ export function sealEnvelope(input: unknown): SealedEnvelope {
     throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, 'expires_at is not a real calendar instant', { field: 'expires_at' });
   }
 
+  // --- allowed_apps (optional, amendment A8) ---
+  const allowed_apps = validateAllowedApps(record['allowed_apps']);
+
   // Build the validated envelope (mutable arrays for JsonValue compatibility).
   const envelope: JobEnvelope = {
     job_id,
@@ -250,6 +346,7 @@ export function sealEnvelope(input: unknown): SealedEnvelope {
     max_actions,
     max_retries,
     expires_at,
+    ...(allowed_apps === undefined ? {} : { allowed_apps }),
   };
 
   // Compute the digest after validation. Never digest a value not accepted.
@@ -267,7 +364,7 @@ export function sealEnvelope(input: unknown): SealedEnvelope {
  * receives a shape it can accept without readonly-vs-mutable type friction.
  */
 function computeDigest(envelope: JobEnvelope): string {
-  const value: JsonValue = {
+  const base = {
     job_id: envelope.job_id,
     objective: envelope.objective,
     allowed_capabilities: [...envelope.allowed_capabilities],
@@ -278,6 +375,11 @@ function computeDigest(envelope: JobEnvelope): string {
     max_retries: envelope.max_retries,
     expires_at: envelope.expires_at,
   };
+  // `allowed_apps` participates in the digest only when present, so an envelope
+  // without it seals to exactly the digest it did before amendment A8.
+  const value: JsonValue = envelope.allowed_apps === undefined
+    ? base
+    : { ...base, allowed_apps: envelope.allowed_apps.map((rule) => ({ ...rule })) };
   return digest(value);
 }
 

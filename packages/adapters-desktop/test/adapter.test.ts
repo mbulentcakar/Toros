@@ -60,6 +60,7 @@ function fakeContext(): AdapterContext {
     workspace: { id: 'ws-1', root: '/tmp/ws-1' },
     correlation_id: 'corr-1',
     signal: new AbortController().signal,
+    actor: 'coordinator',
   };
 }
 

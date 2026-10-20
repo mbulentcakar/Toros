@@ -5,6 +5,8 @@ import {
   ErrorCode,
   digest,
   isTerminal,
+  type AppIdentity,
+  type AppRule,
   type ApprovalBinding,
   type ApprovalVerifier,
   type CapabilityId,
@@ -12,6 +14,8 @@ import {
   type JsonValue,
   type JobEnvelope,
   type PolicyDecision,
+  type ResolvedTarget,
+  type TargetDecisions,
   type Workspace,
   type WorkItemState,
 } from '@toros/contracts';
@@ -52,10 +56,22 @@ export interface PolicyOptions {
    * and it made the gate decorative: any non-empty string passed.
    */
   readonly approvals?: ApprovalVerifier;
+  /**
+   * The Windows session id Node Core runs in (amendment A8). Passed to policy at
+   * construction so `authorizeTargets` can require a resolved app's process to
+   * live in that session. Absent or null means every `app` target is denied —
+   * fail closed: policy must not guess which session the node is in.
+   */
+  readonly desktop_session_id?: number | null;
 }
 
 export interface Policy {
   decide(input: PolicyInput): PolicyDecision;
+  /**
+   * Decide each resolved target independently (amendment A8). Deterministic and
+   * pure: the same envelope, targets and session yield the same map every call.
+   */
+  authorizeTargets(envelope: JobEnvelope, capability: CapabilityId, targets: readonly ResolvedTarget[]): TargetDecisions;
 }
 
 interface ResolvedWorkspace {
@@ -149,16 +165,44 @@ function pathIsContained(root: string, candidate: string): boolean {
   }
 }
 
+/** Normalise `\` and `/` to a single separator so path equality ignores spelling. */
+function normalizeSeparators(value: string): string {
+  return value.replaceAll('\\', '/');
+}
+
+/**
+ * Whether one `AppRule` matches an `AppIdentity` (amendment A8).
+ *
+ * - `image_sha256` compares exactly.
+ * - `image_path` compares case-insensitively on the full path after separator
+ *   normalisation.
+ * - `signer` + `product_name` compare exactly, case-sensitively, and only when
+ *   the signature is `valid` — an unsigned or invalid image has no trustworthy
+ *   signer, so a signer rule must not authorise it.
+ */
+function appRuleMatches(rule: AppRule, identity: AppIdentity): boolean {
+  if ('image_sha256' in rule) {
+    return identity.image_sha256 === rule.image_sha256;
+  }
+  if ('image_path' in rule) {
+    return normalizeSeparators(identity.image_path).toLowerCase() === normalizeSeparators(rule.image_path).toLowerCase();
+  }
+  if (identity.signature !== 'valid') return false;
+  return identity.signer === rule.signer && identity.product_name === rule.product_name;
+}
+
 class PolicyImpl implements Policy {
   private readonly registry: CapabilityRegistry;
   private readonly approvalRequired: ReadonlySet<CapabilityId>;
   private readonly approvals: ApprovalVerifier | undefined;
   private readonly workspaces: ReadonlyMap<string, ResolvedWorkspace>;
+  private readonly desktopSessionId: number | null;
 
   constructor(options: PolicyOptions) {
     this.registry = options.registry;
     this.approvalRequired = new Set(options.approval_required);
     this.approvals = options.approvals;
+    this.desktopSessionId = options.desktop_session_id ?? null;
     const resolved = new Map<string, ResolvedWorkspace>();
     for (const workspace of options.registry.workspaces()) {
       // `.native`, to match `realpathWithMissingTail` — which every candidate
@@ -250,6 +294,59 @@ class PolicyImpl implements Policy {
       }
     }
     return { allow: true, reason: 'The action satisfies the policy controls' };
+  }
+
+  authorizeTargets(envelope: JobEnvelope, _capability: CapabilityId, targets: readonly ResolvedTarget[]): TargetDecisions {
+    const decisions = new Map<string, 'allowed' | 'denied'>();
+    for (const target of targets) {
+      decisions.set(target.key, this.decideTarget(envelope, target));
+    }
+    return decisions;
+  }
+
+  /**
+   * One resolved target's verdict (amendment A8). `app` targets fail closed on
+   * three independent axes: the envelope must name the application, nothing
+   * must forbid it, and the process must live in the node's own session.
+   */
+  private decideTarget(envelope: JobEnvelope, target: ResolvedTarget): 'allowed' | 'denied' {
+    if (target.kind === 'capability') {
+      return envelope.allowed_capabilities.includes(target.capability) ? 'allowed' : 'denied';
+    }
+
+    const identity = target.identity;
+
+    // Rule 1: the envelope must name at least one matching application. Absent
+    // means deny — a job that does not name its apps sees none of them.
+    const apps = envelope.allowed_apps;
+    if (apps === undefined || apps.length === 0) return 'denied';
+    if (!apps.some((rule) => appRuleMatches(rule, identity))) return 'denied';
+
+    // Rule 2: no forbidden term may match the image basename, product name or
+    // signer, using the same token matching as `isForbidden`. This wins even
+    // when a rule matched — the allowlist does not override `forbidden`.
+    //
+    // `path.win32.basename` on purpose: `identity.image_path` is a Windows
+    // contract value, so the basename must be extracted with Windows separator
+    // semantics. The host's own `path.basename` on a POSIX node leaves a
+    // backslash path intact and would then tokenise it as one string, letting a
+    // forbidden token in a DIRECTORY incorrectly deny the executable's own
+    // name.
+    const basename = path.win32.basename(identity.image_path);
+    if (isForbidden(envelope, basename)
+      || isForbidden(envelope, identity.product_name ?? '')
+      || isForbidden(envelope, identity.signer ?? '')) {
+      return 'denied';
+    }
+
+    // Rule 3: the process session must equal the node's own. Absent/null
+    // (unknown at construction) fails closed rather than trusting an unknown
+    // session.
+    if (this.desktopSessionId === null || identity.session_id !== this.desktopSessionId) {
+      return 'denied';
+    }
+
+    return 'allowed';
   }
 }
 
