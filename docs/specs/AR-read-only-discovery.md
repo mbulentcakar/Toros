@@ -152,7 +152,10 @@ action's `input_schema`; the output shapes are the adapter's contract with its c
   `registered_actions[]`, and a **readiness** verdict from a fixed taxonomy:
   `registered` (manifest loaded) · `usable` (probe succeeded) · `missing_adapter` ·
   `unsupported_platform` · `missing_prerequisite` (with `reason`) · `unauthorized` (caller lacks
-  the capability). "Installed" is never conflated with "usable": a probe that finds an executable
+  the capability). An `unauthorized` entry is reduced to `id` and `readiness` only — no
+  `reason`, `platforms`, or `backs_adapter` — because the job-scoped filter (AR-09) reports
+  only the entries a resolved capability admitted. "Installed" is never conflated with
+  "usable": a probe that finds an executable
   but no registered manifest reports `missing_adapter`, not `usable`.
 - **Bounds:** probes a fixed, declared list of locations only. **No filesystem-wide scan, no
   secret or account enumeration, no registry-wide sweep.**

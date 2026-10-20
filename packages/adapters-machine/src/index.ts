@@ -9,6 +9,8 @@
 export {
   createMachineAdapter,
   DEFAULT_MACHINE_PROBES,
+  type AccessCheck,
+  type DriveTypes,
   type MachineAdapterOptions,
   type MachineProbe,
 } from './adapter.js';
