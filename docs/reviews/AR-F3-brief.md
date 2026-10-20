@@ -316,3 +316,29 @@ Codex: all six round-2 items fixed. One new P2:
      action timeout (inject a slow `appendEvent` or `putReceipt`), and a `process.on('unhandledRejection')`
      probe. Assert zero unhandled rejections, a closed receipt, and a cleared timer. Prove that
      the test fails without the `.catch` line.
+
+## F3b round 2 — the orchestrator's pre-review (2026-10-20)
+
+Found before the Codex review. Both block it.
+
+1. **F2's native tests were deleted (P1).** The rewrite of
+   `packages/adapters-desktop/test/native-fixture.test.ts` replaced F2's five tests instead of
+   adding to them. Those tests are AR-01's native proof that a masked password never leaves the
+   probe:
+   - acceptance 1: the three canaries are nowhere in the output;
+   - acceptance 4: the `control_filter` cases;
+   - acceptance 5: long-title truncation, and no title for an out-of-scope window;
+   - acceptance 6: the caps, and the truncated report;
+   - the static `restrict_to_pid` guard.
+
+   Restore all five, adapted to the F3b API (the fixture allowlisted by its own image path or
+   hash, `session_scope: 'interactive'`, the resolver flow). Keep the three new identity tests
+   too. All eight stay gated behind `TOROS_REAL_TESTS=1`, and the gated skip count goes back up
+   accordingly. Do not weaken any F2 assertion.
+2. **`main.ts` must start unconditionally (P2).** The new
+   `isMain = import.meta.url === pathToFileURL(process.argv[1]).href` guard can be false on
+   Windows: a different drive-letter case, a relative `argv[1]`, a junction or symlinked install
+   path, or a launcher shim. Node Core would then exit silently without starting. Move
+   `validateDesktopAuthorizedApps` and the desktop config parsing into a separate module (for
+   example `src/desktop-config.ts`). Import it from `main.ts` and from the test. Remove the
+   guard, so `main.ts` behaves exactly as before at module load.
