@@ -255,3 +255,47 @@ that their only resource is the probe's own `mkdtemp` directory.
    `adapter_fields`, as **Core-reserved keys**. A manifest that declares either key in
    `receipt_fields` is refused at registration (`E_ADAPTER_FAILURE`). There is no new top-level
    `Receipt` field and no store schema change. Add the two reserved keys to A8's record.
+
+## F3a round 2 — after the Codex review of 00ca084 (2026-10-20)
+
+Codex: REQUEST CHANGES (four P2, two P3). All six are accepted.
+
+1. **One deadline for resolve and invoke (P2).** `action-pipeline.ts` gives resolve and invoke
+   separate `withinTimeout` budgets, so an 80 ms action can run for about 160 ms. Use **one**
+   action deadline and one abort controller, started before resolve and shared by both phases.
+   Test: a 60 ms resolve plus a 60 ms invoke under an 80 ms timeout → terminated receipt, with
+   the signal aborted.
+2. **Strict identity validation (P2).** Before policy sees a target, reject the whole resolve
+   result with `E_ADAPTER_FAILURE` when any identity has:
+   - a `pid` that is not a positive safe integer, or a `session_id` that is not a non-negative
+     safe integer;
+   - a `created_at` that is not a valid ISO-8601 UTC timestamp ending in `Z`;
+   - an `image_path` that is not an absolute drive path (`^[A-Za-z]:\`), or that has a
+     namespace prefix (`\?\`, `\.\`), a UNC root, a segment ending in a dot or a space, an
+     8.3 short-name segment (`~` followed by a digit), or a `/` separator;
+   - `signature: 'valid'` with a null or empty `signer`, or a non-valid signature with a non-null
+     `signer`;
+   - an `image_sha256` that is not 64 lower-case hex characters.
+
+   Record in A8 (00-CONTRACTS §10) that `image_path` must be the canonical long path, as
+   `QueryFullProcessImageName` returns it. F3b must guarantee that; F3a refuses anything else.
+   One test per rule.
+3. **Counts survive failure, and a later read does not overwrite them (P2).** Write
+   `targets_allowed` and `targets_denied` into the receipt immediately after authorization, so a
+   later invoke failure or timeout closes the receipt with them. `settleCliExchange` and any
+   other receipt rewrite must preserve the Core-reserved keys already on the receipt, never
+   replace them. Tests: an invoke that throws after two allowed targets → closed receipt with
+   `targets_allowed: 2`; and the CLI send/read path keeps the send receipt's counts.
+4. **Restore the `ConversationTurnRole` export (P2).** It was removed from
+   `packages/contracts/src/index.ts`. Restore it exactly. Add a type-level test that imports it
+   from `@toros/contracts`. A8 changes nothing else in contracts.
+5. **Windows basename semantics (P3).** Use `path.win32.basename` for `identity.image_path` in
+   policy. Test with a path whose directory contains a forbidden token while the file name does
+   not → not denied by that token.
+6. **Tests that can fail (P3).**
+   - Split the forbidden test into product-only and signer-only cases, each with a distinct term.
+   - Capture `actor` inside **resolve** and assert it there.
+   - Add the missing coverage: the combined timeout (item 1), malformed identities (item 2),
+     failed-invoke counts (item 3), and invoke still called when every target is denied.
+
+Acceptance as before: a clean typecheck, `npm test` 0 failed, and CI green.
