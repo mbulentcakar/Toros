@@ -79,4 +79,5 @@ export {
   type Store,
   type TargetDecisions,
   type TargetResolver,
+  type ConversationTurnRole,
 } from './ports.js';

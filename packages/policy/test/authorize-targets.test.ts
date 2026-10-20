@@ -127,17 +127,50 @@ describe('@toros/policy authorizeTargets (amendment A8)', () => {
     assert.equal(policy.authorizeTargets(sealed.envelope, 'file.read', [appTarget('forbidden-basename')]).get('forbidden-basename'), 'denied');
   });
 
-  it('denies an app whose product_name or signer matches a forbidden term', () => {
-    const byProduct = sealEnvelope({
+  it('denies an app whose product_name alone matches a forbidden term', () => {
+    // The forbidden token `editor` appears only in the product name, not in the
+    // signer or the image basename, so this can only fail through the product
+    // check.
+    const sealed = sealEnvelope({
       job_id: '00000000-0000-0000-0000-000000000003',
       objective: 'test', allowed_capabilities: ['file.read'], allowed_workspaces: ['main'],
-      acceptance: ['done'], forbidden: ['contoso'], max_actions: 3, max_retries: 2,
+      acceptance: ['done'], forbidden: ['editor'], max_actions: 3, max_retries: 2,
       expires_at: '2030-01-01T00:00:00Z',
       allowed_apps: [{ image_sha256: 'a'.repeat(64) }],
     });
     const policy = makePolicy(7);
-    // product_name "Contoso Editor" contains the token Contoso; signer too.
-    assert.equal(policy.authorizeTargets(byProduct.envelope, 'file.read', [appTarget('p')]).get('p'), 'denied');
+    assert.equal(policy.authorizeTargets(sealed.envelope, 'file.read', [appTarget('p')]).get('p'), 'denied');
+  });
+
+  it('denies an app whose signer alone matches a forbidden term', () => {
+    // The forbidden token `corp` appears only in the signer, not in the product
+    // name or the image basename, so this can only fail through the signer
+    // check.
+    const sealed = sealEnvelope({
+      job_id: '00000000-0000-0000-0000-000000000004',
+      objective: 'test', allowed_capabilities: ['file.read'], allowed_workspaces: ['main'],
+      acceptance: ['done'], forbidden: ['corp'], max_actions: 3, max_retries: 2,
+      expires_at: '2030-01-01T00:00:00Z',
+      allowed_apps: [{ image_sha256: 'a'.repeat(64) }],
+    });
+    const policy = makePolicy(7);
+    assert.equal(policy.authorizeTargets(sealed.envelope, 'file.read', [appTarget('s')]).get('s'), 'denied');
+  });
+
+  it('extracts the basename with Windows semantics: a forbidden token in a parent directory does not deny', () => {
+    // `image_path` is a Windows value. `path.win32.basename` yields `safe.exe`;
+    // a POSIX `path.basename` would treat the whole backslash string as one
+    // name and tokenise `forbidden` out of the directory, denying it wrongly.
+    const sealed = sealEnvelope({
+      job_id: '00000000-0000-0000-0000-000000000005',
+      objective: 'test', allowed_capabilities: ['file.read'], allowed_workspaces: ['main'],
+      acceptance: ['done'], forbidden: ['forbidden'], max_actions: 3, max_retries: 2,
+      expires_at: '2030-01-01T00:00:00Z',
+      allowed_apps: [{ image_sha256: 'a'.repeat(64) }],
+    });
+    const policy = makePolicy(7);
+    const identity = makeIdentity({ image_path: 'C:\\forbidden\\safe.exe' });
+    assert.equal(policy.authorizeTargets(sealed.envelope, 'file.read', [appTarget('dir-token', identity)]).get('dir-token'), 'allowed');
   });
 
   it('denies an app whose session id differs from the node session', () => {

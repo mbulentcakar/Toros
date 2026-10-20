@@ -325,7 +325,14 @@ class PolicyImpl implements Policy {
     // Rule 2: no forbidden term may match the image basename, product name or
     // signer, using the same token matching as `isForbidden`. This wins even
     // when a rule matched — the allowlist does not override `forbidden`.
-    const basename = path.basename(identity.image_path);
+    //
+    // `path.win32.basename` on purpose: `identity.image_path` is a Windows
+    // contract value, so the basename must be extracted with Windows separator
+    // semantics. The host's own `path.basename` on a POSIX node leaves a
+    // backslash path intact and would then tokenise it as one string, letting a
+    // forbidden token in a DIRECTORY incorrectly deny the executable's own
+    // name.
+    const basename = path.win32.basename(identity.image_path);
     if (isForbidden(envelope, basename)
       || isForbidden(envelope, identity.product_name ?? '')
       || isForbidden(envelope, identity.signer ?? '')) {

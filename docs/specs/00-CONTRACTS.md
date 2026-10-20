@@ -306,3 +306,10 @@ policy (target decisions), node-core (resolve step, registration, plumbing),
 adapters-desktop (implements the port, in F3b), and the F5 inventory filter. The
 caller identity is carried to every adapter call as `ctx.actor`, never placed in
 the envelope.
+
+`AppIdentity.image_path` must be the canonical long path, exactly as
+`QueryFullProcessImageName` returns it: an absolute drive path (`C:\…`) with
+backslash separators, no namespace prefix (`\?\`, `\.\`), no UNC root, no 8.3
+short-name segments, and no segment ending in `.` or a space. Node Core (F3a)
+refuses any other spelling as `E_ADAPTER_FAILURE` before policy sees the target;
+the desktop adapter (F3b) must guarantee it, never fall back to a basename.
