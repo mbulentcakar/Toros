@@ -161,3 +161,37 @@ Each slice is one branch, one PR, its own Argon review, and natively verified.
   a native path.
 - CI green on the PR head.
 - No secrets, local paths or machine names.
+
+## R2 round 2 — after the Argon review of 87d3b4e (2026-10-20)
+
+All four findings are accepted.
+
+1. **Every Windows PowerShell spawn, and case-insensitive removal (P2).**
+   - One shared rule for the child environment: copy `process.env`, then delete **every** key
+     whose lower-case form is `psmodulepath`.
+   - Apply it to every `powershell.exe` spawn in the repository, including the Excel adapter's
+     `runScript` (`packages/adapters-app`), the test helpers `startFixture`
+     (`adapters-desktop/test/native-utils.ts`), and `runPs` / `startUnrelatedExcel`
+     (`adapters-app/test/helpers.ts`).
+   - In the polluted-`PSModulePath` native test, pollute the environment **after** the fixture
+     starts, or pass the fixture an isolated environment.
+   - Add a repository-wide unit test that greps `packages/*/src` for `powershell.exe` and
+     `WindowsPowerShell` spawns, and fails when one does not pass through the shared environment
+     rule.
+2. **Test through each spawn seam (P2).**
+   - Give `createPowerShellDriveTypes` and `defaultNodeSessionIdRunner` an injectable
+     `execFile`-compatible spawn, mirroring `runPowerShell`.
+   - Assert in each test that the spawn receives `options.env` without any casing of
+     `PSModulePath`.
+   - Test with a mixed-case key such as `PsModulePath`.
+3. **Normalise OriginalFilename in PowerShell, and never default to unsigned (P3).** In
+   `ReadIdentity`:
+   - when `Get-AuthenticodeSignature` returns `$null`, return `$null`;
+   - set the signature status only from a real result;
+   - an `OriginalFilename` longer than 260 characters, or containing `\` or `/`, becomes `$null`,
+     so hash and path rules still work while signer rules never match.
+
+   Pin any new backslash line in `probe.test.ts`.
+4. **Refuse an empty string (P3).** `validateAppIdentity` and `parseIdentity` accept
+   `original_filename` only as `null` or a string of 1–260 characters. Add `''` rejection tests in
+   `allowed-apps.test.ts`, `main-config.test.ts`, `resolve-pipeline.test.ts` and `probe.test.ts`.
