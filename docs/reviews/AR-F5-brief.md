@@ -73,3 +73,26 @@ wrong.
    **successful** result per adapter instance for 5 minutes, because drive types rarely change.
    A failure is never cached. Test both the cache and the no-cache-on-failure rule with a fake
    reader and an injected clock.
+
+## Round 3 — after the agy / Gemini 4 Argon review of f48ee42 (2026-10-20)
+
+Verdict: REQUEST CHANGES. The P1 and the P2 were confirmed in code. All four findings are accepted.
+
+1. **A reader failure is cached as a success (P1).** `createPowerShellDriveTypes` resolves `[]` on
+   spawn failure, non-zero exit, oversize output, timeout and abort, so `resolveFixedDrives`
+   caches `[]` for 5 minutes. Make the production reader **reject** on every failure path.
+   Cache only a result that is non-empty and obtained with `signal.aborted === false`. Tests:
+   a fake reader that **resolves** `[]` → not cached; a fake that rejects → not cached; an abort
+   during the read → not cached.
+2. **Absent `target_decisions` fails open (P2).** Treat
+   `ctx.target_decisions === undefined` as an empty map, so every entry is reduced to
+   `{id, readiness: 'unauthorized'}`. Update `makeCtx` so the existing tests pass explicit
+   decisions. New test: absent decisions → every entry unauthorized, including
+   `machine.inventory` itself.
+3. **Add the gated production-reader test (P2).** It is gated behind `TOROS_REAL_TESTS=1` and
+   runs on `win32` only. Build `createMachineAdapter` with the **production** reader (bypass
+   `makeTestAdapter` deliberately, with a comment), and assert that `NODE_FILE_PROBE` resolves
+   `usable`. Remove the unused `createMachineAdapter` import if it remains unused.
+4. **The redaction test exercises a probed entry (P3).** Add an unauthorized probed entry with
+   `backs_adapter` and a `missing_prerequisite` reason (for example `ABSENT_FILE_PROBE` with
+   `backs_adapter: 'desktop'`). Assert `Object.keys(entry)` equals `['id', 'readiness']`.
