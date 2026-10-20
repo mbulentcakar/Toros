@@ -286,6 +286,11 @@ test('CLI settlement selects only the newest exact running send and exposes decl
       { receipt_id: 'already-settled-send', job_id: job, node_id: 'node', session_id: sessionId, actor: 'coordinator', capability: 'exchangecli.send', arguments_normalized: null, arguments_digest: 'settled', decision: { allow: true, reason: 'Allowed' }, envelope_digest: (await seedStore.getJob(job))!.envelope_digest, started_at: '2990-01-01T00:00:05.000Z', ended_at: '2990-01-01T00:00:06.000Z', outcome: 'succeeded', artifact_refs: [], finding_refs: [], adapter_fields: { exchange_state: 'succeeded' } },
     ];
     for (const receipt of seeded) await seedStore.putReceipt(receipt);
+    // Running sends passed `action.started`; seed that event so restart
+    // reconciliation still sees them as genuinely started (RR-04).
+    for (const receiptId of ['older-running-send', 'other-session-send', 'other-capability-send', 'already-settled-send']) {
+      await seedStore.appendEvent({ node_id: 'node', job_id: job, kind: 'action.started', payload: { receipt_id: receiptId } });
+    }
     await seedStore.close();
     const sent = await http(port, 'send_cli', { job_id: job, session_id: sessionId, message: 'go' });
     assert.equal(sent.body.exchange_state, 'running');
@@ -323,6 +328,7 @@ test('CLI settlement selects only the newest exact running send and exposes decl
       artifact_refs: [], finding_refs: [], adapter_fields: { exchange_state: 'running' },
     };
     await deadlineStore.putReceipt(expirySeeded);
+    await deadlineStore.appendEvent({ node_id: 'node', job_id: job, kind: 'action.started', payload: { receipt_id: 'unsettled-deadline-send' } });
     await deadlineStore.close();
 
     await core.stop();

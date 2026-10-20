@@ -810,10 +810,10 @@ export function createActionPipeline(deps: {
       // Already closed by another path (a read_cli settlement, or an earlier
       // attempt whose terminal write landed). Audit recovery: append exactly
       // one event for the missing finished record, never re-open, never
-      // rewrite, never duplicate.
-      const finished = (await store.listEvents(current.job_id)).some(
-        (event) => event.kind === 'action.finished' && (event.payload as { readonly receipt_id?: string }).receipt_id === current.receipt_id,
-      );
+      // rewrite, never duplicate. Any `action.finished` for this receipt id —
+      // whatever its outcome or exchange_state — counts, so a restart never
+      // appends a second one.
+      const finished = await hasSettledCliSendFinishedEvent(store, current.job_id, current.receipt_id);
       if (!finished) {
         await store.appendEvent({ node_id: deps.node_id, job_id: current.job_id, kind: 'action.finished', payload: cliFinishedPayload(current) });
       }
@@ -827,6 +827,20 @@ export function createActionPipeline(deps: {
       const timer = setTimeout(() => { void closeUnsettledCliReceipt(receiptId, store, retryCount + 1); }, delay);
       timer.unref();
     }
+  }
+
+  /**
+   * Whether an `action.finished` event already exists for a receipt,
+   * recognised by receipt id alone — whatever its outcome or
+   * `exchange_state`. A restart must recognise ANY finished event as the one
+   * that closes the receipt and never append a second (RR-04).
+   */
+  async function hasSettledCliSendFinishedEvent(store: Store, jobId: string, receiptId: string): Promise<boolean> {
+    const events = await store.listEvents(jobId);
+    return events.some(
+      (event) => event.kind === 'action.finished'
+        && (event.payload as { readonly receipt_id?: string }).receipt_id === receiptId,
+    );
   }
 
   /**
@@ -878,8 +892,21 @@ export function createActionPipeline(deps: {
     const store = deps.store();
     const adaptersById = new Map(deps.adapters.map((adapter) => [adapter.manifest.id, adapter]));
     for (const job of await store.listJobs()) {
+      // The receipt ids that actually started this job. Reconciliation must
+      // never fabricate events for a receipt that never ran (RR-04): a denied
+      // send, or one with no `action.started` event, is skipped entirely
+      // rather than closed with an invented `action.finished`.
+      const events = await store.listEvents(job.job_id);
+      const started = new Set<string>();
+      for (const event of events) {
+        if (event.kind !== 'action.started') continue;
+        const receiptId = (event.payload as { readonly receipt_id?: string }).receipt_id;
+        if (typeof receiptId === 'string') started.add(receiptId);
+      }
       for (const receipt of await store.listReceipts(job.job_id)) {
         if (!receipt.capability.endsWith('.send')) continue;
+        if (receipt.outcome === 'denied') continue;
+        if (!started.has(receipt.receipt_id)) continue;
         if (receipt.outcome === 'running') {
           const adapter = adaptersById.get(receipt.capability.slice(0, -'.send'.length));
           if (adapter === undefined) continue;

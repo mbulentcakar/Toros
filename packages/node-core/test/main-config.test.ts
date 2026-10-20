@@ -136,6 +136,24 @@ test('resolveNodeSessionId returns null for a non-numeric or negative runner out
   assert.equal(await resolveNodeSessionId(1, undefined, async () => 'NaN'), null);
 });
 
+// RR-05 — strict session-id parsing: only whitespace-surrounded decimal digits
+// 1–10 long that fit in uint32 are accepted. Empty output, whitespace, hex,
+// negative, exponent notation and out-of-range all give null.
+test('resolveNodeSessionId accepts only a uint32-compatible decimal string (RR-05)', async () => {
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => '1'), 1);
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => '  7  '), 7);
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => '4294967295'), 4294967295);
+  // Rejected shapes.
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => ''), null);
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => '  '), null);
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => '0x10'), null);
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => '-1'), null);
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => '1e3'), null);
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => '4294967296'), null);
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => '1.5'), null);
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => '12345678901'), null);
+});
+
 test('resolveNodeSessionId rejects when the runner throws, and still cleans up', async () => {
   const failing: NodeSessionIdRunner = async () => { throw new Error('powershell failed'); };
   await assert.rejects(resolveNodeSessionId(4242, undefined, failing), /powershell failed/);

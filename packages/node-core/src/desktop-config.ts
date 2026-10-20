@@ -172,9 +172,17 @@ export async function resolveNodeSessionId(
   try {
     await writeFile(scriptPath, NODE_SESSION_ID_PS1, 'utf8');
     const stdout = await runner(powershell, scriptPath, [String(pid)]);
-    const parsed = Number(stdout.trim());
-    if (Number.isSafeInteger(parsed) && parsed >= 0) return parsed;
-    return null;
+    // Strict session-id parsing (RR-05): accept ONLY a run of 1–10 decimal
+    // digits, optionally surrounded by whitespace, that fits in uint32.
+    // `Number(...)` alone would accept hex (`0x10`), exponent notation
+    // (`1e3`), `Infinity`, signed or fractional values, or an empty/blank
+    // string as `0`. Anything else — empty output, whitespace, hex, negative
+    // or out-of-range — is null.
+    const match = /^\s*([0-9]{1,10})\s*$/.exec(stdout);
+    if (match === null) return null;
+    const parsed = Number(match[1]);
+    if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 0xffffffff) return null;
+    return parsed;
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
