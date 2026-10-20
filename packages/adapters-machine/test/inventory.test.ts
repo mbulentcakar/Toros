@@ -6,13 +6,14 @@
  * job-scoped filter are deterministic and independent of what is actually
  * installed on the test machine.
  */
-import { describe, it } from 'node:test';
+import { describe, it, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   createMachineAdapter,
+  powershellChildEnvironment,
   type AccessCheck,
   type DriveTypes,
   type MachineProbe,
@@ -940,6 +941,24 @@ describe('machine.inventory — drive reader budget & cache', () => {
     await a.dispose();
     await b.dispose();
   });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — PSModulePath isolation (amendment A9)
+// ---------------------------------------------------------------------------
+
+test('powershellChildEnvironment removes PSModulePath without mutating process.env', () => {
+  const original = process.env['PSModulePath'];
+  process.env['PSModulePath'] = 'C:\\polluted';
+  try {
+    const env = powershellChildEnvironment();
+    assert.equal(env['PSModulePath'], undefined, 'the child environment must not carry PSModulePath');
+    assert.equal(env['PSMODULEPATH'], undefined, 'the child environment must not carry PSMODULEPATH');
+    assert.equal(process.env['PSModulePath'], 'C:\\polluted', 'process.env must not be mutated');
+  } finally {
+    if (original === undefined) delete process.env['PSModulePath'];
+    else process.env['PSModulePath'] = original;
+  }
 });
 
 // ---------------------------------------------------------------------------

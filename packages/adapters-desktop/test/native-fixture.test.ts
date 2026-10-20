@@ -97,6 +97,34 @@ describe('AR-F3b Native Windows Identity Verification', () => {
     assert.ok(!id.image_path.startsWith('\\\\?\\'), 'image_path must not carry a namespace prefix');
     assert.ok(Number.isSafeInteger(id.pid) && id.pid > 0, 'pid must be a positive integer');
     assert.match(id.created_at, /Z$/, 'created_at must be an ISO-8601 UTC string ending in Z');
+// A9: the fixture is a renamed copy of the PowerShell executable, so its
+    // version resource still carries the vendor's OriginalFilename.
+    assert.ok(typeof id.original_filename === 'string' && id.original_filename.length > 0, 'original_filename must be present on the fixture identity');
+  });
+
+  it('a polluted PSModulePath does not change the reported signature status (amendment A9)', nativeDesktopTestOptions, async () => {
+    // The probe spawns Windows PowerShell with PSModulePath removed, so a node
+    // started under a polluted PSModulePath (pointed at a nonexistent folder)
+    // must still report the real signature status of the signed fixture binary.
+    const original = process.env['PSModulePath'];
+    process.env['PSModulePath'] = 'C:\\__toros_nonexistent_module_path__';
+    try {
+      const fixture = await startFixture({});
+      activeFixtures.push(fixture);
+      const probe = fixtureProbe(fixture);
+      const raw = await probe.enumerateWindows({ max_windows: 200 }, new AbortController().signal);
+      if (raw.session_state !== 'active') {
+        throw new Error(`Desktop is not in active state (state=${raw.session_state}).`);
+      }
+      const fixtureWindow = raw.windows.find((w) => w.native_handle === String(fixture.hwnd));
+      assert.ok(fixtureWindow, 'the fixture window must be enumerated');
+      // The fixture is a renamed copy of the signed powershell.exe, so its real
+      // signature status is 'valid' regardless of the polluted PSModulePath.
+      assert.equal(fixtureWindow!.identity.signature, 'valid', 'a polluted PSModulePath must not change the reported signature status');
+    } finally {
+      if (original === undefined) delete process.env['PSModulePath'];
+      else process.env['PSModulePath'] = original;
+    }
   });
 
   it('a renamed copy allowlisted by its own image path is in scope; a wrong hash denies it', nativeDesktopTestOptions, async () => {

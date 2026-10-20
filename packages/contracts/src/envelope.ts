@@ -56,7 +56,7 @@ export type JobEnvelope = {
  */
 export type AppRule =
   | { readonly image_sha256: string }
-  | { readonly signer: string; readonly product_name: string }
+  | { readonly signer: string; readonly product_name: string; readonly original_filename: string }
   | { readonly image_path: string };
 
 /** A validated envelope paired with the digest that binds it (SPEC §5). */

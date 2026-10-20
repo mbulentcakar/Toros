@@ -15,14 +15,15 @@ import {
   validateDesktopAuthorizedApps,
   resolveNodeSessionId,
   NODE_SESSION_ID_PS1,
+  powershellChildEnvironment,
   type NodeSessionIdRunner,
 } from '../src/desktop-config.js';
 
-test('accepts a valid AppRule[] (hash, signer+product, path)', () => {
+test('accepts a valid AppRule[] (hash, signer+product+original_filename, path)', () => {
   const rules = validateDesktopAuthorizedApps(
     [
       { image_sha256: 'a'.repeat(64) },
-      { signer: 'Contoso Corp', product_name: 'Contoso Editor' },
+      { signer: 'Contoso Corp', product_name: 'Contoso Editor', original_filename: 'app.exe' },
       { image_path: 'C:\\Program Files\\App\\app.exe' },
     ],
     'config.json',
@@ -30,7 +31,7 @@ test('accepts a valid AppRule[] (hash, signer+product, path)', () => {
   assert.ok(rules);
   assert.equal(rules!.length, 3);
   assert.deepEqual(rules![0], { image_sha256: 'a'.repeat(64) });
-  assert.deepEqual(rules![1], { signer: 'Contoso Corp', product_name: 'Contoso Editor' });
+  assert.deepEqual(rules![1], { signer: 'Contoso Corp', product_name: 'Contoso Editor', original_filename: 'app.exe' });
   assert.deepEqual(rules![2], { image_path: 'C:\\Program Files\\App\\app.exe' });
 });
 
@@ -74,8 +75,12 @@ test('rejects a rule with more than one shape', () => {
     /exactly one rule shape/,
   );
   assert.throws(
-    () => validateDesktopAuthorizedApps([{ signer: 'Contoso Corp' }], 'c'),
-    /signer and product_name must appear together/,
+    () => validateDesktopAuthorizedApps([{ signer: 'Contoso Corp', original_filename: 'app.exe' }], 'c'),
+    /signer, product_name and original_filename must appear together/,
+  );
+  assert.throws(
+    () => validateDesktopAuthorizedApps([{ signer: 'Contoso Corp', product_name: 'Contoso Editor' }], 'c'),
+    /signer, product_name and original_filename must appear together/,
   );
   assert.throws(
     () => validateDesktopAuthorizedApps([{}], 'c'),
@@ -94,8 +99,14 @@ test('rejects a non-absolute image_path', () => {
 });
 
 test('rejects over-long or empty signer / product_name', () => {
-  assert.throws(() => validateDesktopAuthorizedApps([{ signer: '', product_name: 'x' }], 'c'), /signer/);
-  assert.throws(() => validateDesktopAuthorizedApps([{ signer: 'x', product_name: 'x'.repeat(513) }], 'c'), /product_name/);
+  assert.throws(() => validateDesktopAuthorizedApps([{ signer: '', product_name: 'x', original_filename: 'app.exe' }], 'c'), /signer/);
+  assert.throws(() => validateDesktopAuthorizedApps([{ signer: 'x', product_name: 'x'.repeat(513), original_filename: 'app.exe' }], 'c'), /product_name/);
+});
+
+test('rejects an original_filename with a path separator or over 260 characters (amendment A9)', () => {
+  assert.throws(() => validateDesktopAuthorizedApps([{ signer: 'x', product_name: 'x', original_filename: 'dir\\app.exe' }], 'c'), /original_filename/);
+  assert.throws(() => validateDesktopAuthorizedApps([{ signer: 'x', product_name: 'x', original_filename: 'dir/app.exe' }], 'c'), /original_filename/);
+  assert.throws(() => validateDesktopAuthorizedApps([{ signer: 'x', product_name: 'x', original_filename: 'x'.repeat(261) }], 'c'), /original_filename/);
 });
 
 // ---------------------------------------------------------------------------
@@ -157,4 +168,24 @@ test('resolveNodeSessionId accepts only a uint32-compatible decimal string (RR-0
 test('resolveNodeSessionId rejects when the runner throws, and still cleans up', async () => {
   const failing: NodeSessionIdRunner = async () => { throw new Error('powershell failed'); };
   await assert.rejects(resolveNodeSessionId(4242, undefined, failing), /powershell failed/);
+});
+
+// ---------------------------------------------------------------------------
+// PSModulePath isolation (amendment A9): the child environment for a Windows
+// PowerShell 5.1 spawn must not carry PSModulePath, and process.env is never
+// mutated.
+// ---------------------------------------------------------------------------
+
+test('powershellChildEnvironment removes PSModulePath without mutating process.env', () => {
+  const original = process.env['PSModulePath'];
+  process.env['PSModulePath'] = 'C:\\polluted';
+  try {
+    const env = powershellChildEnvironment();
+    assert.equal(env['PSModulePath'], undefined, 'the child environment must not carry PSModulePath');
+    assert.equal(env['PSMODULEPATH'], undefined, 'the child environment must not carry PSMODULEPATH');
+    assert.equal(process.env['PSModulePath'], 'C:\\polluted', 'process.env must not be mutated');
+  } finally {
+    if (original === undefined) delete process.env['PSModulePath'];
+    else process.env['PSModulePath'] = original;
+  }
 });

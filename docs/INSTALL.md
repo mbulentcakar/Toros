@@ -62,9 +62,9 @@ the `adapters` block with the executables orientation reported, `coordinator_ena
 for now. Restrict the file to your account (`icacls ... /inheritance:r /grant:r "%USERNAME%:RW"`).
 `orient` validates the result. Field reference: [DEPLOY.md §2](DEPLOY.md).
 
-**Desktop allowlist migration (amendment A8, F3b).** `adapters.desktop.authorized_apps` is now a
+**Desktop allowlist migration (amendment A8, F3b; A9).** `adapters.desktop.authorized_apps` is now a
 list of application rules, not basename strings. Each rule is exactly one of
-`{ "image_sha256": "<64 hex>" }`, `{ "signer": "<CN>", "product_name": "<name>" }`, or
+`{ "image_sha256": "<64 hex>" }`, `{ "signer": "<CN>", "product_name": "<name>", "original_filename": "<file>" }`, or
 `{ "image_path": "C:\\...\\app.exe" }`. A bare string entry (the old basename form) makes Node
 Core **refuse to start**, naming the new format. Convert any existing basename entries to the
 matching rule shape before restarting. See [AR-T4-install-rollback.md](AR-T4-install-rollback.md)

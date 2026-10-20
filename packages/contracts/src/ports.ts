@@ -278,6 +278,12 @@ export interface AppIdentity {
   readonly signer: string | null;
   /** Version resource ProductName, or null. */
   readonly product_name: string | null;
+  /**
+   * Version resource OriginalFilename, or null (amendment A9). Survives renames
+   * and copies, so a signer rule can name the file the vendor shipped rather
+   * than whatever the image happens to be called on disk.
+   */
+  readonly original_filename: string | null;
   /** Windows session id of the process. */
   readonly session_id: number;
 }

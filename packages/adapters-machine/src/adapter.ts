@@ -246,6 +246,19 @@ function powershellExe(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
+ * The child environment for a Windows PowerShell 5.1 spawn (amendment A9): a
+ * copy of `process.env` with `PSModulePath` removed, so 5.1 rebuilds its own
+ * default module path instead of inheriting a possibly-polluted one. The copy
+ * is deliberate — `process.env` is never mutated.
+ */
+export function powershellChildEnvironment(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env['PSModulePath'];
+  delete env['PSMODULEPATH'];
+  return env;
+}
+
+/**
  * The production drive reader: one `execFile` of Windows PowerShell per call,
  * `shell: false`, `-NoProfile -NonInteractive -Command` with the fixed command.
  * Honors `signal` and the action timeout, caps the output size, and fails
@@ -284,7 +297,7 @@ function createPowerShellDriveTypes(): DriveTypes {
         child = execFile(
           powershellExe(),
           ['-NoProfile', '-NonInteractive', '-Command', FIXED_DRIVES_COMMAND],
-          { shell: false, windowsHide: true, timeout: timeoutMs, maxBuffer: MAX_DRIVE_OUTPUT_BYTES },
+          { shell: false, windowsHide: true, timeout: timeoutMs, maxBuffer: MAX_DRIVE_OUTPUT_BYTES, env: powershellChildEnvironment() },
           (error, stdout) => {
             if (error) {
               finish(error, []);

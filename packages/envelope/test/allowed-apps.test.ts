@@ -65,9 +65,9 @@ describe('@toros/envelope allowed_apps (amendment A8)', () => {
 
     const signer = sealEnvelope({
       ...validInput(),
-      allowed_apps: [{ signer: 'Contoso Corp', product_name: 'Contoso Editor' }],
+      allowed_apps: [{ signer: 'Contoso Corp', product_name: 'Contoso Editor', original_filename: 'app.exe' }],
     });
-    assert.deepEqual([...signer.envelope.allowed_apps!], [{ signer: 'Contoso Corp', product_name: 'Contoso Editor' }]);
+    assert.deepEqual([...signer.envelope.allowed_apps!], [{ signer: 'Contoso Corp', product_name: 'Contoso Editor', original_filename: 'app.exe' }]);
 
     const path = sealEnvelope({ ...validInput(), allowed_apps: [{ image_path: 'C:\\Program Files\\App\\app.exe' }] });
     assert.deepEqual([...path.envelope.allowed_apps!], [{ image_path: 'C:\\Program Files\\App\\app.exe' }]);
@@ -99,7 +99,29 @@ describe('@toros/envelope allowed_apps (amendment A8)', () => {
 
   it('rejects a signer rule missing its product_name', () => {
     assertThrowsTorosError(
-      () => sealEnvelope({ ...validInput(), allowed_apps: [{ signer: 'Contoso Corp' }] }),
+      () => sealEnvelope({ ...validInput(), allowed_apps: [{ signer: 'Contoso Corp', original_filename: 'app.exe' }] }),
+      ErrorCode.E_ENVELOPE_INVALID,
+    );
+  });
+
+  it('rejects a signer rule missing its original_filename (amendment A9)', () => {
+    assertThrowsTorosError(
+      () => sealEnvelope({ ...validInput(), allowed_apps: [{ signer: 'Contoso Corp', product_name: 'Contoso Editor' }] }),
+      ErrorCode.E_ENVELOPE_INVALID,
+    );
+  });
+
+  it('rejects an original_filename with a path separator or over 260 characters (amendment A9)', () => {
+    assertThrowsTorosError(
+      () => sealEnvelope({ ...validInput(), allowed_apps: [{ signer: 'Contoso Corp', product_name: 'Contoso Editor', original_filename: 'dir\\app.exe' }] }),
+      ErrorCode.E_ENVELOPE_INVALID,
+    );
+    assertThrowsTorosError(
+      () => sealEnvelope({ ...validInput(), allowed_apps: [{ signer: 'Contoso Corp', product_name: 'Contoso Editor', original_filename: 'dir/app.exe' }] }),
+      ErrorCode.E_ENVELOPE_INVALID,
+    );
+    assertThrowsTorosError(
+      () => sealEnvelope({ ...validInput(), allowed_apps: [{ signer: 'Contoso Corp', product_name: 'Contoso Editor', original_filename: 'x'.repeat(261) }] }),
       ErrorCode.E_ENVELOPE_INVALID,
     );
   });
@@ -118,7 +140,7 @@ describe('@toros/envelope allowed_apps (amendment A8)', () => {
   });
 
   it('rejects empty or over-long rule strings', () => {
-    assertThrowsTorosError(() => sealEnvelope({ ...validInput(), allowed_apps: [{ signer: '', product_name: 'x' }] }), ErrorCode.E_ENVELOPE_INVALID);
-    assertThrowsTorosError(() => sealEnvelope({ ...validInput(), allowed_apps: [{ signer: 'x'.repeat(513), product_name: 'x' }] }), ErrorCode.E_ENVELOPE_INVALID);
+    assertThrowsTorosError(() => sealEnvelope({ ...validInput(), allowed_apps: [{ signer: '', product_name: 'x', original_filename: 'app.exe' }] }), ErrorCode.E_ENVELOPE_INVALID);
+    assertThrowsTorosError(() => sealEnvelope({ ...validInput(), allowed_apps: [{ signer: 'x'.repeat(513), product_name: 'x', original_filename: 'app.exe' }] }), ErrorCode.E_ENVELOPE_INVALID);
   });
 });

@@ -22,6 +22,7 @@ function makeIdentity(overrides: Partial<AppIdentity> = {}): AppIdentity {
     signature: 'valid',
     signer: 'Contoso Corp',
     product_name: 'Contoso Editor',
+    original_filename: 'app.exe',
     session_id: 7,
     ...overrides,
   };
@@ -89,16 +90,44 @@ describe('@toros/policy authorizeTargets (amendment A8)', () => {
     assert.equal(policy.authorizeTargets(envelope, 'file.read', [appTarget('miss', makeIdentity({ image_sha256: 'b'.repeat(64) }))]).get('miss'), 'denied');
   });
 
-  it('allows an app whose signer and product_name match, case-sensitively', () => {
-    const { envelope } = makeEnvelope([{ signer: 'Contoso Corp', product_name: 'Contoso Editor' }]);
+  it('allows an app whose signer, product_name and original_filename match', () => {
+    const { envelope } = makeEnvelope([{ signer: 'Contoso Corp', product_name: 'Contoso Editor', original_filename: 'app.exe' }]);
     const policy = makePolicy(7);
     assert.equal(policy.authorizeTargets(envelope, 'file.read', [appTarget('match')]).get('match'), 'allowed');
     assert.equal(policy.authorizeTargets(envelope, 'file.read', [appTarget('miss-case', makeIdentity({ signer: 'contoso corp' }))]).get('miss-case'), 'denied');
     assert.equal(policy.authorizeTargets(envelope, 'file.read', [appTarget('miss-product', makeIdentity({ product_name: 'Other' }))]).get('miss-product'), 'denied');
+    assert.equal(policy.authorizeTargets(envelope, 'file.read', [appTarget('miss-original', makeIdentity({ original_filename: 'other.exe' }))]).get('miss-original'), 'denied');
+  });
+
+  it('matches original_filename case-insensitively (amendment A9)', () => {
+    // The version resource varies in case: PowerShell.EXE, NOTEPAD.EXE. A rule
+    // naming `APP.EXE` must match an identity reporting `app.exe`.
+    const { envelope } = makeEnvelope([{ signer: 'Contoso Corp', product_name: 'Contoso Editor', original_filename: 'APP.EXE' }]);
+    const policy = makePolicy(7);
+    assert.equal(policy.authorizeTargets(envelope, 'file.read', [appTarget('match', makeIdentity({ original_filename: 'app.exe' }))]).get('match'), 'allowed');
+  });
+
+  it('a Notepad rule does not match a PowerShell identity (amendment A9)', () => {
+    // A signer rule naming Notepad's OriginalFilename must not authorise a
+    // renamed PowerShell image that shares the same signer and product name.
+    const { envelope } = makeEnvelope([{ signer: 'Microsoft Corporation', product_name: 'Microsoft® Windows® Operating System', original_filename: 'NOTEPAD.EXE' }]);
+    const policy = makePolicy(7);
+    const powershell = makeIdentity({
+      signer: 'Microsoft Corporation',
+      product_name: 'Microsoft® Windows® Operating System',
+      original_filename: 'PowerShell.EXE',
+    });
+    assert.equal(policy.authorizeTargets(envelope, 'file.read', [appTarget('ps', powershell)]).get('ps'), 'denied');
+  });
+
+  it('a null original_filename never matches a signer rule (amendment A9)', () => {
+    const { envelope } = makeEnvelope([{ signer: 'Contoso Corp', product_name: 'Contoso Editor', original_filename: 'app.exe' }]);
+    const policy = makePolicy(7);
+    assert.equal(policy.authorizeTargets(envelope, 'file.read', [appTarget('no-original', makeIdentity({ original_filename: null }))]).get('no-original'), 'denied');
   });
 
   it('ignores a signer rule when the signature is unsigned or invalid', () => {
-    const { envelope } = makeEnvelope([{ signer: 'Contoso Corp', product_name: 'Contoso Editor' }]);
+    const { envelope } = makeEnvelope([{ signer: 'Contoso Corp', product_name: 'Contoso Editor', original_filename: 'app.exe' }]);
     const policy = makePolicy(7);
     assert.equal(policy.authorizeTargets(envelope, 'file.read', [appTarget('unsigned', makeIdentity({ signature: 'unsigned' }))]).get('unsigned'), 'denied');
     assert.equal(policy.authorizeTargets(envelope, 'file.read', [appTarget('invalid', makeIdentity({ signature: 'invalid' }))]).get('invalid'), 'denied');

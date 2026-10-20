@@ -298,9 +298,10 @@ function validIdentity(): Record<string, unknown> {
     created_at: '2026-01-01T00:00:00.000Z',
     image_path: 'C:\\Program Files\\App\\app.exe',
     image_sha256: 'a'.repeat(64),
-    signature: 'valid',
+signature: 'valid',
     signer: 'Contoso Corp',
     product_name: 'Contoso Editor',
+    original_filename: 'app.exe',
     session_id: 2,
   };
 }
@@ -315,6 +316,7 @@ test('parseIdentity accepts a well-formed identity verbatim', () => {
     signature: 'valid',
     signer: 'Contoso Corp',
     product_name: 'Contoso Editor',
+    original_filename: 'app.exe',
     session_id: 2,
   });
 });
@@ -335,6 +337,17 @@ test('parseIdentity rejects a malformed identity (returns null)', () => {
   assert.equal(parseIdentity({ ...validIdentity(), signature: 'invalid', signer: 'Contoso' }), null);
   assert.equal(parseIdentity({ ...validIdentity(), image_path: '' }), null);
 });
+
+test('parseIdentity accepts a null original_filename and rejects a malformed one (amendment A9)', () => {
+  // Absent or null original_filename is a valid identity (the version resource
+  // may not carry it).
+  assert.equal(parseIdentity({ ...validIdentity(), original_filename: null })?.original_filename, null);
+  assert.equal(parseIdentity({ ...validIdentity(), original_filename: undefined })?.original_filename, null);
+  // A path separator or an over-long value is refused.
+  assert.equal(parseIdentity({ ...validIdentity(), original_filename: 'dir\\app.exe' }), null);
+  assert.equal(parseIdentity({ ...validIdentity(), original_filename: 'dir/app.exe' }), null);
+  assert.equal(parseIdentity({ ...validIdentity(), original_filename: 'x'.repeat(261) }), null);
+});
 // ---------------------------------------------------------------------------
 // F3b: the embedded script is a TypeScript template literal, so every `\` in
 // the source reaches PowerShell as `\`. A halved backslash broke the image-path
@@ -353,4 +366,57 @@ test('the emitted script carries the image-path checks with their backslashes in
   assert.ok(lines.includes(namespaces), `UNC and namespace checks must reach PowerShell as: ${namespaces}`);
   assert.ok(lines.includes(trailing), `trailing dot/space check must reach PowerShell as: ${trailing}`);
   assert.ok(!DESKTOP_UIA_PS1.includes(".Contains('.')"), "no check may collapse to Contains('.')");
+});
+
+// ---------------------------------------------------------------------------
+// A9: the probe reads the version resource's OriginalFilename and emits it as
+// `original_filename`, and the PowerShell child environment never carries
+// PSModulePath.
+// ---------------------------------------------------------------------------
+
+test('the emitted script reads OriginalFilename and emits original_filename (amendment A9)', () => {
+  assert.ok(
+    DESKTOP_UIA_PS1.includes('VersionInfo.OriginalFilename'),
+    'the script must read the version resource OriginalFilename',
+  );
+  assert.ok(
+    DESKTOP_UIA_PS1.includes('original_filename=$original'),
+    'the script must emit original_filename in the identity hashtable',
+  );
+});
+
+test('the emitted script drops the window when Get-AuthenticodeSignature throws (amendment A9)', () => {
+  assert.ok(
+    DESKTOP_UIA_PS1.includes('Get-AuthenticodeSignature -LiteralPath $imagePath } catch { return $null }'),
+    'a thrown signature check must drop the window, not map to unsigned',
+  );
+  assert.ok(
+    DESKTOP_UIA_PS1.includes("$status -eq 'NotSigned'"),
+    'only a real NotSigned status may map to unsigned',
+  );
+});
+
+test('runPowerShell spawns with PSModulePath removed from the child environment (amendment A9)', async () => {
+  const before = await sandboxProbeDirs();
+  const original = process.env['PSModulePath'];
+  process.env['PSModulePath'] = 'C:\\polluted';
+  let capturedEnv: NodeJS.ProcessEnv | undefined;
+  const spawn: ProbeSpawn = (_file, args, opts, callback) => {
+    capturedEnv = opts.env;
+    const dir = sandboxOf(args);
+    void fsPromises.writeFile(path.join(dir, 'output.json'), '{"session_state":"active","windows":[]}', 'utf8');
+    setTimeout(() => callback(null, '', ''), 5);
+    return { kill: () => {} };
+  };
+  try {
+    await runPowerShell({ action: 'enumerate_windows' }, 5000, context().signal, spawn);
+    assert.ok(capturedEnv, 'the spawn seam must receive an env');
+    assert.equal(capturedEnv!['PSModulePath'], undefined, 'the child environment must not carry PSModulePath');
+    assert.equal(capturedEnv!['PSMODULEPATH'], undefined, 'the child environment must not carry PSMODULEPATH');
+    assert.equal(process.env['PSModulePath'], 'C:\\polluted', 'process.env must not be mutated');
+  } finally {
+    if (original === undefined) delete process.env['PSModulePath'];
+    else process.env['PSModulePath'] = original;
+    assertNoProbeLeak(before, await sandboxProbeDirs());
+  }
 });

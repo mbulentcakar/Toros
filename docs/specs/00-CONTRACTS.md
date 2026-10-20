@@ -313,3 +313,24 @@ backslash separators, no namespace prefix (`\?\`, `\.\`), no UNC root, no 8.3
 short-name segments, and no segment ending in `.` or a space. Node Core (F3a)
 refuses any other spelling as `E_ADAPTER_FAILURE` before policy sees the target;
 the desktop adapter (F3b) must guarantee it, never fall back to a basename.
+
+### A9 — signer rules require `original_filename` (2026-10-20)
+
+**Gap.** The A8 signer rule bound an application by `signer` + `product_name`
+only. Both come from the version resource, but neither survives a rename or a
+copy: a file renamed to `powershell.exe` keeps its vendor's signer and product
+name, so a Notepad rule (`Microsoft Corporation` + `Microsoft® Windows®
+Operating System`) also covered a renamed PowerShell or cmd image. The version
+resource's `OriginalFilename` is the field that does survive renames and copies,
+and the signer rule did not carry it.
+
+**Change.** Two type changes, nothing else. `AppIdentity` gains
+`readonly original_filename: string | null` (the version resource
+OriginalFilename, or null when absent). The signer variant of `AppRule` becomes
+`{ signer, product_name, original_filename }` — all three required, so the old
+two-field signer rule is refused at validation with a message naming the new
+field. Policy matches `original_filename` case-insensitively (the version
+resource varies in case: `PowerShell.EXE`, `NOTEPAD.EXE`), while `signer` and
+`product_name` stay exact. Consumers: envelope (validation), policy (matching),
+node-core (identity validation, desktop-config validation), adapters-desktop
+(the probe reads and parses it).

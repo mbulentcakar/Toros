@@ -19,14 +19,16 @@ now an array of **application rules**, each exactly one of:
 ```jsonc
 [
   { "image_sha256": "<64 lower-case hex characters>" },
-  { "signer": "<Authenticode subject CN>", "product_name": "<version resource ProductName>" },
+  { "signer": "<Authenticode subject CN>", "product_name": "<version resource ProductName>", "original_filename": "<version resource OriginalFilename>" },
   { "image_path": "C:\\Absolute\\Path\\To\\app.exe" }
 ]
 ```
 
 - `image_sha256` must be 64 lower-case hex characters (the SHA-256 of the image file).
-- `signer` + `product_name` must appear together, non-empty, at most 512 characters each; both
-  match exactly and only against a **validly signed** image.
+- `signer` + `product_name` + `original_filename` must appear together, non-empty; `signer` and
+  `product_name` at most 512 characters each, `original_filename` at most 260 characters with no
+  path separators. `signer` and `product_name` match exactly and only against a **validly signed**
+  image; `original_filename` matches case-insensitively (the version resource varies in case).
 - `image_path` must be an absolute path, at most 512 characters, matched case-insensitively after
   separator normalisation. There is **no** basename rule anymore.
 
