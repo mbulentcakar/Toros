@@ -27,6 +27,7 @@ export {
   type CoordinatorAction,
   type CoordinatorResponse,
   type JobEnvelope,
+  type AppRule,
   type SealedEnvelope,
 } from './envelope.js';
 
@@ -66,13 +67,16 @@ export {
   type ModelUsageRecord,
   type ConversationTurn,
   type ConversationTurnChannel,
-  type ConversationTurnRole,
   type CorrelationConfidence,
   type CorrelationRetraction,
+  type AppIdentity,
   type FindingRecord,
   type JobRecord,
+  type ResolvedTarget,
   type SecurityObserver,
   type SessionAdapter,
   type SessionRecord,
   type Store,
+  type TargetDecisions,
+  type TargetResolver,
 } from './ports.js';

@@ -8,7 +8,7 @@ import { createRegistry } from '@toros/registry';
 import { createRelay, type Relay } from '@toros/relay';
 import { openStore } from '@toros/store';
 
-import { createActionPipeline, type SettlementTimingOptions } from './action-pipeline.js';
+import { createActionPipeline, type SettlementTimingOptions, CORE_RESERVED_RECEIPT_KEYS } from './action-pipeline.js';
 import { approvalTtlMinutes, createApprovalRegistry, type ApprovalRegistry } from './approvals.js';
 import { BrowserAcquisitionController } from './browser-acquisition.js';
 import { createConversationGuard, type ConversationGuard } from './conversation-guard.js';
@@ -148,7 +148,16 @@ export class Core implements NodeCore {
     this.store = store;
     const registry = createRegistry({ workspaces: this.options.workspaces });
     for (const adapter of this.options.adapters) {
-      try { await registry.register(adapter); }
+      try {
+        // Refuse a manifest that declares a Core-reserved receipt field
+        // (amendment A8). Core owns `targets_allowed`/`targets_denied`; letting
+        // an adapter declare one would let it overwrite Core's audit value.
+        const reserved = adapter.manifest.receipt_fields.find((key) => CORE_RESERVED_RECEIPT_KEYS.has(key));
+        if (reserved !== undefined) {
+          throw new TorosError(ErrorCode.E_ADAPTER_FAILURE, `adapter declares the Core-reserved receipt field "${reserved}"`);
+        }
+        await registry.register(adapter);
+      }
       catch (error: unknown) { console.error('adapter registration failed', adapter.manifest.id, error instanceof Error ? error.message : String(error)); }
     }
     this.registeredCapabilities = registry.list();
@@ -197,7 +206,7 @@ export class Core implements NodeCore {
     if (gated.length > 0 && (operatorToken === undefined || operatorToken.length === 0)) {
       throw new Error(`operator_token of at least 32 characters is required because these capabilities need approval: ${gated.join(', ')}`);
     }
-    this.policy = createPolicy({ registry, approval_required: this.options.approval_required, approvals: this.approvals });
+    this.policy = createPolicy({ registry, approval_required: this.options.approval_required, approvals: this.approvals, ...(this.options.desktop_session_id === undefined ? {} : { desktop_session_id: this.options.desktop_session_id }) });
     // The relay resolves selected_files against a workspace root, so it needs
     // one workspace. Phase 1 has exactly one sandbox root (SPEC 12.2).
     const relayWorkspace = this.options.workspaces[0];

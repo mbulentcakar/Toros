@@ -75,6 +75,12 @@ to be false the correct response is to stop and say so (00-CONTRACTS §1), not t
   adapter `machine` → `machine.inventory`; adapter `desktop` → `desktop.state`,
   `desktop.inspect`. (The plan's `window.inspect` is renamed `desktop.inspect` to avoid a
   `window` pseudo-adapter.)
+- **Two-phase target resolution is amendment A8.** The desktop actions are the one place a
+  policy decision has to be made *per OS target* rather than per action, which is exactly the gap
+  A8 closes. `resolver.resolve` enumerates the windows, Core decides each resolved `app` target
+  against `allowed_apps`, and `invoke` publishes only the keys Core allowed, re-verifying the
+  identity at execution. Nothing here decides application scope inside the adapter — the decision
+  stays in policy (00-CONTRACTS §10 A8).
 - **Read-only ⇒ no approval gate, by construction.** Each `ActionSchema` sets `mutates: false`,
   `always_requires_approval: false`, `path_fields: []`. Read-only actions are already exempt from
   the approval gate; nothing special is needed.
@@ -83,14 +89,17 @@ to be false the correct response is to stop and say so (00-CONTRACTS §1), not t
   Spec V). No new `Permission` value, so `packages/contracts` stays frozen.
 - **The envelope already carries the scope this slice needs.** `allowed_capabilities`,
   `allowed_workspaces`, `forbidden`, `max_actions`, `max_retries`, `expires_at`
-  (`packages/contracts/src/envelope.ts`). Caller identity is an auth-layer concern, deliberately
-  *not* in the envelope. **Session / window targeting and freshness are runtime handles, not
-  authorization scope** — they live in action input/output JSON and a per-call handle check inside
-  the adapter, never as new envelope fields. This is the same decision Spec V took, for the same
-  reason.
+  (`packages/contracts/src/envelope.ts`), and — added by A8 — the optional `allowed_apps` for the
+  application scope the desktop actions consult. Caller identity is an auth-layer concern,
+  deliberately *not* in the envelope: it reaches every adapter call as `ctx.actor`. **Session /
+  window targeting and freshness are runtime handles, not authorization scope** — they live in
+  action input/output JSON and a per-call handle check inside the adapter, never as new envelope
+  fields. This is the same decision Spec V took, for the same reason.
 - **Receipts** use the §8.3 minimum (`packages/contracts/src/receipt.ts`). Each adapter declares
   its extra audit keys in the manifest's `receipt_fields` (e.g. `window_count`, `truncated`,
-  `probe_ms`) — never raw inspected content. Node Core already rejects undeclared receipt keys.
+  `probe_ms`) — never raw inspected content. Node Core already rejects undeclared receipt keys,
+  and A8 adds two **Core-reserved** receipt keys, `targets_allowed` and `targets_denied`, that no
+  adapter may declare: Core records the two-phase resolve as counts, never identities.
 
 ---
 

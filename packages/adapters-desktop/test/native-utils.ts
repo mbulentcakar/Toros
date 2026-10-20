@@ -60,6 +60,7 @@ export function fakeContext(): AdapterContext {
     workspace: { id: 'ws-native', root: '/tmp/ws-native' },
     correlation_id: 'corr-native-1',
     signal: new AbortController().signal,
+    actor: 'coordinator',
   };
 }
 

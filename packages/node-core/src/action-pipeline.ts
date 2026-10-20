@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import {
   ErrorCode, TorosError, digest,
   type ActionResult, type ActionSchema, type Adapter, type AdapterContext,
-  type CapabilityId, type JsonValue, type Receipt, type SessionAdapter, type Store, type Workspace,
+  type AppIdentity, type CapabilityId, type JsonValue, type Receipt, type ResolvedTarget, type SessionAdapter, type Store, type TargetDecisions, type Workspace,
 } from '@toros/contracts';
 import type { Policy } from '@toros/policy';
 
@@ -102,6 +102,105 @@ function declaredAdapterFields(adapter: Adapter, result: ActionResult): Readonly
     fields[key] = value;
   }
   return fields;
+}
+
+/**
+ * Receipt keys Core itself writes (amendment A8): the two-phase resolve reduces
+ * to counts, never identities. An adapter may not declare these in its
+ * manifest — Core owns them, and a manifest that claims one would let the
+ * adapter overwrite Core's audit value.
+ */
+export const CORE_RESERVED_RECEIPT_KEYS: ReadonlySet<string> = new Set(['targets_allowed', 'targets_denied']);
+
+/** The ceiling on resolved targets from one adapter resolve call (amendment A8). */
+const MAX_RESOLVED_TARGETS = 1000;
+
+function resolveFailure(message: string): TorosError {
+  return toros(ErrorCode.E_ADAPTER_FAILURE, message);
+}
+
+/**
+ * Validate the adapter's resolve output (amendment A8). It is untrusted — the
+ * adapter is reached only after the decision, but its resolve result is still
+ * adapter-supplied data, so nothing is taken on faith: an array of well-formed
+ * targets with unique, bounded keys, at most `MAX_RESOLVED_TARGETS` long.
+ * Anything else is E_ADAPTER_FAILURE.
+ */
+function validateResolvedTargets(value: unknown): readonly ResolvedTarget[] {
+  if (!Array.isArray(value)) throw resolveFailure('Adapter resolver returned a non-array result');
+  if (value.length > MAX_RESOLVED_TARGETS) {
+    throw resolveFailure(`Adapter resolver returned more than ${MAX_RESOLVED_TARGETS} targets`);
+  }
+  const seen = new Set<string>();
+  const targets: ResolvedTarget[] = [];
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      throw resolveFailure('Adapter resolver returned a malformed target');
+    }
+    const record = item as Record<string, unknown>;
+    const kind = record['kind'];
+    const key = record['key'];
+    if (typeof key !== 'string' || key.length === 0 || key.length > 128) {
+      throw resolveFailure('Adapter resolver returned a target with an invalid key');
+    }
+    if (seen.has(key)) throw resolveFailure('Adapter resolver returned duplicate target keys');
+    seen.add(key);
+
+    if (kind === 'app') {
+      targets.push({ kind: 'app', key, identity: validateAppIdentity(record['identity']) });
+    } else if (kind === 'capability') {
+      const capability = record['capability'];
+      if (typeof capability !== 'string' || capability.length === 0) {
+        throw resolveFailure('Adapter resolver returned a capability target with an invalid capability');
+      }
+      targets.push({ kind: 'capability', key, capability });
+    } else {
+      throw resolveFailure('Adapter resolver returned a target with an unknown kind');
+    }
+  }
+  return targets;
+}
+
+function validateAppIdentity(value: unknown): AppIdentity {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw resolveFailure('Adapter resolver returned an app target with a malformed identity');
+  }
+  const id = value as Record<string, unknown>;
+
+  const pid = id['pid'];
+  if (typeof pid !== 'number' || !Number.isInteger(pid)) {
+    throw resolveFailure('Adapter resolver returned an app identity with an invalid pid');
+  }
+  const created_at = id['created_at'];
+  if (typeof created_at !== 'string' || created_at.length === 0) {
+    throw resolveFailure('Adapter resolver returned an app identity with an invalid created_at');
+  }
+  const image_path = id['image_path'];
+  if (typeof image_path !== 'string' || image_path.length === 0) {
+    throw resolveFailure('Adapter resolver returned an app identity with an invalid image_path');
+  }
+  const image_sha256 = id['image_sha256'];
+  if (typeof image_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(image_sha256)) {
+    throw resolveFailure('Adapter resolver returned an app identity with an invalid image_sha256');
+  }
+  const signature = id['signature'];
+  if (signature !== 'valid' && signature !== 'unsigned' && signature !== 'invalid') {
+    throw resolveFailure('Adapter resolver returned an app identity with an invalid signature');
+  }
+  const signer = id['signer'];
+  if (signer !== null && typeof signer !== 'string') {
+    throw resolveFailure('Adapter resolver returned an app identity with an invalid signer');
+  }
+  const product_name = id['product_name'];
+  if (product_name !== null && typeof product_name !== 'string') {
+    throw resolveFailure('Adapter resolver returned an app identity with an invalid product_name');
+  }
+  const session_id = id['session_id'];
+  if (typeof session_id !== 'number' || !Number.isInteger(session_id)) {
+    throw resolveFailure('Adapter resolver returned an app identity with an invalid session_id');
+  }
+
+  return { pid, created_at, image_path, image_sha256, signature, signer, product_name, session_id };
 }
 
 /**
@@ -423,7 +522,7 @@ export function createActionPipeline(deps: {
             }
           } finally { if (timer !== undefined) clearTimeout(timer); }
         }
-        const context: AdapterContext = { job_id: jobId, session_id: sessionId, workspace, correlation_id: receiptId, signal: controller.signal };
+        const context: AdapterContext = { job_id: jobId, session_id: sessionId, workspace, correlation_id: receiptId, signal: controller.signal, actor };
         // Hand the adapter the SAME path policy approved, not the string the
         // caller wrote.
         //
@@ -437,10 +536,29 @@ export function createActionPipeline(deps: {
         // Substituting the resolved absolute form closes it: the argument the
         // adapter receives is exactly the one that was contained.
         const executedArgs = actionSchema === null ? actionArgs : resolvePathArgs(actionArgs, actionSchema, workspace.root);
+        // Two-phase resolve (amendment A8). For an adapter with a resolver, Core
+        // resolves the targets, decides each one against the envelope, and hands
+        // the decisions to invoke. The resolve runs under the same timeout and
+        // abort as invoke, and a resolve failure closes the receipt the same way
+        // an invoke failure does. An adapter without a resolver behaves exactly
+        // as before.
+        const resolver = adapter.resolver;
+        let invokeContext: AdapterContext = context;
+        let resolveCounts: { readonly allowed: number; readonly denied: number } | undefined;
+        if (resolver !== undefined) {
+          const rawTargets = await withinTimeout(() => resolver.resolve(actionId, executedArgs, context));
+          const targets = validateResolvedTargets(rawTargets);
+          const decisions = deps.policy().authorizeTargets(currentJob.envelope, capability, targets);
+          let allowed = 0;
+          let denied = 0;
+          for (const decision of decisions.values()) { if (decision === 'allowed') allowed += 1; else denied += 1; }
+          resolveCounts = { allowed, denied };
+          invokeContext = { ...context, target_decisions: decisions };
+        }
         let result: ActionResult;
         let adapterFields: Readonly<Record<string, JsonValue>> = {};
         if (tool === 'start_cli') {
-          const startedSession = await withinTimeout(() => sessionAdapter(adapter).start({ ...context, session_id: receiptId }));
+          const startedSession = await withinTimeout(() => sessionAdapter(adapter).start({ ...invokeContext, session_id: receiptId }));
           await store.createSession({ session_id: receiptId, job_id: jobId, adapter_id: adapter.manifest.id, workspace_id: workspace.id, pid: startedSession.pid, started_at: started });
           // Index it for correlation before anything the child does can be
           // observed. The adapter named its working directory after this same
@@ -456,7 +574,7 @@ export function createActionPipeline(deps: {
           }
           result = { output: '', truncated: false, artifacts: [], receipt_extra: {} };
         } else {
-          result = await withinTimeout(() => adapter.invoke(actionId, executedArgs, context));
+          result = await withinTimeout(() => adapter.invoke(actionId, executedArgs, invokeContext));
           // stop_cli killed the process and left the session row untouched, so
           // persisted state kept showing a live pid and a null stopped_at —
           // across restarts. The lifecycle has to be recorded where it is read
@@ -467,6 +585,12 @@ export function createActionPipeline(deps: {
           }
         }
         adapterFields = declaredAdapterFields(adapter, result);
+        // Core records only the counts, never the identities (amendment A8). The
+        // two reserved keys are Core-owned and can never collide with an adapter
+        // field because registration refuses a manifest that declares them.
+        if (resolveCounts !== undefined) {
+          adapterFields = { ...adapterFields, targets_allowed: resolveCounts.allowed, targets_denied: resolveCounts.denied };
+        }
         const exchangeState = adapterFields['exchange_state'];
         const exchangeError = adapterFields['exchange_error'];
         if (tool === 'read_cli' && sessionId !== null) {

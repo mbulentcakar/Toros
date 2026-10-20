@@ -29,7 +29,7 @@ describe('gemini adapter against Antigravity CLI', { skip: enabled ? false : 'Se
   });
   after(async () => { await adapter?.dispose(); await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
   it('starts and resumes a real Gemini conversation', async () => {
-    const ctx: AdapterContext = { job_id: 'real-gemini', session_id: 'gemini', correlation_id: 'gemini', workspace, signal: new AbortController().signal };
+    const ctx: AdapterContext = { job_id: 'real-gemini', session_id: 'gemini', correlation_id: 'gemini', workspace, signal: new AbortController().signal, actor: 'coordinator' };
     await adapter.start(ctx); await adapter.send('gemini', 'Reply with the single word ALPHA.');
     const first = await answer('gemini'); assert.match(first.text, /ALPHA/);
     await adapter.send('gemini', 'What word did you just say? Reply with that word only.');

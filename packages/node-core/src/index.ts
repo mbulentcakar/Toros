@@ -43,6 +43,14 @@ export interface NodeCoreOptions {
    */
   readonly observer: SecurityObserver | ((deps: ObserverDeps) => SecurityObserver) | null;
   readonly approval_required: readonly CapabilityId[];
+  /**
+   * The Windows session id Node Core runs in (amendment A8). Passed through to
+   * policy so `authorizeTargets` can require a resolved app to live in the same
+   * session. Absent or null means every `app` target is denied (fail closed).
+   * F3a does not compute it: `main.ts` leaves it unset, which is safe because no
+   * adapter has a resolver until F3b resolves it on Windows at startup.
+   */
+  readonly desktop_session_id?: number | null;
   /** Validated operator approval lifetime in minutes. Defaults to 60. */
   readonly approval_ttl_minutes?: number;
   /**

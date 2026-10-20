@@ -278,3 +278,31 @@ Core accepts only keys declared in `manifest.receipt_fields`; an undeclared key
 is `E_ADAPTER_FAILURE`, not silently omitted. Store migration 002 adds the
 durable column, and existing version-1 databases receive an empty object for
 historical receipts.
+
+### A8 — Two-phase target resolution (2026-10-20)
+
+**Gap.** The envelope could bound capabilities, workspaces and forbidden terms,
+but not *which applications* a job may touch on the desktop. `desktop.state` and
+`desktop.inspect` enumerate and inspect OS windows, and the adapter would have
+had to decide for itself whether a window's owning application was in scope —
+which makes the adapter part of the policy boundary, against §7 and the
+`Adapter` contract's own comment. There was also no field recording Core's
+decision per target, and no way for an adapter to bind a handle to its caller.
+
+**Change.** Four types in `ports.ts` — `AppIdentity` (OS-observed process
+identity: pid, creation time, image path and hash, signature, signer, product,
+session), `ResolvedTarget` (an `app` or `capability` keyed by an adapter-opaque
+string), `TargetDecisions` (Core's `allowed`/`denied` verdict per key), and the
+`TargetResolver` port — plus `Adapter.resolver?: TargetResolver` and
+`AdapterContext.actor` / `AdapterContext.target_decisions?`. `JobEnvelope` gains
+an optional `allowed_apps: readonly AppRule[]` (hash, signer+product, or path),
+participating in the digest only when present. Policy gains a deterministic
+`authorizeTargets` and the `desktop_session_id` option. Node Core performs the
+resolve under the same timeout/abort as invoke, validates the output, passes the
+decisions to the adapter, and records only the counts `targets_allowed` /
+`targets_denied` as **Core-reserved receipt keys** — a manifest that declares
+either is refused at registration. Consumers: envelope (validation + digest),
+policy (target decisions), node-core (resolve step, registration, plumbing),
+adapters-desktop (implements the port, in F3b), and the F5 inventory filter. The
+caller identity is carried to every adapter call as `ctx.actor`, never placed in
+the envelope.

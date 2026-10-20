@@ -259,6 +259,55 @@ export interface Store {
 // Adapter — implemented by @toros/adapters-cli and @toros/adapters-app
 // ---------------------------------------------------------------------------
 
+/**
+ * OS-observed identity of a process that owns a target. Never caller-supplied:
+ * an adapter reads it from the OS, so it cannot be forged by the coordinator
+ * or carried between jobs. Node Core records only counts derived from it,
+ * never the identity itself.
+ */
+export interface AppIdentity {
+  readonly pid: number;
+  /** Process creation time, ISO-8601 UTC. Guards against pid reuse. */
+  readonly created_at: string;
+  /** Canonical full image path, as the OS reports it. */
+  readonly image_path: string;
+  /** Lower-case hex SHA-256 of the image file. */
+  readonly image_sha256: string;
+  readonly signature: 'valid' | 'unsigned' | 'invalid';
+  /** Authenticode subject CN when signature is 'valid', else null. */
+  readonly signer: string | null;
+  /** Version resource ProductName, or null. */
+  readonly product_name: string | null;
+  /** Windows session id of the process. */
+  readonly session_id: number;
+}
+
+/**
+ * One OS-observed target an adapter resolved ahead of execution (amendment A8,
+ * the two-phase resolve). `key` is adapter-opaque: Core carries it unchanged
+ * and returns a decision per key, but never interprets it.
+ */
+export type ResolvedTarget =
+  | { readonly kind: 'app'; readonly key: string; readonly identity: AppIdentity }
+  | { readonly kind: 'capability'; readonly key: string; readonly capability: CapabilityId };
+
+/** Core's decision for each resolved key. Keys absent from the map are denied. */
+export type TargetDecisions = ReadonlyMap<string, 'allowed' | 'denied'>;
+
+/**
+ * Resolves an action's OS targets before execution so policy can decide each
+ * one (amendment A8). Declared here, implemented by the desktop adapter (F3b)
+ * and consumed by Node Core.
+ */
+export interface TargetResolver {
+  /** Read-only. Must not mutate any target. Called by Core before invoke. */
+  resolve(
+    actionId: string,
+    args: Readonly<Record<string, JsonValue>>,
+    ctx: AdapterContext,
+  ): Promise<readonly ResolvedTarget[]>;
+}
+
 export interface AdapterContext {
   readonly job_id: string;
   readonly session_id: string | null;
@@ -269,6 +318,17 @@ export interface AdapterContext {
    * must propagate it; desktop adapters may ignore it.
    */
   readonly correlation_id: string;
+  /**
+   * Who called: the receipt's actor. Lets an adapter bind handles to the
+   * caller, so a handle minted for one actor cannot be replayed by another.
+   */
+  readonly actor: string;
+  /**
+   * Present only when the adapter has a resolver: Core's decision per resolved
+   * key. An adapter must act only on keys whose decision is `allowed` and
+   * re-verify the resolved identity at execution.
+   */
+  readonly target_decisions?: TargetDecisions;
   /** Aborts on timeout, output limit, or operator cancellation. */
   readonly signal: AbortSignal;
 }
@@ -290,6 +350,12 @@ export interface ActionResult {
  */
 export interface Adapter {
   readonly manifest: AdapterManifest;
+  /**
+   * Optional two-phase resolver (amendment A8). Absent adapters behave exactly
+   * as before. Present, it is called by Core after the policy decision and
+   * before invoke; the adapter then acts only on the targets Core allowed.
+   */
+  readonly resolver?: TargetResolver;
   /** Called once at registration. Throw to refuse registration on this host. */
   init(): Promise<void>;
   invoke(actionId: string, args: Readonly<Record<string, JsonValue>>, ctx: AdapterContext): Promise<ActionResult>;
