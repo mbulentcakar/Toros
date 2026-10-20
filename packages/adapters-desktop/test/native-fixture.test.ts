@@ -106,11 +106,15 @@ describe('AR-F3b Native Windows Identity Verification', () => {
     // The probe spawns Windows PowerShell with PSModulePath removed, so a node
     // started under a polluted PSModulePath (pointed at a nonexistent folder)
     // must still report the real signature status of the signed fixture binary.
+    const fixture = await startFixture({});
+    activeFixtures.push(fixture);
+    // Pollute AFTER the fixture starts: startFixture strips PSModulePath from
+    // its own child, so pollution set before the fixture would not prove the
+    // PROBE's spawn does the same. The probe (below) is what must re-read the
+    // signature correctly under the polluted parent environment.
     const original = process.env['PSModulePath'];
     process.env['PSModulePath'] = 'C:\\__toros_nonexistent_module_path__';
     try {
-      const fixture = await startFixture({});
-      activeFixtures.push(fixture);
       const probe = fixtureProbe(fixture);
       const raw = await probe.enumerateWindows({ max_windows: 200 }, new AbortController().signal);
       if (raw.session_state !== 'active') {

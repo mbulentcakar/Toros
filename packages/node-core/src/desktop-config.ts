@@ -141,11 +141,27 @@ export type NodeSessionIdRunner = (
   args: readonly string[],
 ) => Promise<string>;
 
-/** The real runner: a fixed PowerShell process, shell-less, bounded. */
-export function defaultNodeSessionIdRunner(): NodeSessionIdRunner {
+/** execFile-like spawn shape, injectable so a test can observe the exact
+ *  `options.env` handed to the PowerShell child without ever spawning one. */
+export type SessionSpawn = (
+  file: string,
+  args: readonly string[],
+  options: {
+    readonly shell: false;
+    readonly windowsHide: boolean;
+    readonly timeout: number;
+    readonly maxBuffer: number;
+    readonly env: NodeJS.ProcessEnv;
+  },
+  callback: (error: Error | null, stdout: string, stderr: string) => void,
+) => { readonly kill: () => void };
+
+/** The real runner: a fixed PowerShell process, shell-less, bounded. `spawn` is
+ *  injectable for tests; the default is the real `execFile`. */
+export function defaultNodeSessionIdRunner(spawn: SessionSpawn = execFile): NodeSessionIdRunner {
   return (powershell: string, scriptPath: string, args: readonly string[]): Promise<string> =>
     new Promise((resolve, reject) => {
-      execFile(
+      spawn(
         powershell,
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args],
         { shell: false, windowsHide: true, timeout: 30_000, maxBuffer: 1024 * 1024, env: powershellChildEnvironment() },
@@ -165,8 +181,13 @@ export function defaultNodeSessionIdRunner(): NodeSessionIdRunner {
  */
 export function powershellChildEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env['PSModulePath'];
-  delete env['PSMODULEPATH'];
+  // Windows environment variable names are case-insensitive, so a polluted env
+  // block may carry any casing (`psmodulepath`, `PsModulePath`, …). Delete every
+  // key whose lower-case form is `psmodulepath`, never just two hard-coded
+  // spellings, so no casing survives into the child.
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'psmodulepath') delete env[key];
+  }
   return env;
 }
 

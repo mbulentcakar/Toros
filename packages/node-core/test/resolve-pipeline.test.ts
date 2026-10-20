@@ -359,6 +359,7 @@ test('an identity with a malformed original_filename is refused (amendment A9)',
   await expectIdentityFailure(appIdentity({ original_filename: 'dir\\app.exe' }));
   await expectIdentityFailure(appIdentity({ original_filename: 'dir/app.exe' }));
   await expectIdentityFailure(appIdentity({ original_filename: 'x'.repeat(261) }));
+  await expectIdentityFailure(appIdentity({ original_filename: '' }));
 });
 
 test('an identity with a null original_filename is accepted (amendment A9)', async (t) => {

@@ -16,7 +16,9 @@ import {
   resolveNodeSessionId,
   NODE_SESSION_ID_PS1,
   powershellChildEnvironment,
+  defaultNodeSessionIdRunner,
   type NodeSessionIdRunner,
+  type SessionSpawn,
 } from '../src/desktop-config.js';
 
 test('accepts a valid AppRule[] (hash, signer+product+original_filename, path)', () => {
@@ -107,6 +109,7 @@ test('rejects an original_filename with a path separator or over 260 characters 
   assert.throws(() => validateDesktopAuthorizedApps([{ signer: 'x', product_name: 'x', original_filename: 'dir\\app.exe' }], 'c'), /original_filename/);
   assert.throws(() => validateDesktopAuthorizedApps([{ signer: 'x', product_name: 'x', original_filename: 'dir/app.exe' }], 'c'), /original_filename/);
   assert.throws(() => validateDesktopAuthorizedApps([{ signer: 'x', product_name: 'x', original_filename: 'x'.repeat(261) }], 'c'), /original_filename/);
+  assert.throws(() => validateDesktopAuthorizedApps([{ signer: 'x', product_name: 'x', original_filename: '' }], 'c'), /original_filename/);
 });
 
 // ---------------------------------------------------------------------------
@@ -176,16 +179,41 @@ test('resolveNodeSessionId rejects when the runner throws, and still cleans up',
 // mutated.
 // ---------------------------------------------------------------------------
 
-test('powershellChildEnvironment removes PSModulePath without mutating process.env', () => {
-  const original = process.env['PSModulePath'];
-  process.env['PSModulePath'] = 'C:\\polluted';
+test('powershellChildEnvironment removes every PSModulePath casing without mutating process.env', () => {
+  const original = process.env['PsModulePath'];
+  process.env['PsModulePath'] = 'C:\\polluted'; // mixed casing, not the canonical key
   try {
     const env = powershellChildEnvironment();
-    assert.equal(env['PSModulePath'], undefined, 'the child environment must not carry PSModulePath');
+    const surviving = Object.keys(env).filter((k) => k.toLowerCase() === 'psmodulepath');
+    assert.deepEqual(surviving, [], `no PSModulePath casing may survive: ${surviving.join(', ')}`);
+    assert.equal(env['PsModulePath'], undefined, 'the child environment must not carry PsModulePath');
     assert.equal(env['PSMODULEPATH'], undefined, 'the child environment must not carry PSMODULEPATH');
-    assert.equal(process.env['PSModulePath'], 'C:\\polluted', 'process.env must not be mutated');
+    assert.equal(process.env['PsModulePath'], 'C:\\polluted', 'process.env must not be mutated');
   } finally {
-    if (original === undefined) delete process.env['PSModulePath'];
-    else process.env['PSModulePath'] = original;
+    if (original === undefined) delete process.env['PsModulePath'];
+    else process.env['PsModulePath'] = original;
+  }
+});
+
+test('defaultNodeSessionIdRunner passes the spawned child an environment with every PSModulePath casing removed (through the seam)', async () => {
+  const original = process.env['PsModulePath'];
+  process.env['PsModulePath'] = 'C:\\polluted';
+  let capturedEnv: NodeJS.ProcessEnv | undefined;
+  const spawn: SessionSpawn = (_file, _args, opts, callback) => {
+    capturedEnv = opts.env;
+    callback(null, '7\n', '');
+    return { kill: () => {} };
+  };
+  try {
+    const runner = defaultNodeSessionIdRunner(spawn);
+    const stdout = await runner('powershell.exe', 'C:\\x\\session.ps1', ['4242']);
+    assert.equal(stdout, '7\n');
+    assert.ok(capturedEnv, 'the spawn seam must receive an env');
+    const surviving = Object.keys(capturedEnv!).filter((k) => k.toLowerCase() === 'psmodulepath');
+    assert.deepEqual(surviving, [], `the child environment must carry no PSModulePath casing: ${surviving.join(', ')}`);
+    assert.equal(process.env['PsModulePath'], 'C:\\polluted', 'process.env must not be mutated');
+  } finally {
+    if (original === undefined) delete process.env['PsModulePath'];
+    else process.env['PsModulePath'] = original;
   }
 });

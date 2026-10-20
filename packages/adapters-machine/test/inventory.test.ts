@@ -13,8 +13,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   createMachineAdapter,
+  createPowerShellDriveTypes,
   powershellChildEnvironment,
   type AccessCheck,
+  type DriveReaderSpawn,
   type DriveTypes,
   type MachineProbe,
 } from '../src/adapter.js';
@@ -947,17 +949,42 @@ describe('machine.inventory — drive reader budget & cache', () => {
 // Tests — PSModulePath isolation (amendment A9)
 // ---------------------------------------------------------------------------
 
-test('powershellChildEnvironment removes PSModulePath without mutating process.env', () => {
-  const original = process.env['PSModulePath'];
-  process.env['PSModulePath'] = 'C:\\polluted';
+test('powershellChildEnvironment removes every PSModulePath casing without mutating process.env', () => {
+  const original = process.env['PsModulePath'];
+  process.env['PsModulePath'] = 'C:\\polluted'; // mixed casing, not the canonical key
   try {
     const env = powershellChildEnvironment();
-    assert.equal(env['PSModulePath'], undefined, 'the child environment must not carry PSModulePath');
+    const surviving = Object.keys(env).filter((k) => k.toLowerCase() === 'psmodulepath');
+    assert.deepEqual(surviving, [], `no PSModulePath casing may survive: ${surviving.join(', ')}`);
+    assert.equal(env['PsModulePath'], undefined, 'the child environment must not carry PsModulePath');
     assert.equal(env['PSMODULEPATH'], undefined, 'the child environment must not carry PSMODULEPATH');
-    assert.equal(process.env['PSModulePath'], 'C:\\polluted', 'process.env must not be mutated');
+    assert.equal(process.env['PsModulePath'], 'C:\\polluted', 'process.env must not be mutated');
   } finally {
-    if (original === undefined) delete process.env['PSModulePath'];
-    else process.env['PSModulePath'] = original;
+    if (original === undefined) delete process.env['PsModulePath'];
+    else process.env['PsModulePath'] = original;
+  }
+});
+
+test('createPowerShellDriveTypes spawns through the seam with every PSModulePath casing removed', async () => {
+  const original = process.env['PsModulePath'];
+  process.env['PsModulePath'] = 'C:\\polluted';
+  let capturedEnv: NodeJS.ProcessEnv | undefined;
+  const spawn: DriveReaderSpawn = (_file, _args, opts, callback) => {
+    capturedEnv = opts.env;
+    callback(null, 'c\n', '');
+    return { kill: () => {} };
+  };
+  try {
+    const reader = createPowerShellDriveTypes(spawn);
+    const letters = await reader(new AbortController().signal, 5_000);
+    assert.deepEqual([...letters], ['c'], 'the drive reader must parse the fake stdout');
+    assert.ok(capturedEnv, 'the spawn seam must receive an env');
+    const surviving = Object.keys(capturedEnv!).filter((k) => k.toLowerCase() === 'psmodulepath');
+    assert.deepEqual(surviving, [], `the child environment must carry no PSModulePath casing: ${surviving.join(', ')}`);
+    assert.equal(process.env['PsModulePath'], 'C:\\polluted', 'process.env must not be mutated');
+  } finally {
+    if (original === undefined) delete process.env['PsModulePath'];
+    else process.env['PsModulePath'] = original;
   }
 });
 

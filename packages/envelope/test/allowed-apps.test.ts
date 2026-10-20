@@ -124,6 +124,10 @@ describe('@toros/envelope allowed_apps (amendment A8)', () => {
       () => sealEnvelope({ ...validInput(), allowed_apps: [{ signer: 'Contoso Corp', product_name: 'Contoso Editor', original_filename: 'x'.repeat(261) }] }),
       ErrorCode.E_ENVELOPE_INVALID,
     );
+    assertThrowsTorosError(
+      () => sealEnvelope({ ...validInput(), allowed_apps: [{ signer: 'Contoso Corp', product_name: 'Contoso Editor', original_filename: '' }] }),
+      ErrorCode.E_ENVELOPE_INVALID,
+    );
   });
 
   it('rejects an empty object rule', () => {

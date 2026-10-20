@@ -8,7 +8,7 @@ import path from 'node:path';
 
 import type { AdapterContext } from '@toros/contracts';
 
-import { createPowerShellUiaProbe } from '../src/probe.js';
+import { createPowerShellUiaProbe, powershellChildEnvironment } from '../src/probe.js';
 import type { UiaProbe } from '../src/adapter.js';
 
 // ---------------------------------------------------------------------------
@@ -204,7 +204,7 @@ export function startFixture(options: {
         '-ExtraWindows',
         String(extraWindows),
       ],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
+      { stdio: ['ignore', 'pipe', 'pipe'], env: powershellChildEnvironment() },
     );
 
     let resolved = false;

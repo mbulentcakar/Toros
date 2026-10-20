@@ -253,10 +253,33 @@ function powershellExe(env: NodeJS.ProcessEnv = process.env): string {
  */
 export function powershellChildEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env['PSModulePath'];
-  delete env['PSMODULEPATH'];
+  // Windows environment variable names are case-insensitive, so a polluted env
+  // block may carry any casing (`psmodulepath`, `PsModulePath`, …). Delete every
+  // key whose lower-case form is `psmodulepath`, never just two hard-coded
+  // spellings, so no casing survives into the child.
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'psmodulepath') delete env[key];
+  }
   return env;
 }
+
+/**
+ * execFile-like spawn shape, injectable so a test can observe the exact
+ * `options.env` handed to the PowerShell child without ever spawning one. Mirrors
+ * `runPowerShell`'s `ProbeSpawn` in @toros/adapters-desktop.
+ */
+export type DriveReaderSpawn = (
+  file: string,
+  args: readonly string[],
+  options: {
+    readonly shell: false;
+    readonly windowsHide: boolean;
+    readonly timeout: number;
+    readonly maxBuffer: number;
+    readonly env: NodeJS.ProcessEnv;
+  },
+  callback: (error: Error | null, stdout: string, stderr: string) => void,
+) => { readonly kill: () => void };
 
 /**
  * The production drive reader: one `execFile` of Windows PowerShell per call,
@@ -265,8 +288,10 @@ export function powershellChildEnvironment(): NodeJS.ProcessEnv {
  * closed — any error, timeout, abort, or oversized output **rejects**, so
  * `resolveFixedDrives` never caches a failed read and every drive letter is
  * treated as non-fixed (probe nothing, count the skip).
+ *
+ * `spawn` is injectable for tests; the default is the real `execFile`.
  */
-function createPowerShellDriveTypes(): DriveTypes {
+export function createPowerShellDriveTypes(spawn: DriveReaderSpawn = execFile): DriveTypes {
   return (signal: AbortSignal, timeoutMs: number): Promise<readonly string[]> =>
     new Promise<readonly string[]>((resolvePromise, rejectPromise) => {
       if (signal.aborted) {
@@ -274,7 +299,7 @@ function createPowerShellDriveTypes(): DriveTypes {
         return;
       }
       let settled = false;
-      let child: ReturnType<typeof execFile> | undefined;
+      let child: { readonly kill: () => void } | undefined;
       let timer: NodeJS.Timeout | undefined;
       const finish = (err: Error | undefined, letters: readonly string[]): void => {
         if (settled) return;
@@ -294,7 +319,7 @@ function createPowerShellDriveTypes(): DriveTypes {
       }, timeoutMs);
       signal.addEventListener('abort', onAbort, { once: true });
       try {
-        child = execFile(
+        child = spawn(
           powershellExe(),
           ['-NoProfile', '-NonInteractive', '-Command', FIXED_DRIVES_COMMAND],
           { shell: false, windowsHide: true, timeout: timeoutMs, maxBuffer: MAX_DRIVE_OUTPUT_BYTES, env: powershellChildEnvironment() },

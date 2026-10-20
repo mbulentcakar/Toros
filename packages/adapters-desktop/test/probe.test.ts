@@ -343,10 +343,11 @@ test('parseIdentity accepts a null original_filename and rejects a malformed one
   // may not carry it).
   assert.equal(parseIdentity({ ...validIdentity(), original_filename: null })?.original_filename, null);
   assert.equal(parseIdentity({ ...validIdentity(), original_filename: undefined })?.original_filename, null);
-  // A path separator or an over-long value is refused.
+  // A path separator or an over-long or empty value is refused.
   assert.equal(parseIdentity({ ...validIdentity(), original_filename: 'dir\\app.exe' }), null);
   assert.equal(parseIdentity({ ...validIdentity(), original_filename: 'dir/app.exe' }), null);
   assert.equal(parseIdentity({ ...validIdentity(), original_filename: 'x'.repeat(261) }), null);
+  assert.equal(parseIdentity({ ...validIdentity(), original_filename: '' }), null);
 });
 // ---------------------------------------------------------------------------
 // F3b: the embedded script is a TypeScript template literal, so every `\` in
@@ -366,6 +367,11 @@ test('the emitted script carries the image-path checks with their backslashes in
   assert.ok(lines.includes(namespaces), `UNC and namespace checks must reach PowerShell as: ${namespaces}`);
   assert.ok(lines.includes(trailing), `trailing dot/space check must reach PowerShell as: ${trailing}`);
   assert.ok(!DESKTOP_UIA_PS1.includes(".Contains('.')"), "no check may collapse to Contains('.')");
+  // Round 2 (A9): the OriginalFilename bound carries a literal backslash in its
+  // `Contains('\')` term. If the template literal halves it, the check collapses
+  // and an overlong/path-separator OriginalFilename survives to Node.
+  const originalBound = String.raw`if ($null -ne $original -and ($original.Length -gt 260 -or $original.Contains('\') -or $original.Contains('/'))) { $original = $null }`;
+  assert.ok(lines.includes(originalBound), `OriginalFilename bound must reach PowerShell as: ${originalBound}`);
 });
 
 // ---------------------------------------------------------------------------

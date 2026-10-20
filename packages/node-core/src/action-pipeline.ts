@@ -266,10 +266,10 @@ function validateAppIdentity(value: unknown): AppIdentity {
     throw resolveFailure('Adapter resolver returned an app identity with an invalid product_name');
   }
   const original_filename = id['original_filename'];
-  // Null, or a string of at most 260 characters with no path separators
-  // (amendment A9). The version resource's OriginalFilename is a bare file
-  // name, never a path, so a separator here means the adapter misread it.
-  if (original_filename !== null && (typeof original_filename !== 'string' || original_filename.length > 260 || original_filename.includes('\\') || original_filename.includes('/'))) {
+  // Null, or a non-empty string of at most 260 characters with no path
+  // separators (amendment A9). The version resource's OriginalFilename is a
+  // bare file name, never a path, and an empty string carries no identity.
+  if (original_filename !== null && (typeof original_filename !== 'string' || original_filename.length === 0 || original_filename.length > 260 || original_filename.includes('\\') || original_filename.includes('/'))) {
     throw resolveFailure('Adapter resolver returned an app identity with an invalid original_filename');
   }
   const session_id = id['session_id'];

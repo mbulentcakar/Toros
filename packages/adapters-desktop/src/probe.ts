@@ -197,30 +197,29 @@ try {
     if ($hashCache.ContainsKey($cacheKey)) { $sha = $hashCache[$cacheKey] }
     else { try { $sha = [TorosNative]::FileSha256($imagePath) } catch { return $null }; $hashCache[$cacheKey] = $sha }
     $sig = $null; try { $sig = Get-AuthenticodeSignature -LiteralPath $imagePath } catch { return $null }
-    $sigStatus = 'unsigned'; $signer = $null
-    if ($null -ne $sig) {
-      $status = [string]$sig.Status
-      if ($status -eq 'Valid') {
-        if ($null -ne $sig.SignerCertificate) {
-          $cn = $sig.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
-          if (-not [string]::IsNullOrWhiteSpace([string]$cn)) { $sigStatus = 'valid'; $signer = [string]$cn }
-        }
-        if ($sigStatus -ne 'valid') {
-          # A valid signature whose subject CN could not be read must not become
-          # an unsigned identity: drop the window rather than misreport the signer.
-          return $null
-        }
-      } elseif ($status -eq 'HashMismatch') {
-        $sigStatus = 'invalid'
-      } elseif ($status -eq 'NotSigned') {
-        # Only a real NotSigned status maps to unsigned (amendment A9). Any other
-        # status (UnknownError, NotTrusted, NotSupportedFileFormat, Incompatible)
-        # means the signature could not be established, which is 'invalid', never
-        # 'unsigned' — 'unsigned' must mean "genuinely no signature".
-        $sigStatus = 'unsigned'
-      } else {
-        $sigStatus = 'invalid'
+    if ($null -eq $sig) { return $null }
+    $sigStatus = $null; $signer = $null
+    $status = [string]$sig.Status
+    if ($status -eq 'Valid') {
+      if ($null -ne $sig.SignerCertificate) {
+        $cn = $sig.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+        if (-not [string]::IsNullOrWhiteSpace([string]$cn)) { $sigStatus = 'valid'; $signer = [string]$cn }
       }
+      if ($sigStatus -ne 'valid') {
+        # A valid signature whose subject CN could not be read must not become
+        # an unsigned identity: drop the window rather than misreport the signer.
+        return $null
+      }
+    } elseif ($status -eq 'HashMismatch') {
+      $sigStatus = 'invalid'
+    } elseif ($status -eq 'NotSigned') {
+      # Only a real NotSigned status maps to unsigned (amendment A9). Any other
+      # status (UnknownError, NotTrusted, NotSupportedFileFormat, Incompatible)
+      # means the signature could not be established, which is 'invalid', never
+      # 'unsigned' — 'unsigned' must mean "genuinely no signature".
+      $sigStatus = 'unsigned'
+    } else {
+      $sigStatus = 'invalid'
     }
     $product = $null; try { $product = [string]$fi.VersionInfo.ProductName } catch { }
     if ([string]::IsNullOrWhiteSpace($product)) { $product = $null }
@@ -229,6 +228,12 @@ try {
     $original = $null; try { $original = [string]$fi.VersionInfo.OriginalFilename } catch { }
     if ($null -ne $original) { $original = $original.Trim() }
     if ([string]::IsNullOrWhiteSpace($original)) { $original = $null }
+    # An OriginalFilename over 260 characters, or one carrying a path separator,
+    # is normalised to $null here (amendment A9 round 2): image_sha256/image_path
+    # rules still work while a signer rule never matches a value the resolver
+    # would refuse. A malformed value must not waste a max_windows slot only to
+    # be rejected later in Node.
+    if ($null -ne $original -and ($original.Length -gt 260 -or $original.Contains('\\') -or $original.Contains('/'))) { $original = $null }
     $proc = $null; try { $proc = Get-Process -Id $winPid -ErrorAction Stop } catch { return $null }
     # The creation time read can throw on protected/exiting processes; a failure
     # drops the window rather than aborting the whole probe. The format string is
@@ -383,8 +388,13 @@ function powershellPath(env: NodeJS.ProcessEnv = process.env): string {
  */
 export function powershellChildEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env['PSModulePath'];
-  delete env['PSMODULEPATH'];
+  // Windows environment variable names are case-insensitive, so a polluted env
+  // block may carry any casing (`psmodulepath`, `PsModulePath`, …). Delete every
+  // key whose lower-case form is `psmodulepath`, never just two hard-coded
+  // spellings, so no casing survives into the child.
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'psmodulepath') delete env[key];
+  }
   return env;
 }
 
@@ -591,10 +601,10 @@ export function parseIdentity(raw: Record<string, unknown>): AppIdentity | null 
   const product_name = raw['product_name'];
   if (product_name !== null && product_name !== undefined && typeof product_name !== 'string') return null;
   const original_filename = raw['original_filename'];
-  // Null, or a string of at most 260 characters with no path separators
-  // (amendment A9). The version resource's OriginalFilename is a bare file
-  // name, never a path.
-  if (original_filename !== null && original_filename !== undefined && (typeof original_filename !== 'string' || original_filename.length > 260 || original_filename.includes('\\') || original_filename.includes('/'))) return null;
+  // Null, or a non-empty string of at most 260 characters with no path
+  // separators (amendment A9). The version resource's OriginalFilename is a
+  // bare file name, never a path, and an empty string carries no identity.
+  if (original_filename !== null && original_filename !== undefined && (typeof original_filename !== 'string' || original_filename.length === 0 || original_filename.length > 260 || original_filename.includes('\\') || original_filename.includes('/'))) return null;
   const session_id = raw['session_id'];
   if (typeof session_id !== 'number' || !Number.isSafeInteger(session_id) || session_id < 0) return null;
   return {
