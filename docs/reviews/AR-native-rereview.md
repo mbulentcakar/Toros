@@ -17,7 +17,16 @@ An independent lineage, never one that wrote this code:
 The slice code reviews were done by GPT-6.1 Sol (Codex: F1, F2, F4, F3a) and by Gemini 4 Argon
 (agy: F3b, F5). The operator picks the re-reviewer; the dispatch block below records the choice.
 
-> **Dispatch** (filled in at launch): reviewer, model, run mode, and the exact `main` head.
+> **Dispatch (operator decision, 2026-10-20).**
+>
+> - **Reviewer:** agy running Gemini 4 Argon (`gemini-4-argon-high`).
+> - **Run mode:** full access, so it can build and run natively, inside the dedicated worktree
+>   `_worktrees/Toros-ar-rereview` (branch `review/ar-native-rereview`).
+> - **Baseline:** `main` at `a5d9360`.
+> - **Conflict to manage:** Argon approved F3b (#12) and F5 (#11) as their code reviewer. Treat
+>   those approvals as **untrusted**. Re-derive every conclusion from the code and live runs, and
+>   attack F3b and F5 as hard as the slices you did not review. Do not read the earlier review
+>   comments on #11 or #12 until your own findings are written.
 
 ## Baseline
 
