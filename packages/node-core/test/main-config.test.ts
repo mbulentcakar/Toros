@@ -1,0 +1,142 @@
+/**
+ * Config parsing tests for the F3b desktop configuration (amendment A8):
+ * `desktop.authorized_apps` becomes `AppRule[]` and a bare string entry — the
+ * old basename form — refuses to start with a message naming the new format.
+ *
+ * Process-free: these exercise `validateDesktopAuthorizedApps` directly, no
+ * PowerShell, no windows, no session probe.
+ */
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { promises as fsPromises } from 'node:fs';
+
+import {
+  validateDesktopAuthorizedApps,
+  resolveNodeSessionId,
+  NODE_SESSION_ID_PS1,
+  type NodeSessionIdRunner,
+} from '../src/desktop-config.js';
+
+test('accepts a valid AppRule[] (hash, signer+product, path)', () => {
+  const rules = validateDesktopAuthorizedApps(
+    [
+      { image_sha256: 'a'.repeat(64) },
+      { signer: 'Contoso Corp', product_name: 'Contoso Editor' },
+      { image_path: 'C:\\Program Files\\App\\app.exe' },
+    ],
+    'config.json',
+  );
+  assert.ok(rules);
+  assert.equal(rules!.length, 3);
+  assert.deepEqual(rules![0], { image_sha256: 'a'.repeat(64) });
+  assert.deepEqual(rules![1], { signer: 'Contoso Corp', product_name: 'Contoso Editor' });
+  assert.deepEqual(rules![2], { image_path: 'C:\\Program Files\\App\\app.exe' });
+});
+
+test('returns undefined when the desktop block is absent', () => {
+  assert.equal(validateDesktopAuthorizedApps(undefined, 'config.json'), undefined);
+});
+
+test('a bare string entry (the old basename form) refuses with a message naming the new format', () => {
+  assert.throws(
+    () => validateDesktopAuthorizedApps(['notepad.exe'], 'config.json'),
+    (err: unknown) =>
+      err instanceof Error
+      && err.message.includes('notepad.exe')
+      && err.message.includes('bare string')
+      && err.message.includes('image_sha256')
+      && err.message.includes('image_path'),
+  );
+});
+
+test('rejects a non-array value', () => {
+  assert.throws(() => validateDesktopAuthorizedApps('notepad.exe', 'c'), /must be an array/);
+  assert.throws(() => validateDesktopAuthorizedApps({}, 'c'), /must be an array/);
+  assert.throws(() => validateDesktopAuthorizedApps(null, 'c'), /must be an array/);
+});
+
+test('rejects a rule that is neither object nor string', () => {
+  assert.throws(() => validateDesktopAuthorizedApps([42], 'c'), /must be an application rule object/);
+  assert.throws(() => validateDesktopAuthorizedApps([null], 'c'), /must be an application rule object/);
+});
+
+test('rejects an unknown property on a rule', () => {
+  assert.throws(
+    () => validateDesktopAuthorizedApps([{ image_sha256: 'a'.repeat(64), basename: 'x' }], 'c'),
+    /unknown property: basename/,
+  );
+});
+
+test('rejects a rule with more than one shape', () => {
+  assert.throws(
+    () => validateDesktopAuthorizedApps([{ image_sha256: 'a'.repeat(64), image_path: 'C:\\app.exe' }], 'c'),
+    /exactly one rule shape/,
+  );
+  assert.throws(
+    () => validateDesktopAuthorizedApps([{ signer: 'Contoso Corp' }], 'c'),
+    /signer and product_name must appear together/,
+  );
+  assert.throws(
+    () => validateDesktopAuthorizedApps([{}], 'c'),
+    /exactly one rule shape/,
+  );
+});
+
+test('rejects a malformed image_sha256', () => {
+  assert.throws(() => validateDesktopAuthorizedApps([{ image_sha256: 'xyz' }], 'c'), /64 lower-case hex/);
+  assert.throws(() => validateDesktopAuthorizedApps([{ image_sha256: 'A'.repeat(64) }], 'c'), /64 lower-case hex/);
+  assert.throws(() => validateDesktopAuthorizedApps([{ image_sha256: 'a'.repeat(63) }], 'c'), /64 lower-case hex/);
+});
+
+test('rejects a non-absolute image_path', () => {
+  assert.throws(() => validateDesktopAuthorizedApps([{ image_path: 'notepad.exe' }], 'c'), /must be absolute/);
+});
+
+test('rejects over-long or empty signer / product_name', () => {
+  assert.throws(() => validateDesktopAuthorizedApps([{ signer: '', product_name: 'x' }], 'c'), /signer/);
+  assert.throws(() => validateDesktopAuthorizedApps([{ signer: 'x', product_name: 'x'.repeat(513) }], 'c'), /product_name/);
+});
+
+// ---------------------------------------------------------------------------
+// Node session id (amendment A8, F3b): resolveNodeSessionId with an injected
+// runner — process-free, no PowerShell, no temp dir left behind.
+// ---------------------------------------------------------------------------
+
+test('NODE_SESSION_ID_PS1 uses Windows PowerShell 5.1 syntax only', () => {
+  // The `u` numeric-literal suffix is a parse error in Windows PowerShell 5.1;
+  // both TryParse targets must be declared [uint32] before [ref] use.
+  assert.ok(!/\b\d+u\b/.test(NODE_SESSION_ID_PS1), 'the script must not use a u literal suffix');
+  assert.ok(NODE_SESSION_ID_PS1.includes('[uint32]::TryParse'), 'the script must use [uint32]::TryParse');
+  assert.ok(NODE_SESSION_ID_PS1.includes('[uint32]$targetPid = 0'), 'the target pid must be a pre-declared [uint32]');
+  assert.ok(NODE_SESSION_ID_PS1.includes('[uint32]$sid = 0'), 'the session id must be a pre-declared [uint32]');
+  assert.ok(!/\$\w+\s*=\s*0u/.test(NODE_SESSION_ID_PS1), 'no variable may be assigned a u-suffixed literal');
+});
+
+test('resolveNodeSessionId returns the session id the runner prints, writing the fixed script', async () => {
+  let capturedArgs: readonly string[] = [];
+  let capturedScript: string | undefined;
+  const runner: NodeSessionIdRunner = async (_powershell, scriptPath, args) => {
+    capturedArgs = args;
+    capturedScript = await fsPromises.readFile(scriptPath, 'utf8');
+    return '7\n';
+  };
+
+  const id = await resolveNodeSessionId(4242, 'C:\\Windows', runner);
+  assert.equal(id, 7, 'the printed session id must parse to a number');
+  assert.deepEqual(capturedArgs, ['4242'], 'the pid must be passed as a single positional arg');
+  assert.equal(capturedScript, NODE_SESSION_ID_PS1, 'the fixed script must be written unchanged into the temp dir');
+});
+
+test('resolveNodeSessionId returns null for a non-numeric or negative runner output', async () => {
+  const noop: NodeSessionIdRunner = async () => 'garbage';
+  assert.equal(await resolveNodeSessionId(1, undefined, noop), null);
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => '-3'), null);
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => '1.5'), null);
+  assert.equal(await resolveNodeSessionId(1, undefined, async () => 'NaN'), null);
+});
+
+test('resolveNodeSessionId rejects when the runner throws, and still cleans up', async () => {
+  const failing: NodeSessionIdRunner = async () => { throw new Error('powershell failed'); };
+  await assert.rejects(resolveNodeSessionId(4242, undefined, failing), /powershell failed/);
+});

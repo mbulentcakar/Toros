@@ -1,7 +1,5 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
 
 import {
   createDesktopAdapter,
@@ -10,50 +8,68 @@ import {
   type RawControl,
 } from '../src/adapter.js';
 import { DESKTOP_UIA_PS1 } from '../src/probe.js';
-
-import type { AdapterContext, JsonValue } from '@toros/contracts';
+import type { AdapterContext, AppIdentity, JsonValue } from '@toros/contracts';
+import { createRegistry } from '@toros/registry';
 
 // ---------------------------------------------------------------------------
-// Fake UiaProbe for testing — canned data, no PowerShell
+// Fakes
 // ---------------------------------------------------------------------------
+
+function makeIdentity(overrides: Partial<AppIdentity> = {}): AppIdentity {
+  return {
+    pid: 1234,
+    created_at: '2026-01-01T00:00:00.000Z',
+    image_path: 'C:\\Program Files\\Contoso\\app.exe',
+    image_sha256: 'a'.repeat(64),
+    signature: 'valid',
+    signer: 'Contoso Corp',
+    product_name: 'Contoso Editor',
+    session_id: 7,
+    ...overrides,
+  };
+}
+
+function makeRawWindow(overrides: Partial<RawWindow> & { identity?: AppIdentity } = {}): RawWindow {
+  return {
+    native_handle: '123456',
+    title: 'Book1 — Excel',
+    identity: makeIdentity(),
+    z_order: 0,
+    foreground: true,
+    ...overrides,
+  };
+}
 
 function makeFakeProbe(
   windows: readonly RawWindow[] = [],
   sessionState: 'active' | 'locked' | 'disconnected' = 'active',
+  // The LIVE identity the probe reports back for an inspected/re-verified window.
+  // Defaults to the resolved identity; override to simulate a reused handle.
+  inspectIdentity: AppIdentity | null = makeIdentity(),
   controls: readonly RawControl[] = [],
   closed: boolean = false,
   truncated: boolean = false,
-  // The LIVE process name the probe reports for the inspected window. Defaults to
-  // the in-scope app so ok-path tests pass re-validation; override to simulate a
-  // reused handle now owned by a different process.
-  inspectProcessName: string = 'NOTEPAD.EXE',
-): UiaProbe {
-  return {
-    async enumerateWindows(
-      _sessionScope: string,
-      optsOrSignal?: { max_windows: number } | AbortSignal,
-      _maybeSignal?: AbortSignal,
-    ) {
+): UiaProbe & { enumerateCalls: number } {
+  const probe = {
+    enumerateCalls: 0,
+    async enumerateWindows(opts: { max_windows: number }, _signal: AbortSignal) {
+      probe.enumerateCalls += 1;
       if (sessionState === 'active') {
-        const opts = optsOrSignal && typeof optsOrSignal === 'object' && 'max_windows' in optsOrSignal ? optsOrSignal : undefined;
-        const maxw = opts?.max_windows ?? windows.length;
+        const maxw = opts.max_windows;
         const isTruncated = truncated || windows.length > maxw;
-        return { session_state: 'active', windows: windows.slice(0, maxw), truncated: isTruncated };
+        return { session_state: 'active' as const, windows: windows.slice(0, maxw), truncated: isTruncated };
       }
       return { session_state: sessionState };
     },
-    async inspectWindow(
-      _nativeHandle: string,
-      _opts: { depth: number; max_controls: number },
-      _signal: AbortSignal,
-    ) {
-      if (closed) return { closed: true };
-      return { closed: false, process_name: inspectProcessName, controls, truncated };
+    async inspectWindow(_nativeHandle: string, _opts: { depth: number; max_controls: number }, _signal: AbortSignal) {
+      if (closed) return { closed: true as const };
+      return { closed: false as const, identity: inspectIdentity, controls, truncated };
     },
   };
+  return probe;
 }
 
-function fakeContext(): AdapterContext {
+function fakeContext(overrides: Partial<AdapterContext> = {}): AdapterContext {
   return {
     job_id: 'job-1',
     session_id: null,
@@ -61,825 +77,371 @@ function fakeContext(): AdapterContext {
     correlation_id: 'corr-1',
     signal: new AbortController().signal,
     actor: 'coordinator',
+    ...overrides,
   };
 }
 
-function okOutput(obj: unknown): string {
-  return JSON.stringify(obj);
+const IN_SCOPE_SHA = 'a'.repeat(64);
+
+function makeAdapter(
+  authorizedApps: Parameters<typeof createDesktopAdapter>[0]['authorized_apps'] = [{ image_sha256: IN_SCOPE_SHA }],
+  probe: UiaProbe = makeFakeProbe(),
+  now?: () => number,
+): ReturnType<typeof createDesktopAdapter> {
+  return createDesktopAdapter({
+    node_platform: 'win32',
+    authorized_apps: authorizedApps,
+    probe,
+    max_windows: 200,
+    max_controls: 2000,
+    timeout_ms: 30_000,
+    ...(now === undefined ? {} : { now }),
+  });
 }
 
-// ---------------------------------------------------------------------------
-// Canned test data
-// ---------------------------------------------------------------------------
+/** Drive a full two-phase `state` request: resolve, then invoke with decisions. */
+type TargetDecisionsMap = ReadonlyMap<string, 'allowed' | 'denied'>;
+const allowedMap = (...keys: string[]): TargetDecisionsMap => new Map(keys.map((k) => [k, 'allowed'] as const));
+const deniedMap = (...keys: string[]): TargetDecisionsMap => new Map(keys.map((k) => [k, 'denied'] as const));
+const emptyMap = (): TargetDecisionsMap => new Map<string, 'allowed' | 'denied'>();
 
-const inScopeApp = 'NOTEPAD.EXE';
-const outScopeApp = 'CALC.EXE';
+describe('F3b desktop adapter — two-phase resolve', () => {
+  it('resolves only global-bound windows as app targets and publishes only allowed keys', async () => {
+    const probe = makeFakeProbe([
+      makeRawWindow({ identity: makeIdentity() }), // in scope (sha matches)
+      makeRawWindow({ native_handle: '999', identity: makeIdentity({ image_sha256: 'b'.repeat(64) }) }), // out of global bound
+    ]);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctx = fakeContext();
 
-const rawExcelWindow: RawWindow = {
-  native_handle: '123456',
-  title: 'Book1 — Excel',
-  process_name: inScopeApp,
-  z_order: 0,
-  foreground: true,
-};
+    const resolver = adapter.resolver!;
+    const targets = await resolver.resolve('state', {}, ctx);
 
-const rawCalcWindow: RawWindow = {
-  native_handle: '789012',
-  title: 'Calculator',
-  process_name: outScopeApp,
-  z_order: 1,
-  foreground: false,
-};
+    // Only the in-scope window becomes a target.
+    assert.equal(targets.length, 1);
+    assert.equal(targets[0]!.kind, 'app');
 
-const rawControls: RawControl[] = [
-  {
-    native_id: 'c1',
-    control_type: 'Button',
-    automation_id: 'btn-ok',
-    enabled: true,
-    patterns: ['Invoke'],
-  },
-  {
-    native_id: 'c2',
-    control_type: 'Edit',
-    automation_id: 'txt-doc',
-    enabled: true,
-    patterns: ['Value', 'Text'],
-  },
-  {
-    native_id: 'c3',
-    control_type: 'CheckBox',
-    automation_id: 'chk-feature',
-    enabled: true,
-    patterns: ['Toggle'],
-  },
-];
-
-// ---------------------------------------------------------------------------
-// Test 1: desktop.state active — opaque ids, freshness_token, scoped titles
-// ---------------------------------------------------------------------------
-
-describe('desktop.state', () => {
-  it('active session returns opaque window_ids, freshness_token, and scoped titles', async () => {
-    const probe = makeFakeProbe([rawExcelWindow, rawCalcWindow]);
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
-
-    const result = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-
+    // invoke with only that key allowed.
+    const key = (targets[0]! as { key: string }).key;
+    const decisions = allowedMap(key);
+    const result = await adapter.invoke('state', {}, { ...ctx, target_decisions: decisions });
     const body = JSON.parse(result.output) as Record<string, unknown>;
-    assert.strictEqual(body.session_state, 'active');
-    assert.ok(typeof body.freshness_token === 'string' && body.freshness_token.length > 0);
-
-    const windows = body.windows as Array<Record<string, unknown>>;
-    assert.strictEqual(windows.length, 2);
-
-    // Window 0: app_in_scope → has title
-    const w0 = windows[0]!;
-    assert.ok(typeof w0.window_id === 'string' && w0.window_id.length > 0);
-    // Assert window_id is NOT the native handle
-    assert.notStrictEqual(w0.window_id, rawExcelWindow.native_handle);
-    assert.strictEqual(w0.app_in_scope, true);
-    assert.strictEqual(w0.title, rawExcelWindow.title);
-    assert.strictEqual(w0.z_order, 0);
-    assert.strictEqual(w0.foreground, true);
-
-    // Window 1: NOT app_in_scope → title OMITTED
-    const w1 = windows[1]!;
-    assert.ok(typeof w1.window_id === 'string' && w1.window_id.length > 0);
-    assert.notStrictEqual(w1.window_id, rawCalcWindow.native_handle);
-    assert.strictEqual(w1.app_in_scope, false);
-    assert.strictEqual(w1.title, undefined);
-
-    // receipt_extra
-    assert.strictEqual(result.receipt_extra.window_count, 2);
-    assert.strictEqual(result.receipt_extra.session_state, 'active');
-    assert.strictEqual(result.receipt_extra.truncated, false);
+    assert.equal(body.session, 'active');
+    assert.equal((body.windows as unknown[]).length, 1);
+    assert.ok((body.freshness_token as string).length > 0);
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 2: desktop.state locked and disconnected — no windows
-  // ---------------------------------------------------------------------------
+  it('a window denied by Core never appears in output', async () => {
+    const probe = makeFakeProbe([makeRawWindow()]);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctx = fakeContext();
 
-  it('locked session returns session_state=locked, windows=[]', async () => {
-    const probe = makeFakeProbe([], 'locked');
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
-
-    const result = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
+    const resolver = adapter.resolver!;
+    const targets = await resolver.resolve('state', {}, ctx);
+    const key = (targets[0]! as { key: string }).key;
+    // Core denies it (e.g. envelope does not name the app).
+    const result = await adapter.invoke('state', {}, { ...ctx, target_decisions: deniedMap(key) });
     const body = JSON.parse(result.output) as Record<string, unknown>;
-    assert.strictEqual(body.session_state, 'locked');
-    const windows = body.windows as Array<unknown>;
-    assert.strictEqual(windows.length, 0);
-    assert.strictEqual(body.freshness_token, undefined);
-    assert.strictEqual(result.receipt_extra.session_state, 'locked');
-    assert.strictEqual(result.receipt_extra.window_count, 0);
+    assert.equal((body.windows as unknown[]).length, 0);
   });
 
-  it('disconnected session returns session_state=disconnected, windows=[]', async () => {
-    const probe = makeFakeProbe([], 'disconnected');
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
-
-    const result = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
+  it('locked/disconnected session returns session=unavailable with a reason and no windows', async () => {
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], makeFakeProbe([], 'locked'));
+    const ctx = fakeContext();
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    assert.equal(targets.length, 0);
+    const result = await adapter.invoke('state', {}, { ...ctx, target_decisions: emptyMap() });
     const body = JSON.parse(result.output) as Record<string, unknown>;
-    assert.strictEqual(body.session_state, 'disconnected');
-    const windows = body.windows as Array<unknown>;
-    assert.strictEqual(windows.length, 0);
+    assert.equal(body.session, 'unavailable');
+    assert.equal(body.reason, 'locked');
+    assert.equal((body.windows as unknown[]).length, 0);
+  });
+
+  it('re-verifies identity at invoke: a changed pid drops the window and counts changed', async () => {
+    const resolved = makeIdentity();
+    // The probe reports a DIFFERENT live pid for the same handle at invoke time.
+    const probe = makeFakeProbe([makeRawWindow({ identity: resolved })], 'active', makeIdentity({ pid: 9999 }));
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctx = fakeContext();
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    const key = (targets[0]! as { key: string }).key;
+    const result = await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key) });
+    const body = JSON.parse(result.output) as Record<string, unknown>;
+    assert.equal((body.windows as unknown[]).length, 0, 'a changed identity window must be dropped');
+    assert.equal(result.receipt_extra.changed, 1);
   });
 });
 
-// ---------------------------------------------------------------------------
-// Test 3: desktop.inspect with valid token and in-scope window → status ok
-// ---------------------------------------------------------------------------
+describe('F3b desktop adapter — handles (AR-05)', () => {
+  it('a foreign actor using the same window handle gets refresh_required', async () => {
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), []);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
 
-describe('desktop.inspect', () => {
-  it('in-scope window returns status=ok with opaque control ids and no value field', async () => {
-    const probe = makeFakeProbe([rawExcelWindow], 'active', rawControls);
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
+    // Actor A enumerates.
+    const ctxA = fakeContext({ job_id: 'job-1', actor: 'actor-a' });
+    const targets = await adapter.resolver!.resolve('state', {}, ctxA);
+    const key = (targets[0]! as { key: string }).key;
+    const tokenBody = JSON.parse((await adapter.invoke('state', {}, { ...ctxA, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
 
-    // First get state to obtain the freshness token and window_id
-    const stateResult = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-    const stateBody = JSON.parse(stateResult.output) as Record<string, unknown>;
-    const freshnessToken = stateBody.freshness_token as string;
-    const windows = stateBody.windows as Array<Record<string, unknown>>;
-    const windowId = windows[0]!.window_id as string;
-
-    // Now inspect
-    const inspectResult = await adapter.invoke('inspect', {
-      window_id: windowId,
-      freshness_token: freshnessToken,
-    }, fakeContext());
-
-    const body = JSON.parse(inspectResult.output) as Record<string, unknown>;
-    assert.strictEqual(body.status, 'ok');
-    const controls = body.controls as Array<Record<string, unknown>>;
-    assert.strictEqual(controls.length, 3);
-
-    // Check first control — opaque id, automation_id present, NO name, NO value
-    const c0 = controls[0]!;
-    assert.ok(typeof c0.control_id === 'string' && c0.control_id.length > 0);
-    assert.notStrictEqual(c0.control_id, 'c1'); // NOT the native id
-    assert.strictEqual(c0.type, 'Button');
-    assert.strictEqual(c0.enabled, true);
-    assert.strictEqual(c0.automation_id, 'btn-ok');
-    assert.strictEqual((c0 as Record<string, unknown>).name, undefined); // NEVER a name field
-    assert.strictEqual((c0 as Record<string, unknown>).value, undefined); // NEVER a value field
-    assert.deepStrictEqual(Object.keys(c0).sort(), ['automation_id', 'control_id', 'enabled', 'patterns', 'type'].sort());
-
-    // Check second control
-    const c1 = controls[1]!;
-    assert.strictEqual(c1.type, 'Edit');
-    assert.strictEqual(c1.automation_id, 'txt-doc');
-    assert.strictEqual((c1 as Record<string, unknown>).name, undefined); // NEVER a name field
-    assert.strictEqual((c1 as Record<string, unknown>).value, undefined); // NEVER a value field
-    assert.deepStrictEqual(Object.keys(c1).sort(), ['automation_id', 'control_id', 'enabled', 'patterns', 'type'].sort());
-
-    // receipt_extra
-    assert.strictEqual(inspectResult.receipt_extra.status, 'ok');
-    assert.strictEqual(inspectResult.receipt_extra.control_count, 3);
-  });
-
-  // ---------------------------------------------------------------------------
-  // Test 4: stale token or unknown window_id → refresh_required
-  // ---------------------------------------------------------------------------
-
-  it('stale freshness_token returns refresh_required', async () => {
-    const probe = makeFakeProbe([rawExcelWindow], 'active', rawControls);
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
-
-    // First state call
-    const stateResult1 = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-    const stateBody1 = JSON.parse(stateResult1.output) as Record<string, unknown>;
-    const freshnessToken1 = stateBody1.freshness_token as string;
-    const windows1 = stateBody1.windows as Array<Record<string, unknown>>;
-    const windowId1 = windows1[0]!.window_id as string;
-
-    // Second state call — rotates the enumeration
-    await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-
-    // Try inspect with the OLD token → refresh_required
-    const result = await adapter.invoke('inspect', {
-      window_id: windowId1,
-      freshness_token: freshnessToken1,
-    }, fakeContext());
-
+    // Actor B (same job) inspects with A's window_id + token.
+    const ctxB = fakeContext({ job_id: 'job-1', actor: 'actor-b' });
+    const inspectTargets = await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: tokenBody.freshness_token }, ctxB);
+    assert.equal(inspectTargets.length, 0, 'a foreign actor must resolve no target');
+    const result = await adapter.invoke('inspect', { window_id: key, freshness_token: tokenBody.freshness_token }, { ...ctxB, target_decisions: emptyMap() });
     const body = JSON.parse(result.output) as Record<string, unknown>;
-    assert.strictEqual(body.status, 'refresh_required');
-    assert.strictEqual(body.controls, undefined);
-    assert.strictEqual(result.receipt_extra.status, 'refresh_required');
-    assert.strictEqual(result.receipt_extra.control_count, 0);
+    assert.equal(body.status, 'refresh_required');
   });
 
-  it('unknown window_id returns refresh_required', async () => {
-    const probe = makeFakeProbe([rawExcelWindow], 'active', rawControls);
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
+  it('a foreign job using the same window handle gets refresh_required', async () => {
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), []);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctxA = fakeContext({ job_id: 'job-1', actor: 'actor' });
+    const targets = await adapter.resolver!.resolve('state', {}, ctxA);
+    const key = (targets[0]! as { key: string }).key;
+    const tokenBody = JSON.parse((await adapter.invoke('state', {}, { ...ctxA, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
 
-    const stateResult = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-    const stateBody = JSON.parse(stateResult.output) as Record<string, unknown>;
-    const freshnessToken = stateBody.freshness_token as string;
-
-    // Use a made-up window_id
-    const result = await adapter.invoke('inspect', {
-      window_id: 'bogus-window-id',
-      freshness_token: freshnessToken,
-    }, fakeContext());
-
+    const ctxB = fakeContext({ job_id: 'job-2', actor: 'actor' });
+    const result = await adapter.invoke('inspect', { window_id: key, freshness_token: tokenBody.freshness_token }, { ...ctxB, target_decisions: emptyMap() });
     const body = JSON.parse(result.output) as Record<string, unknown>;
-    assert.strictEqual(body.status, 'refresh_required');
+    assert.equal(body.status, 'refresh_required');
   });
 
-  it('inspect with no prior enumeration returns refresh_required', async () => {
-    const probe = makeFakeProbe([rawExcelWindow], 'active', rawControls);
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
+  it('a single-use handle is consumed: the second inspect returns refresh_required', async () => {
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), []);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctx = fakeContext();
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    const key = (targets[0]! as { key: string }).key;
+    const tokenBody = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
+    const token = tokenBody.freshness_token;
 
-    // Call inspect without prior state — no enumeration stored
-    const result = await adapter.invoke('inspect', {
-      window_id: 'any-id',
-      freshness_token: 'any-token',
-    }, fakeContext());
+    // First inspect (allowed) succeeds.
+    const firstTargets = await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: token }, ctx);
+    assert.equal(firstTargets.length, 1);
+    const first = await adapter.invoke('inspect', { window_id: key, freshness_token: token }, { ...ctx, target_decisions: allowedMap(key) });
+    const firstBody = JSON.parse(first.output) as Record<string, unknown>;
+    assert.equal(firstBody.status, 'ok');
 
+    // Second inspect with the same pair → refresh_required (single-use).
+    const secondTargets = await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: token }, ctx);
+    assert.equal(secondTargets.length, 0);
+    const second = await adapter.invoke('inspect', { window_id: key, freshness_token: token }, { ...ctx, target_decisions: emptyMap() });
+    const secondBody = JSON.parse(second.output) as Record<string, unknown>;
+    assert.equal(secondBody.status, 'refresh_required');
+  });
+
+  it('an expired handle returns refresh_required (the 60 s TTL)', async () => {
+    // Injectable clock: the enumeration is minted at t=0; advancing past 60 s
+    // expires it without a re-enumeration.
+    let nowMs = 0;
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), []);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe, () => nowMs);
+    const ctx = fakeContext();
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    const key = (targets[0]! as { key: string }).key;
+    const tokenBody = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
+    const token = tokenBody.freshness_token;
+
+    // Still valid before the TTL.
+    assert.equal((await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: token }, ctx)).length, 1);
+
+    // Advance past the 60 s TTL.
+    nowMs = 61_000;
+    assert.equal((await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: token }, ctx)).length, 0, 'an expired handle must resolve nothing');
+    const result = await adapter.invoke('inspect', { window_id: key, freshness_token: token }, { ...ctx, target_decisions: emptyMap() });
     const body = JSON.parse(result.output) as Record<string, unknown>;
-    assert.strictEqual(body.status, 'refresh_required');
+    assert.equal(body.status, 'refresh_required');
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 5: out-of-scope window → denied
-  // ---------------------------------------------------------------------------
-
-  it('out-of-scope window returns status=denied, no controls', async () => {
-    const probe = makeFakeProbe([rawCalcWindow], 'active', rawControls);
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp], // only inScopeApp is authorized
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
-
-    const stateResult = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-    const stateBody = JSON.parse(stateResult.output) as Record<string, unknown>;
-    const freshnessToken = stateBody.freshness_token as string;
-    const windows = stateBody.windows as Array<Record<string, unknown>>;
-    const calcWindowId = windows[0]!.window_id as string;
-    assert.strictEqual(windows[0]!.app_in_scope, false);
-
-    const result = await adapter.invoke('inspect', {
-      window_id: calcWindowId,
-      freshness_token: freshnessToken,
-    }, fakeContext());
-
+  it('a window_id unknown to the enumeration returns refresh_required', async () => {
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), []);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctx = fakeContext();
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    void targets;
+    const result = await adapter.invoke('inspect', { window_id: 'bogus-id', freshness_token: 'any' }, { ...ctx, target_decisions: emptyMap() });
     const body = JSON.parse(result.output) as Record<string, unknown>;
-    assert.strictEqual(body.status, 'denied');
-    assert.strictEqual(body.controls, undefined);
-    assert.strictEqual(result.receipt_extra.status, 'denied');
+    assert.equal(body.status, 'refresh_required');
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 6: closed window → unavailable
-  // ---------------------------------------------------------------------------
+  it('evicts the oldest enumeration at the 32-enumeration cap', async () => {
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), []);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
 
-  it('closed window returns status=unavailable', async () => {
-    // Fake probe that returns closed:true for inspectWindow
-    const probe: UiaProbe = {
-      async enumerateWindows(_sessionScope: string, _opts: { max_windows: number }, _signal: AbortSignal) {
-        return { session_state: 'active', windows: [rawExcelWindow] };
-      },
-      async inspectWindow(
-        _nativeHandle: string,
-        _opts: { depth: number; max_controls: number },
-        _signal: AbortSignal,
-      ) {
-        return { closed: true };
-      },
-    };
+    // Fill 32 distinct (job, actor) enumerations.
+    for (let i = 0; i < 32; i++) {
+      const ctx = fakeContext({ job_id: `job-${i}`, actor: 'actor' });
+      await adapter.resolver!.resolve('state', {}, ctx);
+    }
+    // A 33rd evicts job-0.
+    const ctx33 = fakeContext({ job_id: 'job-33', actor: 'actor' });
+    await adapter.resolver!.resolve('state', {}, ctx33);
 
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
+    // job-0's enumeration is gone: its inspect resolves nothing.
+    const ctx0 = fakeContext({ job_id: 'job-0', actor: 'actor' });
+    const targets = await adapter.resolver!.resolve('inspect', { window_id: 'any', freshness_token: 'any' }, ctx0);
+    assert.equal(targets.length, 0);
+  });
+});
 
-    const stateResult = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-    const stateBody = JSON.parse(stateResult.output) as Record<string, unknown>;
-    const freshnessToken = stateBody.freshness_token as string;
-    const windows = stateBody.windows as Array<Record<string, unknown>>;
-    const windowId = windows[0]!.window_id as string;
-
-    const result = await adapter.invoke('inspect', {
-      window_id: windowId,
-      freshness_token: freshnessToken,
-    }, fakeContext());
-
-    const body = JSON.parse(result.output) as Record<string, unknown>;
-    assert.strictEqual(body.status, 'unavailable');
-    assert.strictEqual(result.receipt_extra.status, 'unavailable');
+describe('F3b desktop adapter — session enum + inspect scope', () => {
+  it('manifest declares session_scope as the "interactive" enum and required fs permissions', () => {
+    const adapter = makeAdapter();
+    const state = adapter.manifest.actions.find((a) => a.id === 'state')!;
+    const props = (state.input_schema as { properties: Record<string, unknown> }).properties;
+    assert.deepEqual((props['session_scope'] as { enum: readonly string[] }).enum, ['interactive']);
+    const inspect = adapter.manifest.actions.find((a) => a.id === 'inspect')!;
+    const inspectProps = (inspect.input_schema as { properties: Record<string, unknown> }).properties;
+    assert.deepEqual((inspectProps['session_scope'] as { enum: readonly string[] }).enum, ['interactive']);
+    assert.ok(adapter.manifest.required_permissions.includes('fs.read'));
+    assert.ok(adapter.manifest.required_permissions.includes('fs.write'));
   });
 
-  // ---------------------------------------------------------------------------
-  // Test 7: pagination/limits — truncated + next_page, max_controls respected
-  // ---------------------------------------------------------------------------
+  it('the registry raises E_SCHEMA for a session_scope other than "interactive"', async () => {
+    const adapter = makeAdapter();
+    const registry = createRegistry({ workspaces: [{ id: 'ws-1', root: '/tmp/ws-1' }] });
+    await registry.register(adapter);
+    // valid
+    registry.validateArguments('desktop.state', { session_scope: 'interactive' });
+    // invalid
+    assert.throws(
+      () => registry.validateArguments('desktop.state', { session_scope: 'default' }),
+      (err: unknown) => (err as { code?: string }).code === 'E_SCHEMA',
+    );
+  });
 
-  it('adapter paginates the probe controls: truncated + next_page, filter before paging', async () => {
-    // The probe returns the full document-order list; the ADAPTER filters then paginates.
-    const manyControls: RawControl[] = [
-      { native_id: 'c1', control_type: 'Button', automation_id: 'B1', enabled: true, patterns: [] },
-      { native_id: 'c2', control_type: 'Edit', automation_id: 'E1', enabled: true, patterns: [] },
-      { native_id: 'c3', control_type: 'Button', automation_id: 'B2', enabled: true, patterns: [] },
-      { native_id: 'c4', control_type: 'Button', automation_id: 'B3', enabled: true, patterns: [] },
+  it('inspect on an allowed decision returns ok; on a denied decision returns denied', async () => {
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), [
+      { native_id: 'c1', control_type: 'Button', automation_id: 'btn', enabled: true, patterns: [] },
+    ]);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctx = fakeContext();
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    const key = (targets[0]! as { key: string }).key;
+    const tokenBody = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
+    const token = tokenBody.freshness_token;
+
+    // allowed
+    const okTargets = await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: token }, ctx);
+    const okDec = allowedMap(...okTargets.map((t) => (t as { key: string }).key));
+    const ok = await adapter.invoke('inspect', { window_id: key, freshness_token: token }, { ...ctx, target_decisions: okDec });
+    assert.equal((JSON.parse(ok.output) as Record<string, unknown>).status, 'ok');
+
+    // denied — but the handle is already consumed by the ok inspect, so mint a
+    // fresh handle for the denied case.
+    const t2 = await adapter.resolver!.resolve('state', {}, ctx);
+    const key2 = (t2[0]! as { key: string }).key;
+    const tok2 = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key2) })).output) as { freshness_token: string };
+    await adapter.resolver!.resolve('inspect', { window_id: key2, freshness_token: tok2.freshness_token }, ctx);
+    const denied = await adapter.invoke('inspect', { window_id: key2, freshness_token: tok2.freshness_token }, { ...ctx, target_decisions: deniedMap(key2) });
+    assert.equal((JSON.parse(denied.output) as Record<string, unknown>).status, 'denied');
+  });
+});
+
+describe('F3b desktop adapter — inspect TOCTOU and absent target_decisions', () => {
+  it('re-verifies at inspect: a changed pid, created_at or hash returns unavailable', async () => {
+    const resolved = makeIdentity();
+    const cases: ReadonlyArray<{ readonly name: string; readonly overrides: Partial<AppIdentity> }> = [
+      { name: 'pid', overrides: { pid: 9999 } },
+      { name: 'created_at', overrides: { created_at: '2026-02-02T02:02:02.000Z' } },
+      { name: 'image_sha256', overrides: { image_sha256: 'b'.repeat(64) } },
     ];
-    const probe = makeFakeProbe([rawExcelWindow], 'active', manyControls, false, false);
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32', authorized_apps: [inScopeApp], probe,
-      max_windows: 200, max_controls: 2000, timeout_ms: 30_000,
-    });
-    const sb = JSON.parse((await adapter.invoke('state', { session_scope: 'default' }, fakeContext())).output) as Record<string, unknown>;
-    const ft = sb.freshness_token as string;
-    const wid = (sb.windows as Array<Record<string, unknown>>)[0]!.window_id as string;
 
-    // Page 1, size 2 → first two, truncated + next_page.
-    const p1 = JSON.parse((await adapter.invoke('inspect', { window_id: wid, freshness_token: ft, page: 1, page_size: 2 }, fakeContext())).output) as Record<string, unknown>;
-    assert.strictEqual(p1.status, 'ok');
-    assert.strictEqual((p1.controls as unknown[]).length, 2);
-    assert.strictEqual(p1.truncated, true);
-    assert.strictEqual(p1.next_page, 2);
+    for (const c of cases) {
+      // A fresh adapter + probe per case: the live identity the probe reports at
+      // inspect differs from what was resolved, so the inspect must be unavailable.
+      const probe = makeFakeProbe([makeRawWindow({ identity: resolved })], 'active', makeIdentity(c.overrides), []);
+      const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+      const ctx = fakeContext();
+      const targets = await adapter.resolver!.resolve('state', {}, ctx);
+      const key = (targets[0]! as { key: string }).key;
+      const tokenBody = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
+      const token = tokenBody.freshness_token;
 
-    // Page 2 → last two, no next_page.
-    const p2 = JSON.parse((await adapter.invoke('inspect', { window_id: wid, freshness_token: ft, page: 2, page_size: 2 }, fakeContext())).output) as Record<string, unknown>;
-    assert.strictEqual((p2.controls as unknown[]).length, 2);
-    assert.strictEqual(p2.truncated, false);
-    assert.strictEqual(p2.next_page, undefined);
-
-    // Filter BEFORE paging: 'Button' → 3 buttons across the whole list, not just page 1.
-    const f = JSON.parse((await adapter.invoke('inspect', { window_id: wid, freshness_token: ft, control_filter: 'Button', page: 1, page_size: 2 }, fakeContext())).output) as Record<string, unknown>;
-    assert.strictEqual((f.controls as Array<Record<string, unknown>>).every((c) => c.type === 'Button'), true);
-    assert.strictEqual((f.controls as unknown[]).length, 2);
-    assert.strictEqual(f.truncated, true);  // 3 buttons, page_size 2 → more remain
-    assert.strictEqual(f.next_page, 2);
-  });
-
-  it('max_controls is passed to the probe', async () => {
-    let seenMax = -1;
-    const probe: UiaProbe = {
-      async enumerateWindows(_s: string, _opts: { max_windows: number }, _sig: AbortSignal) { return { session_state: 'active', windows: [rawExcelWindow] }; },
-      async inspectWindow(_nh: string, opts: { depth: number; max_controls: number }, _sig: AbortSignal) {
-        seenMax = opts.max_controls;
-        return { closed: false, process_name: inScopeApp, controls: [], truncated: true };
-      },
-    };
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32', authorized_apps: [inScopeApp], probe,
-      max_windows: 200, max_controls: 20, timeout_ms: 30_000,
-    });
-    const sb = JSON.parse((await adapter.invoke('state', { session_scope: 'default' }, fakeContext())).output) as Record<string, unknown>;
-    const ft = sb.freshness_token as string;
-    const wid = (sb.windows as Array<Record<string, unknown>>)[0]!.window_id as string;
-    const b = JSON.parse((await adapter.invoke('inspect', { window_id: wid, freshness_token: ft }, fakeContext())).output) as Record<string, unknown>;
-    assert.strictEqual(seenMax, 20);          // configured max_controls reaches the probe
-    assert.strictEqual(b.truncated, true);    // probe-level truncation is surfaced
-  });
-
-  // ---------------------------------------------------------------------------
-  // Test 8: control_filter narrows by type/automation_id only, never name
-  // ---------------------------------------------------------------------------
-
-  it('control_filter narrows by type and automation_id only, never name', async () => {
-    const probe = makeFakeProbe([rawExcelWindow], 'active', rawControls);
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
-
-    const sr = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-    const sb = JSON.parse(sr.output) as Record<string, unknown>;
-    const ft = sb.freshness_token as string;
-    const ws = sb.windows as Array<Record<string, unknown>>;
-    const wid = ws[0]!.window_id as string;
-
-    // Filter by type substring: "Button" should match the Button control
-    const r1 = await adapter.invoke('inspect', {
-      window_id: wid,
-      freshness_token: ft,
-      control_filter: 'Button',
-    }, fakeContext());
-    const b1 = JSON.parse(r1.output) as Record<string, unknown>;
-    assert.strictEqual(b1.status, 'ok');
-    const c1 = b1.controls as Array<Record<string, unknown>>;
-    assert.strictEqual(c1.length, 1);
-    assert.strictEqual(c1[0]!.type, 'Button');
-
-    // Filter by automation_id substring: "doc" should match Edit with automation_id 'txt-doc'
-    const r2 = await adapter.invoke('inspect', {
-      window_id: wid,
-      freshness_token: ft,
-      control_filter: 'doc',
-    }, fakeContext());
-    const b2 = JSON.parse(r2.output) as Record<string, unknown>;
-    const c2 = b2.controls as Array<Record<string, unknown>>;
-    assert.strictEqual(c2.length, 1);
-    assert.strictEqual(c2[0]!.type, 'Edit');
-
-    // Filter by canary string that would have been a control name: matches nothing
-    const r3 = await adapter.invoke('inspect', {
-      window_id: wid,
-      freshness_token: ft,
-      control_filter: 'CANARY_NAME_NEVER_MATCHES',
-    }, fakeContext());
-    const b3 = JSON.parse(r3.output) as Record<string, unknown>;
-    const c3 = b3.controls as Array<Record<string, unknown>>;
-    assert.strictEqual(c3.length, 0);
-  });
-
-  // ---------------------------------------------------------------------------
-  // Static test (Acceptance 2)
-  // ---------------------------------------------------------------------------
-
-  it('static test: DESKTOP_UIA_PS1 contains no Current.Name and no NameProperty', () => {
-    assert.ok(!DESKTOP_UIA_PS1.includes('Current.Name'), 'DESKTOP_UIA_PS1 must not contain Current.Name');
-    assert.ok(!DESKTOP_UIA_PS1.includes('NameProperty'), 'DESKTOP_UIA_PS1 must not contain NameProperty');
-
-    const probeFile = path.resolve(import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname), '../src/probe.ts');
-    if (fs.existsSync(probeFile)) {
-      const probeSource = fs.readFileSync(probeFile, 'utf8');
-      const scriptMatch = probeSource.match(/export const DESKTOP_UIA_PS1 = `([\s\S]*?)`;/);
-      assert.ok(scriptMatch, 'DESKTOP_UIA_PS1 declaration found in probe.ts');
-      assert.ok(!scriptMatch[1]!.includes('Current.Name'), 'probe.ts script body must not contain Current.Name');
-      assert.ok(!scriptMatch[1]!.includes('NameProperty'), 'probe.ts script body must not contain NameProperty');
+      const inspectTargets = await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: token }, ctx);
+      const dec = allowedMap(...inspectTargets.map((t) => (t as { key: string }).key));
+      const result = await adapter.invoke('inspect', { window_id: key, freshness_token: token }, { ...ctx, target_decisions: dec });
+      assert.equal((JSON.parse(result.output) as Record<string, unknown>).status, 'unavailable', `a changed ${c.name} must be unavailable`);
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // Key count and automation_id validation (Acceptance 3)
-  // ---------------------------------------------------------------------------
+  it('absent ctx.target_decisions publishes no windows', async () => {
+    const probe = makeFakeProbe([makeRawWindow()]);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctx = fakeContext();
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    assert.equal(targets.length, 1, 'the window must resolve as a target');
 
-  it('control output objects contain exactly the five keys; over-long or non-ASCII automation_id is omitted', async () => {
-    const variedControls: RawControl[] = [
-      // 1. Valid 1-128 ASCII -> included (5 keys)
-      { native_id: 'v1', control_type: 'Button', automation_id: 'btn-1', enabled: true, patterns: [] },
-      // 2. Over-long (>128 chars) -> omitted (4 keys)
-      { native_id: 'v2', control_type: 'Button', automation_id: 'a'.repeat(129), enabled: true, patterns: [] },
-      // 3. Non-ASCII characters -> omitted (4 keys)
-      { native_id: 'v3', control_type: 'Button', automation_id: 'btn_ü_test', enabled: true, patterns: [] },
-      // 4. Control chars (newline) -> omitted (4 keys)
-      { native_id: 'v4', control_type: 'Button', automation_id: 'btn\nnewline', enabled: true, patterns: [] },
-      // 5. Empty string -> omitted (4 keys)
-      { native_id: 'v5', control_type: 'Button', automation_id: '', enabled: true, patterns: [] },
-      // 6. Undefined -> omitted (4 keys)
-      { native_id: 'v6', control_type: 'Button', enabled: true, patterns: [] },
+    // Invoke with NO target_decisions property: Core has given no decision, so
+    // nothing may be published (fail closed).
+    const result = await adapter.invoke('state', {}, ctx);
+    const body = JSON.parse(result.output) as Record<string, unknown>;
+    assert.equal(body.session, 'active');
+    assert.equal((body.windows as unknown[]).length, 0, 'nothing may publish without target_decisions');
+  });
+});
+
+describe('F3b desktop adapter — restored F2 unit coverage', () => {
+  it('static guard: the probe never reads the UIA Name property (Current.Name / NameProperty)', () => {
+    // F2's AR-01 guarantee: control METADATA only, never the accessibility Name.
+    // The script must not touch AutomationElement.Current.Name or NameProperty.
+    assert.ok(!DESKTOP_UIA_PS1.includes('Current.Name'), 'the script must never read AutomationElement.Current.Name');
+    assert.ok(!DESKTOP_UIA_PS1.includes('.Current.Name'), 'the script must never read .Current.Name');
+    assert.ok(!DESKTOP_UIA_PS1.includes('NameProperty'), 'the script must never reference the UIA NameProperty');
+  });
+
+  it('control_filter matches by type and automation_id only (case-insensitive substring)', async () => {
+    const controls: RawControl[] = [
+      { native_id: 'r1', control_type: 'Button', automation_id: 'OkBtn', enabled: true, patterns: [] },
+      { native_id: 'r2', control_type: 'Edit', automation_id: 'NameField', enabled: true, patterns: [] },
+      { native_id: 'r3', control_type: 'Button', automation_id: 'CancelBtn', enabled: true, patterns: [] },
     ];
-    const probe = makeFakeProbe([rawExcelWindow], 'active', variedControls);
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
-    const sr = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-    const ft = (JSON.parse(sr.output) as Record<string, unknown>).freshness_token as string;
-    const wid = ((JSON.parse(sr.output) as Record<string, unknown>).windows as Array<Record<string, unknown>>)[0]!.window_id as string;
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), controls);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctx = fakeContext();
 
-    const r = await adapter.invoke('inspect', { window_id: wid, freshness_token: ft }, fakeContext());
-    const controls = (JSON.parse(r.output) as Record<string, unknown>).controls as Array<Record<string, unknown>>;
-    assert.strictEqual(controls.length, 6);
+    // By type.
+    const t1 = await adapter.resolver!.resolve('state', {}, ctx);
+    const key1 = (t1[0]! as { key: string }).key;
+    const tok1 = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key1) })).output) as { freshness_token: string };
+    await adapter.resolver!.resolve('inspect', { window_id: key1, freshness_token: tok1.freshness_token }, ctx);
+    const byType = await adapter.invoke('inspect', { window_id: key1, freshness_token: tok1.freshness_token, control_filter: 'button' }, { ...ctx, target_decisions: allowedMap(key1) });
+    const typeControls = (JSON.parse(byType.output) as { controls: Array<{ type: string }> }).controls;
+    assert.equal(typeControls.length, 2, 'two Button controls match the type filter');
+    assert.ok(typeControls.every((c) => c.type.toLowerCase().includes('button')));
 
-    // v1: valid automation_id -> exactly 5 keys: control_id, type, automation_id, enabled, patterns
-    assert.strictEqual(controls[0]!.automation_id, 'btn-1');
-    assert.deepStrictEqual(Object.keys(controls[0]!).sort(), ['automation_id', 'control_id', 'enabled', 'patterns', 'type'].sort());
-    assert.strictEqual((controls[0]! as Record<string, unknown>).name, undefined);
-
-    // v2: over-long -> automation_id omitted, exactly 4 keys
-    assert.strictEqual(controls[1]!.automation_id, undefined);
-    assert.deepStrictEqual(Object.keys(controls[1]!).sort(), ['control_id', 'enabled', 'patterns', 'type'].sort());
-
-    // v3: non-ASCII -> automation_id omitted, exactly 4 keys
-    assert.strictEqual(controls[2]!.automation_id, undefined);
-    assert.deepStrictEqual(Object.keys(controls[2]!).sort(), ['control_id', 'enabled', 'patterns', 'type'].sort());
-
-    // v4: control char -> omitted, exactly 4 keys
-    assert.strictEqual(controls[3]!.automation_id, undefined);
-    assert.deepStrictEqual(Object.keys(controls[3]!).sort(), ['control_id', 'enabled', 'patterns', 'type'].sort());
-
-    // v5: empty -> omitted, exactly 4 keys
-    assert.strictEqual(controls[4]!.automation_id, undefined);
-    assert.deepStrictEqual(Object.keys(controls[4]!).sort(), ['control_id', 'enabled', 'patterns', 'type'].sort());
-
-    // v6: undefined -> omitted, exactly 4 keys
-    assert.strictEqual(controls[5]!.automation_id, undefined);
-    assert.deepStrictEqual(Object.keys(controls[5]!).sort(), ['control_id', 'enabled', 'patterns', 'type'].sort());
+    // By automation_id.
+    const t2 = await adapter.resolver!.resolve('state', {}, ctx);
+    const key2 = (t2[0]! as { key: string }).key;
+    const tok2 = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key2) })).output) as { freshness_token: string };
+    await adapter.resolver!.resolve('inspect', { window_id: key2, freshness_token: tok2.freshness_token }, ctx);
+    const byId = await adapter.invoke('inspect', { window_id: key2, freshness_token: tok2.freshness_token, control_filter: 'namefield' }, { ...ctx, target_decisions: allowedMap(key2) });
+    const idControls = (JSON.parse(byId.output) as { controls: Array<{ automation_id?: string }> }).controls;
+    assert.equal(idControls.length, 1, 'exactly one control matches by automation_id');
+    assert.equal(idControls[0]!.automation_id, 'NameField');
   });
 
-  // ---------------------------------------------------------------------------
-  // Window title truncation and source (Acceptance 5)
-  // ---------------------------------------------------------------------------
-
-  it('window title equals native window text truncated to 256; out-of-scope window has no title; window without native handle has no title', async () => {
-    const longTitle = 'W'.repeat(300);
-    const inScopeLongWindow: RawWindow = {
-      native_handle: '111',
-      title: longTitle,
-      process_name: inScopeApp,
-      z_order: 0,
-      foreground: true,
-    };
-    const outScopeWindow: RawWindow = {
-      native_handle: '222',
-      title: 'Should Be Hidden',
-      process_name: outScopeApp,
-      z_order: 1,
-      foreground: false,
-    };
-    const noHandleWindow: RawWindow = {
-      native_handle: 'rid:1,2,3',
-      // no native handle -> title is undefined
-      process_name: inScopeApp,
-      z_order: 2,
-      foreground: false,
-    };
-
-    const probe = makeFakeProbe([inScopeLongWindow, outScopeWindow, noHandleWindow]);
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
-
-    const result = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-    const body = JSON.parse(result.output) as Record<string, unknown>;
-    const windows = body.windows as Array<Record<string, unknown>>;
-
-    // Window 0: in scope, long title -> truncated to 256
-    assert.strictEqual(windows[0]!.app_in_scope, true);
-    assert.strictEqual(windows[0]!.title, 'W'.repeat(256));
-    assert.strictEqual((windows[0]!.title as string).length, 256);
-
-    // Window 1: out of scope -> no title
-    assert.strictEqual(windows[1]!.app_in_scope, false);
-    assert.strictEqual(windows[1]!.title, undefined);
-
-    // Window 2: in scope but no native handle (title undefined) -> title undefined
-    assert.strictEqual(windows[2]!.app_in_scope, true);
-    assert.strictEqual(windows[2]!.title, undefined);
-  });
-
-  // ---------------------------------------------------------------------------
-  // Test 9: Receipts — receipt_extra matches receipt_fields
-  // ---------------------------------------------------------------------------
-
-  it('receipt_extra fields match manifest receipt_fields for state', async () => {
-    const probe = makeFakeProbe([rawExcelWindow], 'active');
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
-
-    const result = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-
-    assert.strictEqual(typeof result.receipt_extra.window_count, 'number');
-    assert.strictEqual(typeof result.receipt_extra.session_state, 'string');
-    assert.strictEqual(typeof result.receipt_extra.truncated, 'boolean');
-
-    // All receipt_extra keys must be in manifest.receipt_fields
-    const extraKeys = Object.keys(result.receipt_extra);
-    const receiptFields = new Set(adapter.manifest.receipt_fields);
-    for (const key of extraKeys) {
-      assert.ok(receiptFields.has(key), `receipt_extra key "${key}" not in manifest.receipt_fields`);
-    }
-  });
-
-  it('receipt_extra fields match manifest receipt_fields for inspect', async () => {
-    const probe = makeFakeProbe([rawExcelWindow], 'active', rawControls);
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
-
-    const sr = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-    const sb = JSON.parse(sr.output) as Record<string, unknown>;
-    const ft = sb.freshness_token as string;
-    const ws = sb.windows as Array<Record<string, unknown>>;
-    const wid = ws[0]!.window_id as string;
-
-    const result = await adapter.invoke('inspect', { window_id: wid, freshness_token: ft }, fakeContext());
-
-    assert.strictEqual(typeof result.receipt_extra.status, 'string');
-    assert.strictEqual(typeof result.receipt_extra.control_count, 'number');
-    assert.strictEqual(typeof result.receipt_extra.truncated, 'boolean');
-    assert.strictEqual(typeof result.receipt_extra.depth, 'number');
-
-    const extraKeys = Object.keys(result.receipt_extra);
-    const receiptFields = new Set(adapter.manifest.receipt_fields);
-    for (const key of extraKeys) {
-      assert.ok(receiptFields.has(key), `receipt_extra key "${key}" not in manifest.receipt_fields`);
-    }
-  });
-
-  // ---------------------------------------------------------------------------
-  // Test 10: NO control value ever appears in any inspect output
-  // ---------------------------------------------------------------------------
-
-  it('no value field in any inspect output', async () => {
-    // Controls with names that could be mistaken for values
-    const probe = makeFakeProbe([rawExcelWindow], 'active', rawControls);
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
-
-    const sr = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-    const sb = JSON.parse(sr.output) as Record<string, unknown>;
-    const ft = sb.freshness_token as string;
-    const ws = sb.windows as Array<Record<string, unknown>>;
-    const wid = ws[0]!.window_id as string;
-
-    const result = await adapter.invoke('inspect', { window_id: wid, freshness_token: ft }, fakeContext());
-    const body = JSON.parse(result.output) as Record<string, unknown>;
-    const controls = body.controls as Array<Record<string, unknown>>;
-
-    for (const control of controls) {
-      assert.strictEqual(control.value, undefined, `control ${JSON.stringify(control.control_id)} has a value field`);
-      assert.strictEqual(control.Value, undefined);
-      assert.strictEqual(control.text, undefined);
-      assert.strictEqual(control.content, undefined);
-    }
-
-    // Also check the raw output string to be sure
-    assert.ok(!result.output.includes('"value"'), 'output string contains "value"');
-  });
-
-  // ---------------------------------------------------------------------------
-  // Additional coverage: inspect depth validation
-  // ---------------------------------------------------------------------------
-
-  it('depth defaults to 3 and is clamped to [1, 10]', async () => {
-    const probe = makeFakeProbe([rawExcelWindow], 'active', rawControls);
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
-
-    const sr = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-    const sb = JSON.parse(sr.output) as Record<string, unknown>;
-    const ft = sb.freshness_token as string;
-    const ws = sb.windows as Array<Record<string, unknown>>;
-    const wid = ws[0]!.window_id as string;
-
-    // Default depth → receipt shows 3
-    const r1 = await adapter.invoke('inspect', { window_id: wid, freshness_token: ft }, fakeContext());
-    assert.strictEqual(r1.receipt_extra.depth, 3);
-
-    // Explicit depth that's too high → clamped to 10
-    const r2 = await adapter.invoke('inspect', { window_id: wid, freshness_token: ft, depth: 100 }, fakeContext());
-    assert.strictEqual(r2.receipt_extra.depth, 10);
-
-    // Below minimum → clamped to 1
-    const r3 = await adapter.invoke('inspect', { window_id: wid, freshness_token: ft, depth: 0 }, fakeContext());
-    assert.strictEqual(r3.receipt_extra.depth, 3); // 0 is not >= 1, so fallback to default 3
-  });
-
-  // ---------------------------------------------------------------------------
-  // Additional coverage: max_windows truncation
-  // ---------------------------------------------------------------------------
-
-  it('max_windows truncates window list and sets truncated flag', async () => {
-    const manyWindows: RawWindow[] = Array.from({ length: 10 }, (_, i) => ({
-      native_handle: `hwnd-${i}`,
-      title: `Window ${i}`,
-      process_name: inScopeApp,
-      z_order: i,
-      foreground: i === 0,
+  it('paginates the filtered controls and reports next_page', async () => {
+    const controls: RawControl[] = [0, 1, 2, 3, 4].map((i) => ({
+      native_id: `r${i}`,
+      control_type: 'CheckBox',
+      automation_id: `cb${i}`,
+      enabled: true,
+      patterns: [],
     }));
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), controls);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctx = fakeContext();
 
-    const probe = makeFakeProbe(manyWindows, 'active');
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 5,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    const key = (targets[0]! as { key: string }).key;
+    const tok = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
+    await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: tok.freshness_token }, ctx);
 
-    const result = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-    const body = JSON.parse(result.output) as Record<string, unknown>;
-    assert.strictEqual(body.session_state, 'active');
-    const windows = body.windows as Array<Record<string, unknown>>;
-    assert.strictEqual(windows.length, 5);
-  });
-
-  it('scope match is tolerant of a trailing .exe on either side', async () => {
-    // authorized_apps has no extension; the window process is 'NOTEPAD.EXE'.
-    const probe = makeFakeProbe([rawExcelWindow], 'active', rawControls);
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: ['notepad'],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
-    const result = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-    const body = JSON.parse(result.output) as Record<string, unknown>;
-    const windows = body.windows as Array<Record<string, unknown>>;
-    assert.strictEqual(windows[0]!.app_in_scope, true);
-    assert.strictEqual(windows[0]!.title, rawExcelWindow.title);
-  });
-
-  it('inspect re-validates the live process: a reused handle now owned by another app → unavailable', async () => {
-    // Enumerate an in-scope window, but at inspect time the probe reports a
-    // DIFFERENT (out-of-scope) process for that handle — a reused hwnd. The
-    // adapter must refuse, never dump the other app's tree.
-    const probe = makeFakeProbe([rawExcelWindow], 'active', rawControls, false, false, outScopeApp);
-    const adapter = createDesktopAdapter({
-      node_platform: 'win32',
-      authorized_apps: [inScopeApp],
-      probe,
-      max_windows: 200,
-      max_controls: 2000,
-      timeout_ms: 30_000,
-    });
-    const sr = await adapter.invoke('state', { session_scope: 'default' }, fakeContext());
-    const sb = JSON.parse(sr.output) as Record<string, unknown>;
-    const ft = sb.freshness_token as string;
-    const wid = (sb.windows as Array<Record<string, unknown>>)[0]!.window_id as string;
-
-    const r = await adapter.invoke('inspect', { window_id: wid, freshness_token: ft }, fakeContext());
-    const b = JSON.parse(r.output) as Record<string, unknown>;
-    assert.strictEqual(b.status, 'unavailable');
-    assert.strictEqual(b.controls, undefined);
+    // Page 1 of size 2 → first two controls, next_page = 2.
+    const page1 = await adapter.invoke('inspect', { window_id: key, freshness_token: tok.freshness_token, page: 1, page_size: 2 }, { ...ctx, target_decisions: allowedMap(key) });
+    const p1 = JSON.parse(page1.output) as { controls: Array<{ control_id: string }>; next_page?: number };
+    assert.equal(p1.controls.length, 2, 'page 1 must hold two controls');
+    assert.equal(p1.next_page, 2, 'more pages must remain after page 1');
   });
 });

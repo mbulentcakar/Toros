@@ -79,6 +79,8 @@ export interface FixtureInstance {
   readonly hwnd: number;
   readonly pid: number;
   readonly process_name: string;
+  /** Absolute path to the renamed fixture executable copy (the OS image path). */
+  readonly image_path: string;
   /** Fresh temp dir holding the renamed fixture executable; removed on stopFixture. */
   readonly tempDir: string;
   readonly title: string;
@@ -164,6 +166,11 @@ export function startFixture(options: {
     let copyPath: string;
     try {
       tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'toros-fixture-'));
+      // `%TEMP%` can be reported as an 8.3 short path (e.g. NAME~1); expand it to
+      // the canonical long form so the fixture's image path satisfies Core's
+      // canonical-long-path rules and matches what QueryFullProcessImageName
+      // actually returns for the spawned process.
+      tempDir = fs.realpathSync.native(tempDir);
       copyPath = path.join(tempDir, `toros-fixture-${randomBytes(6).toString('hex')}.exe`);
       fs.copyFileSync(getPowershellPath(), copyPath);
     } catch (err) {
@@ -253,6 +260,7 @@ export function startFixture(options: {
                 hwnd: ready.hwnd,
                 pid: childPid,
                 process_name: fixtureProcessName,
+                image_path: copyPath,
                 tempDir,
                 title,
                 canaryPwd,
