@@ -331,6 +331,9 @@ async function seedRunningSend(path: string, job: string, receiptId: string, opt
     ended_at: null, outcome: 'running', artifact_refs: [], finding_refs: [],
     adapter_fields: { exchange_state: 'running' },
   } satisfies Receipt);
+  // Reconciliation only touches receipts that actually started (RR-04): a
+  // running send is past `action.started`, so seed that event too.
+  await store.appendEvent({ node_id: 'node', job_id: job, kind: 'action.started', payload: { receipt_id: receiptId } });
   await store.close();
 }
 
@@ -595,6 +598,7 @@ test('a restart re-arms the settlement deadline for an unexpired running send an
     artifact_refs: [], finding_refs: [], adapter_fields: { exchange_state: 'running' },
   };
   await store.putReceipt(seeded);
+  await store.appendEvent({ node_id: 'node', job_id: job, kind: 'action.started', payload: { receipt_id: 'future-deadline-send' } });
   await store.close();
 
   const core = createNodeCore({
@@ -849,6 +853,7 @@ test('Round3: a failed putReceipt in the deadline closure retries and closes on 
     adapter_fields: { exchange_state: 'running' },
   };
   await seedStore.putReceipt(seeded);
+  await seedStore.appendEvent({ node_id: 'node', job_id: job, kind: 'action.started', payload: { receipt_id: sendReceiptId } });
   await seedStore.close();
 
   // Inject one-shot putReceipt failure for the closure write.
@@ -999,6 +1004,9 @@ test('Round3: reconciliation closes multiple receipts even when one write fails;
     artifact_refs: [], finding_refs: [],
     adapter_fields: { exchange_state: 'running' },
   } satisfies Receipt);
+  await seedStore.appendEvent({ node_id: 'node', job_id: job, kind: 'action.started', payload: { receipt_id: goodId1 } });
+  await seedStore.appendEvent({ node_id: 'node', job_id: job, kind: 'action.started', payload: { receipt_id: goodId2 } });
+  await seedStore.appendEvent({ node_id: 'node', job_id: job, kind: 'action.started', payload: { receipt_id: failId } });
   await seedStore.close();
 
   // Inject putReceipt to fail only for the specifically failing receipt.
@@ -1587,6 +1595,8 @@ async function seedClosedSendWithoutEvent(
     artifact_refs: [], finding_refs: [],
     adapter_fields: { exchange_state: 'running', ...adapterFields },
   } satisfies Receipt);
+  // A closed (non-denied) send must have started before it could finish.
+  await store.appendEvent({ node_id: 'node', job_id: job, kind: 'action.started', payload: { receipt_id: receiptId } });
   await store.close();
   return endedAt;
 }
@@ -1875,6 +1885,124 @@ test('Round5: restart reconciliation recovers a missing finished event for a rea
 
   assert.equal(finalEvents.length, 1, 'a second reconciliation duplicated the finished event');
   assert.deepEqual(finalReceipt, midReceipt, 'the second reconciliation rewrote the receipt');
+});
+
+// ---------------------------------------------------------------------------
+// RR-04 — reconciliation never fabricates events. A denied `send` receipt (or
+// one with no `action.started` event) is skipped entirely: a restart must not
+// append an `action.finished` event for it.
+// ---------------------------------------------------------------------------
+
+test('RR-04: a denied send receipt is skipped by restart reconciliation and no finished event is fabricated', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'toros-rr4-denied-'));
+  const path = join(dir, 'node.sqlite');
+  const job = 'c0000001-0000-4000-8000-000000000001';
+
+  const store = await openStore({ path, nodeId: 'node' });
+  await store.createJob(sealEnvelope({
+    job_id: job, objective: 'rr4 denied send skip',
+    allowed_capabilities: ['settletest.send'],
+    allowed_workspaces: ['work'], acceptance: ['done'], forbidden: [],
+    max_actions: 10, max_retries: 0, expires_at: '2999-01-01T00:00:00Z',
+  }));
+  // A denied send: outcome 'denied', ended_at set, and only the two events a
+  // denial produces (action.requested, action.decided) — never action.started.
+  const deniedId = 'rr4-denied-send';
+  const envelopeDigest = (await store.getJob(job))!.envelope_digest;
+  await store.putReceipt({
+    receipt_id: deniedId, job_id: job, node_id: 'node',
+    session_id: 'rr4-denied-session', actor: 'coordinator',
+    capability: 'settletest.send',
+    arguments_normalized: null, arguments_digest: 'rr4-denied',
+    decision: { allow: false, code: ErrorCode.E_CAP_NOT_ALLOWED, reason: 'Denied' },
+    envelope_digest: envelopeDigest,
+    started_at: new Date(Date.now() - 120_000).toISOString(),
+    ended_at: new Date().toISOString(), outcome: 'denied',
+    artifact_refs: [], finding_refs: [],
+    adapter_fields: {},
+  } satisfies Receipt);
+  await store.appendEvent({ node_id: 'node', job_id: job, kind: 'action.requested', payload: { receipt_id: deniedId, capability: 'settletest.send' } });
+  await store.appendEvent({ node_id: 'node', job_id: job, kind: 'action.decided', payload: { allow: false, reason: 'Denied' } });
+  await store.close();
+
+  const core = createTestCore({
+    node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
+    port: 0, token, adapters: [sendOnlySettleAdapter()], observer: null, approval_required: [],
+  });
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+  await core.start(); // ← startup reconcile must skip the denied receipt
+
+  const pipeline = (core as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
+  await pipeline.reconcileCliSettlements();
+
+  const afterStore = await openStore({ path, nodeId: 'node' });
+  const receipt = await afterStore.getReceipt(deniedId);
+  const finishedEvents = (await afterStore.listEvents(job)).filter(
+    (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === deniedId,
+  );
+  await afterStore.close();
+
+  assert.equal(receipt?.outcome, 'denied', 'the denied receipt was rewritten by reconciliation');
+  assert.equal(finishedEvents.length, 0, 'reconciliation fabricated an action.finished event for a denied send');
+});
+
+test('RR-04: three restarts in a row never change the finished-event count for any receipt', async (t) => {
+  // Seed one deadline-closed send that is MISSING its finished event, and one
+  // that already has it. Three restarts in a row must recover the missing one
+  // exactly once and never append a second finished event to the other.
+  const settleTiming: SettlementTimingOptions = { settle_retry_delays: [100, 500, 2000], settle_retry_max_delay: 5000 };
+  const dir = await mkdtemp(join(tmpdir(), 'toros-rr4-three-restarts-'));
+  const path = join(dir, 'node.sqlite');
+  const job = 'c0000002-0000-4000-8000-000000000002';
+
+  const store = await openStore({ path, nodeId: 'node' });
+  await store.createJob(sealEnvelope({
+    job_id: job, objective: 'rr4 three restarts',
+    allowed_capabilities: ['settletest.send'],
+    allowed_workspaces: ['work'], acceptance: ['done'], forbidden: [],
+    max_actions: 10, max_retries: 0, expires_at: '2999-01-01T00:00:00Z',
+  }));
+  const envelopeDigest = (await store.getJob(job))!.envelope_digest;
+  const missingEventId = 'rr4-missing-finish-send';
+  const hasEventId = 'rr4-has-finish-send';
+  const endedAt = new Date().toISOString();
+  const startedAt = new Date(Date.now() - 120_000).toISOString();
+  const closed = (argumentsDigest: string): Receipt => ({
+    receipt_id: '', job_id: job, node_id: 'node', session_id: 'rr4-session', actor: 'coordinator',
+    capability: 'settletest.send', arguments_normalized: null, arguments_digest: argumentsDigest,
+    decision: { allow: true, reason: 'Allowed' }, envelope_digest: envelopeDigest,
+    started_at: startedAt, ended_at: endedAt, outcome: 'terminated',
+    artifact_refs: [], finding_refs: [], adapter_fields: { exchange_state: 'unsettled_deadline' },
+  });
+  await store.putReceipt({ ...closed('rr4-missing'), receipt_id: missingEventId });
+  await store.putReceipt({ ...closed('rr4-has'), receipt_id: hasEventId });
+  // Both started. The second already carries its finished event.
+  await store.appendEvent({ node_id: 'node', job_id: job, kind: 'action.started', payload: { receipt_id: missingEventId } });
+  await store.appendEvent({ node_id: 'node', job_id: job, kind: 'action.started', payload: { receipt_id: hasEventId } });
+  await store.appendEvent({ node_id: 'node', job_id: job, kind: 'action.finished', payload: { receipt_id: hasEventId, outcome: 'terminated', exchange_state: 'unsettled_deadline', exchange_error: null } });
+  await store.close();
+
+  const core = createTestCore({
+    node_id: 'node', db_path: path, workspaces: [{ id: 'work', root: tmpdir() }],
+    port: 0, token, adapters: [sendOnlySettleAdapter()], observer: null, approval_required: [],
+    pipeline_settlement: settleTiming,
+  });
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+  await core.start();
+  const pipeline = (core as unknown as { actionPipeline: { reconcileCliSettlements: () => Promise<void> } }).actionPipeline;
+
+  // Three reconciliations (three "restarts") in a row.
+  for (let i = 0; i < 3; i++) await pipeline.reconcileCliSettlements();
+
+  const afterStore = await openStore({ path, nodeId: 'node' });
+  const events = await afterStore.listEvents(job);
+  const count = (receiptId: string): number => events.filter(
+    (e) => e.kind === 'action.finished' && (e.payload as Record<string, unknown>).receipt_id === receiptId,
+  ).length;
+  await afterStore.close();
+
+  assert.equal(count(missingEventId), 1, 'the missing finished event was not recovered exactly once');
+  assert.equal(count(hasEventId), 1, 'a restart appended a second finished event to an already-finished receipt');
 });
 
 // End of all tests for this file
