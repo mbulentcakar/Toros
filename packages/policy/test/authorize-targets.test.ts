@@ -157,10 +157,11 @@ describe('@toros/policy authorizeTargets (amendment A8)', () => {
     assert.equal(policy.authorizeTargets(sealed.envelope, 'file.read', [appTarget('s')]).get('s'), 'denied');
   });
 
-  it('extracts the basename with Windows semantics: a forbidden token in a parent directory does not deny', () => {
-    // `image_path` is a Windows value. `path.win32.basename` yields `safe.exe`;
-    // a POSIX `path.basename` would treat the whole backslash string as one
-    // name and tokenise `forbidden` out of the directory, denying it wrongly.
+  it('denies an app when a forbidden term appears in any folder of the full image path (RR-01)', () => {
+    // RR-01: for app targets the forbidden check applies to the FULL image
+    // path — every folder and the file name — not just the basename. The old
+    // behaviour extracted only the basename, so a forbidden term in a parent
+    // directory went unnoticed.
     const sealed = sealEnvelope({
       job_id: '00000000-0000-0000-0000-000000000005',
       objective: 'test', allowed_capabilities: ['file.read'], allowed_workspaces: ['main'],
@@ -170,7 +171,21 @@ describe('@toros/policy authorizeTargets (amendment A8)', () => {
     });
     const policy = makePolicy(7);
     const identity = makeIdentity({ image_path: 'C:\\forbidden\\safe.exe' });
-    assert.equal(policy.authorizeTargets(sealed.envelope, 'file.read', [appTarget('dir-token', identity)]).get('dir-token'), 'allowed');
+    assert.equal(policy.authorizeTargets(sealed.envelope, 'file.read', [appTarget('dir-token', identity)]).get('dir-token'), 'denied');
+  });
+
+  it('denies a capability target that is allowed but forbidden (RR-03)', () => {
+    // `codex.start` is allowed by the envelope while `codex` is forbidden: the
+    // capability target is denied even though the allowlist alone would allow
+    // it.
+    const sealed = sealEnvelope({
+      job_id: '00000000-0000-0000-0000-000000000006',
+      objective: 'test', allowed_capabilities: ['codex.start'], allowed_workspaces: ['main'],
+      acceptance: ['done'], forbidden: ['codex'], max_actions: 3, max_retries: 2,
+      expires_at: '2030-01-01T00:00:00Z',
+    });
+    const policy = makePolicy(7);
+    assert.equal(policy.authorizeTargets(sealed.envelope, 'file.read', [capabilityTarget('c', 'codex.start')]).get('c'), 'denied');
   });
 
   it('denies an app whose session id differs from the node session', () => {
