@@ -8,7 +8,7 @@ import {
   type RawControl,
 } from '../src/adapter.js';
 import { DESKTOP_UIA_PS1 } from '../src/probe.js';
-import type { AdapterContext, AppIdentity, JsonValue } from '@toros/contracts';
+import type { AdapterContext, AppIdentity, AppRule, JsonValue } from '@toros/contracts';
 import { createRegistry } from '@toros/registry';
 
 // ---------------------------------------------------------------------------
@@ -53,7 +53,10 @@ function makeFakeProbe(
 ): UiaProbe & { enumerateCalls: number } {
   const probe = {
     enumerateCalls: 0,
-    async enumerateWindows(opts: { max_windows: number }, _signal: AbortSignal) {
+    async enumerateWindows(
+      opts: { max_windows: number; authorized_apps?: readonly AppRule[] },
+      _signal: AbortSignal,
+    ) {
       probe.enumerateCalls += 1;
       if (sessionState === 'active') {
         const maxw = opts.max_windows;
@@ -62,7 +65,11 @@ function makeFakeProbe(
       }
       return { session_state: sessionState };
     },
-    async inspectWindow(_nativeHandle: string, _opts: { depth: number; max_controls: number }, _signal: AbortSignal) {
+    async inspectWindow(
+      _nativeHandle: string,
+      _opts: { depth: number; max_controls: number; expected_identity?: AppIdentity },
+      _signal: AbortSignal,
+    ) {
       if (closed) return { closed: true as const };
       return { closed: false as const, identity: inspectIdentity, controls, truncated };
     },
@@ -469,7 +476,7 @@ describe('F3b desktop adapter — restored F2 unit coverage', () => {
     assert.equal(idControls[0]!.automation_id, 'NameField');
   });
 
-  it('paginates the filtered controls and reports next_page', async () => {
+  it('paginates via a single-use continuation token: pages 1–3 succeed, then stop', async () => {
     const controls: RawControl[] = [0, 1, 2, 3, 4].map((i) => ({
       native_id: `r${i}`,
       control_type: 'CheckBox',
@@ -486,10 +493,124 @@ describe('F3b desktop adapter — restored F2 unit coverage', () => {
     const tok = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
     await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: tok.freshness_token }, ctx);
 
-    // Page 1 of size 2 → first two controls, next_page = 2.
-    const page1 = await adapter.invoke('inspect', { window_id: key, freshness_token: tok.freshness_token, page: 1, page_size: 2 }, { ...ctx, target_decisions: allowedMap(key) });
-    const p1 = JSON.parse(page1.output) as { controls: Array<{ control_id: string }>; next_page?: number };
+    // Page 1 of size 2 → controls 0,1 and a continuation token.
+    const page1 = await adapter.invoke('inspect', { window_id: key, freshness_token: tok.freshness_token, page_size: 2 }, { ...ctx, target_decisions: allowedMap(key) });
+    const p1 = JSON.parse(page1.output) as { controls: Array<{ control_id: string }>; continuation_token?: string; truncated: boolean };
     assert.equal(p1.controls.length, 2, 'page 1 must hold two controls');
-    assert.equal(p1.next_page, 2, 'more pages must remain after page 1');
+    assert.ok(typeof p1.continuation_token === 'string' && p1.continuation_token.length > 0, 'page 1 must mint a continuation token');
+    assert.equal(p1.truncated, true, 'page 1 must report truncated when more pages remain');
+
+    // Page 2 → controls 2,3 and a fresh continuation token.
+    const token1 = p1.continuation_token!;
+    const page2 = await adapter.invoke('inspect', { session_scope: 'interactive', continuation_token: token1 }, { ...ctx, target_decisions: emptyMap() });
+    const p2 = JSON.parse(page2.output) as { controls: Array<{ control_id: string }>; continuation_token?: string; truncated: boolean };
+    assert.equal(p2.controls.length, 2, 'page 2 must hold two controls');
+    assert.ok(typeof p2.continuation_token === 'string' && p2.continuation_token.length > 0, 'page 2 must mint a continuation token');
+
+    // Page 3 → control 4 and no continuation token (list exhausted).
+    const token2 = p2.continuation_token!;
+    const page3 = await adapter.invoke('inspect', { session_scope: 'interactive', continuation_token: token2 }, { ...ctx, target_decisions: emptyMap() });
+    const p3 = JSON.parse(page3.output) as { controls: Array<{ control_id: string }>; continuation_token?: string; truncated: boolean };
+    assert.equal(p3.controls.length, 1, 'page 3 must hold the final control');
+    assert.equal(p3.continuation_token, undefined, 'the last page must not mint a continuation token');
+    assert.equal(p3.truncated, false, 'the last page must not report truncated');
+  });
+
+  it('replaying page 2\'s continuation token returns refresh_required (single-use)', async () => {
+    const controls: RawControl[] = [0, 1, 2, 3, 4].map((i) => ({
+      native_id: `r${i}`,
+      control_type: 'CheckBox',
+      automation_id: `cb${i}`,
+      enabled: true,
+      patterns: [],
+    }));
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), controls);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctx = fakeContext();
+
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    const key = (targets[0]! as { key: string }).key;
+    const tok = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
+    await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: tok.freshness_token }, ctx);
+
+    const page1 = await adapter.invoke('inspect', { window_id: key, freshness_token: tok.freshness_token, page_size: 2 }, { ...ctx, target_decisions: allowedMap(key) });
+    const p1 = JSON.parse(page1.output) as { continuation_token?: string };
+    const token1 = p1.continuation_token!;
+    assert.ok(token1, 'page 1 must mint a continuation token');
+
+    const page2 = await adapter.invoke('inspect', { session_scope: 'interactive', continuation_token: token1 }, { ...ctx, target_decisions: emptyMap() });
+    const p2 = JSON.parse(page2.output) as { continuation_token?: string };
+    const token2 = p2.continuation_token!;
+    assert.ok(token2, 'page 2 must mint a continuation token');
+
+    // Page 3 via token2 succeeds once.
+    const page3 = await adapter.invoke('inspect', { session_scope: 'interactive', continuation_token: token2 }, { ...ctx, target_decisions: emptyMap() });
+    assert.equal((JSON.parse(page3.output) as { status: string }).status, 'ok');
+
+    // Replaying page 2's token (token2) after it was spent → refresh_required.
+    const replay = await adapter.invoke('inspect', { session_scope: 'interactive', continuation_token: token2 }, { ...ctx, target_decisions: emptyMap() });
+    assert.equal((JSON.parse(replay.output) as { status: string }).status, 'refresh_required');
+  });
+
+  it('a continuation token from a foreign actor returns refresh_required', async () => {
+    const controls: RawControl[] = [0, 1, 2].map((i) => ({
+      native_id: `r${i}`,
+      control_type: 'CheckBox',
+      automation_id: `cb${i}`,
+      enabled: true,
+      patterns: [],
+    }));
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), controls);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctxA = fakeContext({ actor: 'actor-a' });
+
+    const targets = await adapter.resolver!.resolve('state', {}, ctxA);
+    const key = (targets[0]! as { key: string }).key;
+    const tok = JSON.parse((await adapter.invoke('state', {}, { ...ctxA, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
+    await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: tok.freshness_token }, ctxA);
+
+    const page1 = await adapter.invoke('inspect', { window_id: key, freshness_token: tok.freshness_token, page_size: 2 }, { ...ctxA, target_decisions: allowedMap(key) });
+    const token1 = (JSON.parse(page1.output) as { continuation_token?: string }).continuation_token!;
+    assert.ok(token1, 'page 1 must mint a continuation token');
+
+    // A different actor presenting the same token → refresh_required.
+    const ctxB = fakeContext({ actor: 'actor-b' });
+    const result = await adapter.invoke('inspect', { session_scope: 'interactive', continuation_token: token1 }, { ...ctxB, target_decisions: emptyMap() });
+    assert.equal((JSON.parse(result.output) as { status: string }).status, 'refresh_required');
+  });
+
+  it('an expired continuation token returns refresh_required (the 60 s TTL)', async () => {
+    const controls: RawControl[] = [0, 1, 2].map((i) => ({
+      native_id: `r${i}`,
+      control_type: 'CheckBox',
+      automation_id: `cb${i}`,
+      enabled: true,
+      patterns: [],
+    }));
+    let nowMs = 0;
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), controls);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe, () => nowMs);
+    const ctx = fakeContext();
+
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    const key = (targets[0]! as { key: string }).key;
+    const tok = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
+    await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: tok.freshness_token }, ctx);
+
+    const page1 = await adapter.invoke('inspect', { window_id: key, freshness_token: tok.freshness_token, page_size: 2 }, { ...ctx, target_decisions: allowedMap(key) });
+    const token1 = (JSON.parse(page1.output) as { continuation_token?: string }).continuation_token!;
+    assert.ok(token1, 'page 1 must mint a continuation token');
+
+    // Advance past the 60 s TTL and present the token.
+    nowMs = 61_000;
+    const result = await adapter.invoke('inspect', { session_scope: 'interactive', continuation_token: token1 }, { ...ctx, target_decisions: emptyMap() });
+    assert.equal((JSON.parse(result.output) as { status: string }).status, 'refresh_required');
+  });
+
+  it('an unknown continuation token returns refresh_required', async () => {
+    const adapter = makeAdapter();
+    const ctx = fakeContext();
+    const result = await adapter.invoke('inspect', { session_scope: 'interactive', continuation_token: 'bogus-token' }, { ...ctx, target_decisions: emptyMap() });
+    assert.equal((JSON.parse(result.output) as { status: string }).status, 'refresh_required');
   });
 });

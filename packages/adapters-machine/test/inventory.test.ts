@@ -44,11 +44,12 @@ function parseOutput(result: { output: string }): Record<string, unknown> {
 }
 
 /**
- * An allow-all decisions map keyed as `<adapterId>.inventory`. The AR-09 filter
- * maps a decision key to its adapter via `key.split('.')[0]`, so this lets tests
- * that exercise readiness (not the job-scope filter) pass explicit, per-adapter
- * decisions for every entry they expect to see in full. Absent decisions now
- * mean "all unauthorized" (AR-F5 round 3, P2), so a full read must be asked for.
+ * An allow-all decisions map keyed as `<adapterId>.inventory`. The job-scope
+ * filter maps a decision key to its adapter via `key.split('.')[0]`, so this
+ * lets tests that exercise readiness (not the job-scope filter) pass explicit,
+ * per-adapter decisions for every entry they expect to see. Absent decisions
+ * mean "no adapter is allowed", so nothing is reported (RR-03): a full read
+ * must be asked for.
  */
 function allowDecisions(...adapterIds: readonly string[]): TargetDecisions {
   return new Map(adapterIds.map((id) => [`${id}.inventory`, 'allowed' as const]));
@@ -124,6 +125,19 @@ const ABSENT_FILE_PROBE: MachineProbe = {
   id: 'absent-file',
   platforms: ['linux', 'win32', 'darwin'],
   detect: { kind: 'file', path: '/tmp/__toros_nonexistent_file_xyzzy_2026__' },
+};
+
+/**
+ * A win32 executable probe used by the drive-reader cache tests. Its adapter is
+ * allowed (so the drive reader runs), and the tests inject `pathEnv: () => ''`
+ * so the executable walk touches no real filesystem path. Detection returns
+ * `missing_prerequisite`, which those tests do not read — they assert on the
+ * drive reader's call count and budget, not on entries.
+ */
+const DRIVE_READER_PROBE: MachineProbe = {
+  id: 'drive-reader-probe',
+  platforms: ['win32'],
+  detect: { kind: 'executable', name: '__toros_drive_reader_probe__' },
 };
 
 // ---------------------------------------------------------------------------
@@ -560,7 +574,7 @@ describe('machine.inventory — AR-08 local-fixed PATH filtering', () => {
       pathEnv: () => 'C:\\tools;D:\\other',
     });
 
-    const result = await adapter.invoke('inventory', {}, makeCtx());
+    const result = await adapter.invoke('inventory', {}, makeCtx(undefined, allowDecisions('findme')));
     const output = parseOutput(result);
 
     // Both drive entries are dropped (nothing is known-fixed), nothing touched.
@@ -627,15 +641,13 @@ describe('machine.inventory — AR-09 job-scoped filter', () => {
     await adapter.dispose();
   });
 
-  it('a job with only machine.inventory sees other adapters as unauthorized, bare', async () => {
-    // An absent file probe whose backs_adapter is 'desktop' and whose adapter
-    // capabilities are denied: it must be probed (so the internal entry carries
-    // a missing_prerequisite reason AND a backs_adapter), then fully redacted.
+  it('an out-of-job adapter is omitted entirely and its probe is never touched (RR-03)', async () => {
+    const { access, calls } = recordingAccess();
     const desktopProbe: MachineProbe = {
       id: 'desktop-probe',
       platforms: ['win32'],
       backs_adapter: 'desktop',
-      detect: { kind: 'file', path: '\\___toros_nonexistent_desktop___' },
+      detect: { kind: 'file', path: 'C:\\__toros_nonexistent_desktop__.exe' },
     };
     const adapter = makeTestAdapter({
       node_platform: 'win32',
@@ -644,6 +656,7 @@ describe('machine.inventory — AR-09 job-scoped filter', () => {
       registered_capabilities: () => ['machine.inventory', 'desktop.state', 'desktop.inspect'],
       timeout_ms: 5_000,
       driveTypes: fixedDriveTypes(['c']),
+      access,
     });
 
     const decisions: TargetDecisions = new Map([
@@ -659,14 +672,12 @@ describe('machine.inventory — AR-09 job-scoped filter', () => {
     assert.ok(machine);
     assert.equal(machine['readiness'], 'registered', 'machine.inventory itself is always in full');
 
-    const desktop = entries.find((e) => e['id'] === 'desktop-probe');
-    assert.ok(desktop);
-    assert.equal(desktop['readiness'], 'unauthorized');
-    assert.deepEqual(
-      Object.keys(desktop).sort(),
-      ['id', 'readiness'],
-      'an unauthorized entry must carry no reason, platforms, or backs_adapter',
-    );
+    assert.equal(entries.find((e) => e['id'] === 'desktop-probe'), undefined,
+      'an out-of-job adapter must be omitted entirely, never reduced to an unauthorized stub');
+    assert.equal(entries.find((e) => e['id'] === 'desktop'), undefined,
+      'a registered adapter with no allowed capability must be omitted entirely');
+    // Zero access: the out-of-job probe's filesystem detection never ran.
+    assert.equal(calls.length, 0, `expected zero access calls for out-of-job probes, got ${JSON.stringify(calls)}`);
 
     await adapter.dispose();
   });
@@ -698,7 +709,7 @@ describe('machine.inventory — AR-09 job-scoped filter', () => {
     await adapter.dispose();
   });
 
-  it('absent target_decisions reduces every entry to unauthorized, fail closed', async () => {
+  it('absent target_decisions reports nothing, fail closed (RR-03)', async () => {
     const adapter = makeTestAdapter({
       node_platform: 'win32',
       probes: [],
@@ -709,21 +720,12 @@ describe('machine.inventory — AR-09 job-scoped filter', () => {
     });
 
     // makeCtx() with no decisions → ctx.target_decisions is undefined, which
-    // must mean "empty decision map", so *every* entry fails closed — including
-    // machine.inventory itself (AR-F5 round 3, P2).
+    // must mean "empty decision map", so no adapter is allowed and nothing is
+    // reported — not even machine.inventory itself (RR-03).
     const entries = parseOutput(await adapter.invoke('inventory', {}, makeCtx()))
       ['entries'] as Array<Record<string, unknown>>;
 
-    assert.equal(entries.length, 2);
-    for (const entry of entries) {
-      assert.deepEqual(
-        Object.keys(entry).sort(),
-        ['id', 'readiness'],
-        `entry ${entry['id']} must be bare under absent decisions`,
-      );
-      assert.equal(entry['readiness'], 'unauthorized');
-    }
-    assert.ok(entries.some((e) => e['id'] === 'machine'), 'machine.inventory itself is unauthorized');
+    assert.equal(entries.length, 0, 'absent decisions must report no entries (all omitted)');
 
     await adapter.dispose();
   });
@@ -794,30 +796,31 @@ describe('machine.inventory — drive reader budget & cache', () => {
     let clockMs = 0;
     const adapter = makeTestAdapter({
       node_platform: 'win32',
-      probes: [],
+      probes: [DRIVE_READER_PROBE],
       registered_adapter_ids: () => [],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
       driveTypes: reader,
       now: () => clockMs,
+      pathEnv: () => '',
     });
 
-    await adapter.invoke('inventory', {}, makeCtx());
+    await adapter.invoke('inventory', {}, makeCtx(undefined, allowDecisions('drive-reader-probe')));
     assert.equal(calls, 1, 'first invoke reads the drive type');
     // budget = min(3000, floor(5000 / 2)) = 2500
     assert.equal(lastBudgetMs, 2_500, 'reader got its own bounded budget, not the action timeout');
 
-    await adapter.invoke('inventory', {}, makeCtx());
+    await adapter.invoke('inventory', {}, makeCtx(undefined, allowDecisions('drive-reader-probe')));
     assert.equal(calls, 1, 'second invoke within TTL is served from cache');
 
     // Just inside the 5-minute TTL: still cached.
     clockMs = 5 * 60 * 1_000 - 1;
-    await adapter.invoke('inventory', {}, makeCtx());
+    await adapter.invoke('inventory', {}, makeCtx(undefined, allowDecisions('drive-reader-probe')));
     assert.equal(calls, 1, 'still within TTL → cache');
 
     // One past the TTL: cache is stale, reader is called again.
     clockMs = 5 * 60 * 1_000 + 1;
-    await adapter.invoke('inventory', {}, makeCtx());
+    await adapter.invoke('inventory', {}, makeCtx(undefined, allowDecisions('drive-reader-probe')));
     assert.equal(calls, 2, 'past TTL → re-read');
 
     await adapter.dispose();
@@ -832,16 +835,17 @@ describe('machine.inventory — drive reader budget & cache', () => {
 
     const adapter = makeTestAdapter({
       node_platform: 'win32',
-      probes: [],
+      probes: [DRIVE_READER_PROBE],
       registered_adapter_ids: () => [],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
       driveTypes: reader,
       now: () => 0,
+      pathEnv: () => '',
     });
 
-    await adapter.invoke('inventory', {}, makeCtx());
-    await adapter.invoke('inventory', {}, makeCtx());
+    await adapter.invoke('inventory', {}, makeCtx(undefined, allowDecisions('drive-reader-probe')));
+    await adapter.invoke('inventory', {}, makeCtx(undefined, allowDecisions('drive-reader-probe')));
 
     // A failure is never cached: both invokes reached the reader.
     assert.equal(calls, 2, 'a failed drive read must not be cached');
@@ -858,16 +862,17 @@ describe('machine.inventory — drive reader budget & cache', () => {
 
     const adapter = makeTestAdapter({
       node_platform: 'win32',
-      probes: [],
+      probes: [DRIVE_READER_PROBE],
       registered_adapter_ids: () => [],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
       driveTypes: reader,
       now: () => 0,
+      pathEnv: () => '',
     });
 
-    await adapter.invoke('inventory', {}, makeCtx());
-    await adapter.invoke('inventory', {}, makeCtx());
+    await adapter.invoke('inventory', {}, makeCtx(undefined, allowDecisions('drive-reader-probe')));
+    await adapter.invoke('inventory', {}, makeCtx(undefined, allowDecisions('drive-reader-probe')));
 
     // An empty result is never a "success" worth caching: both invokes re-read.
     assert.equal(calls, 2, 'an empty drive read must not be cached');
@@ -891,18 +896,19 @@ describe('machine.inventory — drive reader budget & cache', () => {
 
     const adapter = makeTestAdapter({
       node_platform: 'win32',
-      probes: [],
+      probes: [DRIVE_READER_PROBE],
       registered_adapter_ids: () => [],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
       driveTypes: reader,
       now: () => 0,
+      pathEnv: () => '',
     });
 
-    await adapter.invoke('inventory', {}, makeCtx(controller.signal));
+    await adapter.invoke('inventory', {}, makeCtx(controller.signal, allowDecisions('drive-reader-probe')));
 
     // The aborted read resolved but must not have been cached.
-    await adapter.invoke('inventory', {}, makeCtx());
+    await adapter.invoke('inventory', {}, makeCtx(undefined, allowDecisions('drive-reader-probe')));
     assert.equal(calls, 2, 'a read aborted mid-flight must not be cached');
 
     await adapter.dispose();
@@ -917,27 +923,29 @@ describe('machine.inventory — drive reader budget & cache', () => {
 
     const a = makeTestAdapter({
       node_platform: 'win32',
-      probes: [],
+      probes: [DRIVE_READER_PROBE],
       registered_adapter_ids: () => [],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
       driveTypes: reader,
       now: () => 0,
+      pathEnv: () => '',
     });
-    await a.invoke('inventory', {}, makeCtx());
+    await a.invoke('inventory', {}, makeCtx(undefined, allowDecisions('drive-reader-probe')));
     assert.equal(calls, 1);
 
     // A fresh instance has no cache.
     const b = makeTestAdapter({
       node_platform: 'win32',
-      probes: [],
+      probes: [DRIVE_READER_PROBE],
       registered_adapter_ids: () => [],
       registered_capabilities: () => [],
       timeout_ms: 5_000,
       driveTypes: reader,
       now: () => 0,
+      pathEnv: () => '',
     });
-    await b.invoke('inventory', {}, makeCtx());
+    await b.invoke('inventory', {}, makeCtx(undefined, allowDecisions('drive-reader-probe')));
     assert.equal(calls, 2, 'cache is per instance, not shared');
 
     await a.dispose();

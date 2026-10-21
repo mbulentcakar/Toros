@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import type { Adapter, AdapterContext } from '@toros/contracts';
 
 import { createDesktopAdapter } from '../src/adapter.js';
-import { DESKTOP_UIA_PS1 } from '../src/probe.js';
+import { DESKTOP_UIA_PS1, createPowerShellUiaProbe } from '../src/probe.js';
 import {
   fakeContext,
   fixtureProbe,
@@ -458,5 +458,82 @@ describe('AR-F3b Native Windows Identity Verification', () => {
       'inspecting a window must never read native window text');
     assert.strictEqual(inspectBlock.indexOf('WindowText'), -1,
       'inspecting a window must never read native window text (WindowText wrapper)');
+  });
+
+  it('RR-06: control_filter matches by the automation_id the fixture actually exposes', nativeDesktopTestOptions, async () => {
+    const fixture = await startFixture({});
+    activeFixtures.push(fixture);
+    const probe = fixtureProbe(fixture);
+
+    const adapter = createDesktopAdapter({
+      node_platform: 'win32',
+      authorized_apps: [{ image_path: fixture.image_path }],
+      probe,
+      max_windows: 200,
+      max_controls: 2000,
+      timeout_ms: 30_000,
+    });
+    const ctx = fakeContext();
+
+    // First inspect without a filter, to learn the automation_id the fixture's
+    // controls actually expose (on WinForms this is the control's HWND string).
+    const state1 = await enumerateState(adapter, ctx);
+    const target1 = state1.windows.find((w) => w.title === fixture.title);
+    assert.ok(target1, 'the fixture window must be enumerated');
+    const unfiltered = await inspectWindow(adapter, ctx, target1!.window_id, state1.freshness_token);
+    const withId = (unfiltered.controls as Array<Record<string, unknown>>).filter(
+      (c) => typeof c['automation_id'] === 'string' && (c['automation_id'] as string).length > 0,
+    );
+    assert.ok(withId.length > 0, 'at least one control must expose an automation_id');
+    const automationId = withId[0]!['automation_id'] as string;
+
+    // Filter by that exact id on a fresh handle.
+    const state2 = await enumerateState(adapter, ctx);
+    const target2 = state2.windows.find((w) => w.title === fixture.title);
+    assert.ok(target2, 'the fixture window must be enumerated again on a fresh handle');
+    const filtered = await inspectWindow(adapter, ctx, target2!.window_id, state2.freshness_token, { control_filter: automationId });
+    const filteredControls = filtered.controls as Array<Record<string, unknown>>;
+    assert.ok(filteredControls.length > 0, 'filtering by the exposed automation_id must match at least one control');
+    for (const c of filteredControls) {
+      assert.equal(String(c['automation_id']).toLowerCase(), automationId.toLowerCase(),
+        'every control matched by automation_id must carry that id');
+    }
+  });
+
+  it('RR-07: an out-of-bound fixture title is absent and takes no max_windows slot', nativeDesktopTestOptions, async () => {
+    const fixtureA = await startFixture({});
+    activeFixtures.push(fixtureA);
+    const fixtureB = await startFixture({});
+    activeFixtures.push(fixtureB);
+
+    // Unrestricted probe (no restrict_to_pid), so it walks the real desktop. The
+    // authorized_apps bound — fixture A's unique image path — is evaluated in
+    // PowerShell before any title read, so no other window's title is ever read.
+    const probe = createPowerShellUiaProbe({ timeout_ms: 30_000 });
+    const authorized = [{ image_path: fixtureA.image_path }];
+
+    const raw = await probe.enumerateWindows(
+      { max_windows: 200, authorized_apps: authorized },
+      new AbortController().signal,
+    );
+    assert.strictEqual(raw.session_state, 'active');
+    if (raw.session_state === 'active') {
+      assert.ok(raw.windows.some((w) => w.title === fixtureA.title), 'fixture A title must be present');
+      assert.ok(!raw.windows.some((w) => w.title === fixtureB.title), 'fixture B title must be absent');
+      assert.ok(!raw.windows.some((w) => w.identity.image_path.toLowerCase() === fixtureB.image_path.toLowerCase()),
+        'fixture B window must be absent entirely');
+    }
+
+    // max_windows slot: with a bound of 1 and authorized_apps=[A], A still
+    // appears and B never consumes the slot.
+    const rawOne = await probe.enumerateWindows(
+      { max_windows: 1, authorized_apps: authorized },
+      new AbortController().signal,
+    );
+    assert.strictEqual(rawOne.session_state, 'active');
+    if (rawOne.session_state === 'active') {
+      assert.strictEqual(rawOne.windows.length, 1, 'exactly one window must be enumerated');
+      assert.ok(rawOne.windows.some((w) => w.title === fixtureA.title), 'the single enumerated window must be fixture A');
+    }
   });
 });

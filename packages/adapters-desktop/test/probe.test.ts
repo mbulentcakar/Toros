@@ -372,6 +372,58 @@ test('the emitted script carries the image-path checks with their backslashes in
   // and an overlong/path-separator OriginalFilename survives to Node.
   const originalBound = String.raw`if ($null -ne $original -and ($original.Length -gt 260 -or $original.Contains('\') -or $original.Contains('/'))) { $original = $null }`;
   assert.ok(lines.includes(originalBound), `OriginalFilename bound must reach PowerShell as: ${originalBound}`);
+
+  // Round 4 (RR-07): the authorized_apps path normalisation carries a literal
+  // backslash in its `Replace('\', '/')` term. A halved backslash would compare
+  // image paths against a wrong literal and could admit an out-of-scope window.
+  const idPathReplace = String.raw`$idPath = ([string]$id.image_path).Replace('\', '/').ToLowerInvariant()`;
+  const rulePathReplace = String.raw`$rulePath = ([string]$rule.image_path).Replace('\', '/').ToLowerInvariant()`;
+  assert.ok(lines.includes(idPathReplace), `image-path rule normalisation must reach PowerShell as: ${idPathReplace}`);
+  assert.ok(lines.includes(rulePathReplace), `image-path rule normalisation must reach PowerShell as: ${rulePathReplace}`);
+});
+
+// ---------------------------------------------------------------------------
+// RR-07: the in-PowerShell authorized_apps matching mirrors policy's
+// appRuleMatches (amendments A8/A9), and it runs before a title read / before
+// the max_windows cap (enumerate) and before the subtree walk (inspect).
+// ---------------------------------------------------------------------------
+
+test('the emitted script mirrors policy appRuleMatches, including case-insensitive original_filename (RR-07)', () => {
+  // hash: exact equality.
+  assert.ok(DESKTOP_UIA_PS1.includes("([string]$rule.image_sha256 -eq [string]$id.image_sha256)"),
+    'the hash rule must compare image_sha256 exactly');
+  // signer: requires a valid signature before comparing signer/product/original.
+  assert.ok(DESKTOP_UIA_PS1.includes("[string]$id.signature -ne 'valid'"),
+    'the signer rule must require a valid signature');
+  // A9: original_filename compares case-insensitively (the version resource varies in case).
+  assert.ok(DESKTOP_UIA_PS1.includes("([string]$id.original_filename).ToLowerInvariant() -eq ([string]$rule.original_filename).ToLowerInvariant()"),
+    'the signer rule must compare original_filename case-insensitively');
+  // signer and product_name compare exactly (no ToLowerInvariant).
+  assert.ok(DESKTOP_UIA_PS1.includes("[string]$id.signer -eq [string]$rule.signer"),
+    'the signer rule must compare signer exactly');
+  assert.ok(DESKTOP_UIA_PS1.includes("[string]$id.product_name -eq [string]$rule.product_name"),
+    'the signer rule must compare product_name exactly');
+});
+
+test('enumerate_windows authorizes a window before reading its title and before the max_windows cap (RR-07)', () => {
+  const enumerateBlock = DESKTOP_UIA_PS1.slice(DESKTOP_UIA_PS1.indexOf('enumerate_windows'));
+  const authorizeIdx = enumerateBlock.indexOf('IsAuthorized $authorized $identity');
+  const maxwIdx = enumerateBlock.indexOf('$ws.Count -ge $maxw');
+  const titleIdx = enumerateBlock.indexOf('::WindowText');
+  assert.ok(authorizeIdx >= 0, 'script must call IsAuthorized in the enumerate walk');
+  assert.ok(maxwIdx >= 0, 'script must contain the max_windows cap check');
+  assert.ok(titleIdx >= 0, 'script must contain a native window text read');
+  assert.ok(authorizeIdx < titleIdx, 'IsAuthorized must run before the native title read');
+  assert.ok(authorizeIdx < maxwIdx, 'IsAuthorized must run before the max_windows cap check');
+});
+
+test('inspect_window checks sameIdentity before walking the UIA subtree (RR-07)', () => {
+  const inspectBlock = DESKTOP_UIA_PS1.slice(DESKTOP_UIA_PS1.indexOf('inspect_window'));
+  const identityCheckIdx = inspectBlock.indexOf('expected_image_sha256');
+  const walkIdx = inspectBlock.indexOf('ControlViewWalker');
+  assert.ok(identityCheckIdx >= 0, 'script must compare the expected sha-256 before walking');
+  assert.ok(walkIdx >= 0, 'script must walk the control subtree');
+  assert.ok(identityCheckIdx < walkIdx, 'the sameIdentity check must run before ControlViewWalker');
 });
 
 // ---------------------------------------------------------------------------

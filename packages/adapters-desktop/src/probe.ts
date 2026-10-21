@@ -7,7 +7,7 @@ import { ErrorCode, TorosError } from '@toros/contracts';
 
 import { parseScriptJson } from './json.js';
 import type { UiaProbe } from './adapter.js';
-import type { AppIdentity } from '@toros/contracts';
+import type { AppIdentity, AppRule } from '@toros/contracts';
 
 /**
  * Raw data from the OS layer — native handles, real titles, and the OS-observed
@@ -246,11 +246,42 @@ try {
     return @{ pid=$winPid; created_at=$createdAt; image_path=$imagePath; image_sha256=[string]$sha.ToLowerInvariant(); signature=$sigStatus; signer=$signer; product_name=$product; original_filename=$original; session_id=$sessId }
   }
 
+  # RR-07: the node's global authorized_apps matching, mirroring policy's
+  # appRuleMatches exactly (amendments A8/A9). It runs in PowerShell BEFORE a
+  # window's native title is read and before it counts toward max_windows, so an
+  # out-of-scope window is never read and never counted. authorized_apps arrive
+  # as DATA via input.json, never interpolated into this script.
+  function AppRuleMatches($rule, $id) {
+    if ($null -ne $rule.image_sha256) {
+      return ([string]$rule.image_sha256 -eq [string]$id.image_sha256)
+    }
+    if ($null -ne $rule.image_path) {
+      $idPath = ([string]$id.image_path).Replace('\\', '/').ToLowerInvariant()
+      $rulePath = ([string]$rule.image_path).Replace('\\', '/').ToLowerInvariant()
+      return ($idPath -eq $rulePath)
+    }
+    if ([string]$id.signature -ne 'valid') { return $false }
+    if ($null -eq $id.original_filename) { return $false }
+    return (([string]$id.signer -eq [string]$rule.signer) -and
+            ([string]$id.product_name -eq [string]$rule.product_name) -and
+            ([string]$id.original_filename).ToLowerInvariant() -eq ([string]$rule.original_filename).ToLowerInvariant())
+  }
+  function IsAuthorized($rules, $id) {
+    if ($null -eq $rules) { return $false }
+    foreach ($r in $rules) { if (AppRuleMatches $r $id) { return $true } }
+    return $false
+  }
+
   if ([string]$req.action -eq 'enumerate_windows') {
     $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)
     $walker = New-Object System.Windows.Automation.TreeWalker($cond)
     $maxw = [int]$req.max_windows
     if ($maxw -le 0) { $maxw = [int]::MaxValue }
+    # RR-07: the global authorized_apps are read from input.json as DATA and
+    # evaluated per window, before any title read and before any max_windows
+    # count. Absent means no bound (the test-only unrestricted path); the real
+    # adapter always supplies them.
+    $authorized = $req.authorized_apps
     $ws = New-Object 'System.Collections.Generic.List[object]'
     $truncated = $false
     $z = 0
@@ -258,7 +289,6 @@ try {
     $fg = [TorosNative]::GetForegroundWindow().ToInt64()
     $c = $null; try { $c = $walker.GetFirstChild($root) } catch { }
     while ($null -ne $c) {
-      if ($ws.Count -ge $maxw) { $truncated = $true; break }
       $cPid = 0; try { $cPid = [int]$c.Current.ProcessId } catch { }
       if ($null -ne $restrictPid -and [int64]$cPid -ne $restrictPid) {
         try { $c = $walker.GetNextSibling($c) } catch { $c = $null }
@@ -287,6 +317,14 @@ try {
         try { $c = $walker.GetNextSibling($c) } catch { $c = $null }
         continue
       }
+      # RR-07: an out-of-scope window is skipped WITHOUT a title read and
+      # WITHOUT counting toward max_windows — the bound is checked here, after
+      # the identity is read but before GetWindowText or the cap check.
+      if (-not (IsAuthorized $authorized $identity)) {
+        try { $c = $walker.GetNextSibling($c) } catch { $c = $null }
+        continue
+      }
+      if ($ws.Count -ge $maxw) { $truncated = $true; break }
       $w = @{ native_handle=$nh; z_order=$z; foreground=($hwnd -ne 0 -and $hwnd -eq $fg) }
       $w['identity'] = $identity
       if ($hwnd -ne 0) {
@@ -324,6 +362,24 @@ try {
     # Native-side re-check of the test-only binding, mirroring enumerate_windows.
     if ($null -ne $restrictPid -and [int64]$winPid -ne $restrictPid) { Emit @{ closed = $true }; return }
     $identity = ReadIdentity($winPid)
+    # RR-07: check sameIdentity BEFORE walking the UIA subtree, so a reused
+    # native handle (now a different process) never yields the new owner's tree.
+    # The expected pid / creation time / sha-256 arrive as DATA via input.json;
+    # absent expected fields (the test-only unrestricted path) skip the check.
+    $identityOk = $false
+    if ($null -eq $identity) {
+      $identityOk = $false
+    } elseif ($null -eq $req.expected_pid) {
+      $identityOk = $true
+    } else {
+      $identityOk = ($identity.pid -eq $req.expected_pid -and $identity.created_at -eq $req.expected_created_at -and $identity.image_sha256 -eq $req.expected_image_sha256)
+    }
+    if (-not $identityOk) {
+      $out = @{ closed = $false; controls = @(); truncated = $false }
+      if ($null -ne $identity) { $out['identity'] = $identity }
+      Emit $out
+      return
+    }
     $depth = [int]$req.depth; $maxc = [int]$req.max_controls
     if ($maxc -le 0) { $maxc = [int]::MaxValue }
     $cwalker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
@@ -667,7 +723,7 @@ export function createPowerShellUiaProbe(options: {
 
   return {
     async enumerateWindows(
-      opts: { max_windows?: number },
+      opts: { max_windows?: number; authorized_apps?: readonly AppRule[] },
       signal: AbortSignal,
     ): Promise<
       | { readonly session_state: 'active'; readonly windows: readonly RawWindow[]; readonly truncated: boolean }
@@ -679,6 +735,10 @@ export function createPowerShellUiaProbe(options: {
         {
           action: 'enumerate_windows',
           max_windows: maxWindows,
+          // RR-07: the global authorized_apps travel as DATA, never interpolated
+          // into the script text. Absent means "no bound" (the test-only path);
+          // the real adapter always supplies them.
+          ...(opts.authorized_apps !== undefined ? { authorized_apps: opts.authorized_apps } : {}),
           ...(hasRestrictPid ? { restrict_to_pid: restrictPid } : {}),
         },
         timeoutMs,
@@ -716,16 +776,31 @@ export function createPowerShellUiaProbe(options: {
       return { session_state: 'active', windows, truncated };
     },
 
-    async inspectWindow(nativeHandle: string, opts: { depth: number; max_controls: number }, signal: AbortSignal): Promise<
+    async inspectWindow(
+      nativeHandle: string,
+      opts: { depth: number; max_controls: number; expected_identity?: AppIdentity },
+      signal: AbortSignal,
+    ): Promise<
       | { readonly closed: true }
       | { readonly closed: false; readonly identity: AppIdentity | null; readonly controls: readonly RawControl[]; readonly truncated: boolean }
     > {
+      const hasExpected = opts.expected_identity !== undefined;
       const output = await runPowerShell(
         {
           action: 'inspect_window',
           native_handle: nativeHandle,
           depth: opts.depth,
           max_controls: opts.max_controls,
+          // RR-07: the expected pid / creation time / sha-256 travel as DATA, so
+          // the script checks sameIdentity before walking the subtree. Absent
+          // means the check is skipped (the test-only direct-probe path).
+          ...(hasExpected
+            ? {
+                expected_pid: opts.expected_identity!.pid,
+                expected_created_at: opts.expected_identity!.created_at,
+                expected_image_sha256: opts.expected_identity!.image_sha256,
+              }
+            : {}),
           ...(hasRestrictPid ? { restrict_to_pid: restrictPid } : {}),
         },
         timeoutMs,

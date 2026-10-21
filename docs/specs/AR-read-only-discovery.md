@@ -151,11 +151,10 @@ action's `input_schema`; the output shapes are the adapter's contract with its c
 - **Output:** for each known adapter/tool on this node — `id`, `platform`, `observed_at`,
   `registered_actions[]`, and a **readiness** verdict from a fixed taxonomy:
   `registered` (manifest loaded) · `usable` (probe succeeded) · `missing_adapter` ·
-  `unsupported_platform` · `missing_prerequisite` (with `reason`) · `unauthorized` (caller lacks
-  the capability). An `unauthorized` entry is reduced to `id` and `readiness` only — no
-  `reason`, `platforms`, or `backs_adapter` — because the job-scoped filter (AR-09) reports
-  only the entries a resolved capability admitted. "Installed" is never conflated with
-  "usable": a probe that finds an executable
+  `unsupported_platform` · `missing_prerequisite` (with `reason`). A job-scoped filter (AR-09)
+  omits an entry whose adapter has **no** admitted capability **entirely**: there is no
+  `unauthorized` stub and no count, and its filesystem probe and drive read never run (RR-03).
+  "Installed" is never conflated with "usable": a probe that finds an executable
   but no registered manifest reports `missing_adapter`, not `usable`.
 - **Bounds:** probes a fixed, declared list of locations only. **No filesystem-wide scan, no
   secret or account enumeration, no registry-wide sweep.**
@@ -183,25 +182,34 @@ action's `input_schema`; the output shapes are the adapter's contract with its c
 
 ### `desktop.inspect`  (package `@toros/adapters-desktop`)
 
-- **Input:** `{ session_scope: 'interactive', window_id, freshness_token, depth?, control_filter?,
-  page?, page_size? }`.
+- **Input (page 1):** `{ session_scope: 'interactive', window_id, freshness_token, depth?,
+  control_filter?, page_size? }`. **Page N+1** is driven by the previous page's
+  `continuation_token` alone: `{ session_scope: 'interactive', continuation_token }` (RR-06) —
+  a page is never reopened by re-sending `window_id`/`freshness_token`/`page`.
 - **Output:** `{ controls: [{ control_id (opaque), type, automation_id?, enabled, patterns[] }],
-  truncated: bool, next_page? }`. Control output is structure only; UIA `Name` is **never read or
-  emitted** for controls (AR-F2 remediation for AR-01). `automation_id` is included only when it is
-  1–128 printable ASCII characters. Control **values are never returned** (that would be a read of
-  content; a future typed read is a separate action). `patterns[]` reports supported UIA patterns so
-  a future Spec V `invoke` can be planned without this action performing one. Window titles in
-  `desktop.state` come from native window text (`GetWindowText` on the top-level handle, capped at 256
-  characters), not UIA `Name`.
+  truncated: bool, continuation_token? }`. `continuation_token` is present when more pages
+  remain; it is **single-use**, bound to `(job_id, actor, window_id)`, and valid for at most
+  60 s — a reused, foreign, or expired token returns the same `refresh_required` shape
+  (invariant 4). Page 1 walks the accessibility tree once and captures the full filtered
+  control list; later pages slice that capture, so pagination never re-walks the tree. Control
+  output is structure only; UIA `Name` is **never read or emitted** for controls (AR-F2
+  remediation for AR-01). `automation_id` is included only when it is 1–128 printable ASCII
+  characters; on WinForms a control's `automation_id` is the control's HWND string. Control
+  **values are never returned** (that would be a read of content; a future typed read is a
+  separate action). `patterns[]` reports supported UIA patterns so a future Spec V `invoke`
+  can be planned without this action performing one. Window titles in `desktop.state` come
+  from native window text (`GetWindowText` on the top-level handle, capped at 256 characters),
+  not UIA `Name`.
 - **Two-phase (A8):** `desktop.inspect` resolves its single window from the handle and inspects
   only on an `allowed` decision; a denied decision returns `denied`. At execute time it re-verifies
-  pid, creation time and SHA-256 against the resolved identity — a mismatch is `unavailable`, never
-  the new owner's tree.
+  pid, creation time and SHA-256 against the resolved identity **before** walking the accessibility
+  tree (RR-07) — a mismatch is `unavailable`, never the new owner's tree.
 - **Failure modes, each explicit and tested:** `window_id` unknown, `freshness_token` stale,
   reused, expired, or from a foreign job/actor → `refresh_required` (the **same shape** for all of
-  them, so a caller cannot probe which case it hit — invariant 4); window's app not allowed →
-  `denied`; window closed since enumeration, or its identity changed → `unavailable`. Handles are
-  per `(job_id, actor)`, **single-use**, valid for at most 60 s.
+  them, so a caller cannot probe which case it hit — invariant 4); a continuation token reused,
+  expired, unknown, or from a foreign job/actor → the same `refresh_required`; window's app not
+  allowed → `denied`; window closed since enumeration, or its identity changed → `unavailable`.
+  Handles are per `(job_id, actor)`, **single-use**, valid for at most 60 s.
 - **Permissions:** `['process.spawn', 'app.automation', 'fs.read', 'fs.write']`. **Receipt
   fields:** `status`, `control_count`, `truncated`, `depth`.
 
@@ -281,7 +289,8 @@ tests for self-approval / envelope tampering / policy bypass are green.
 - New package `@toros/adapters-machine` (allowed paths below).
 - Bounded probes → readiness taxonomy through registry/policy.
 - Tests distinguish `registered` vs `usable` vs `unsupported_platform` vs `missing_prerequisite`
-  vs `missing_adapter` vs `unauthorized`.
+  vs `missing_adapter`; an out-of-job adapter is omitted entirely (RR-03), never emitted as
+  `unauthorized`.
 - Run real inventory on **Oruc** and on **YOGA** if available.
 - **No filesystem-wide scan, no secret/account enumeration.**
 
