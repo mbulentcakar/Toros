@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import type { AdapterContext } from '@toros/contracts';
+import type { AdapterContext, AppRule } from '@toros/contracts';
 
 import { createPowerShellUiaProbe, powershellChildEnvironment } from '../src/probe.js';
 import type { UiaProbe } from '../src/adapter.js';
@@ -348,9 +348,29 @@ function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<void>
  * spawned child's `child.pid`): every top-level window walk skips windows
  * owned by any other process before reading their native text, so nothing
  * outside the fixture is ever inspected.
+ *
+ * R4 round 2: `enumerate_windows` is fail-closed — absent `authorized_apps`
+ * publishes nothing — so this probe carries its own bound. By default that is
+ * the fixture's canonical running image path (the long real path `ReadIdentity`
+ * reports, resolved with `fs.realpathSync.native` so it equals exactly what
+ * `QueryFullProcessImageName` returns). Tests that need a different bound pass
+ * `rules`; an explicit `authorized_apps` on the enumerate call still wins.
  */
-export function fixtureProbe(fixture: FixtureInstance): UiaProbe {
-  return createPowerShellUiaProbe({ timeout_ms: 30_000, restrict_to_pid: fixture.pid });
+export function fixtureProbe(fixture: FixtureInstance, rules?: readonly AppRule[]): UiaProbe {
+  const probe = createPowerShellUiaProbe({ timeout_ms: 30_000, restrict_to_pid: fixture.pid });
+  const bound: readonly AppRule[] = rules ?? [{ image_path: fs.realpathSync.native(fixture.image_path) }];
+  return {
+    ...probe,
+    async enumerateWindows(
+      opts: { max_windows: number; authorized_apps?: readonly AppRule[] },
+      signal: AbortSignal,
+    ) {
+      return probe.enumerateWindows(
+        { ...opts, authorized_apps: opts.authorized_apps ?? bound },
+        signal,
+      );
+    },
+  };
 }
 
 /**

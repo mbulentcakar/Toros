@@ -279,8 +279,9 @@ try {
     if ($maxw -le 0) { $maxw = [int]::MaxValue }
     # RR-07: the global authorized_apps are read from input.json as DATA and
     # evaluated per window, before any title read and before any max_windows
-    # count. Absent means no bound (the test-only unrestricted path); the real
-    # adapter always supplies them.
+    # count. Absent or empty means NO window is published (fail closed): the
+    # real adapter always supplies them, and the test fixture probe supplies
+    # the fixture's own image path as its bound.
     $authorized = $req.authorized_apps
     $ws = New-Object 'System.Collections.Generic.List[object]'
     $truncated = $false
@@ -736,8 +737,9 @@ export function createPowerShellUiaProbe(options: {
           action: 'enumerate_windows',
           max_windows: maxWindows,
           // RR-07: the global authorized_apps travel as DATA, never interpolated
-          // into the script text. Absent means "no bound" (the test-only path);
-          // the real adapter always supplies them.
+          // into the script text. Absent means NO window is published (fail
+          // closed); the real adapter always supplies them, and the fixture
+          // probe supplies the fixture's own bound (see native-utils.ts).
           ...(opts.authorized_apps !== undefined ? { authorized_apps: opts.authorized_apps } : {}),
           ...(hasRestrictPid ? { restrict_to_pid: restrictPid } : {}),
         },

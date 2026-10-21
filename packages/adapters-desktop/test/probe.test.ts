@@ -427,6 +427,51 @@ test('inspect_window checks sameIdentity before walking the UIA subtree (RR-07)'
 });
 
 // ---------------------------------------------------------------------------
+// R4 round 2: enumerate_windows is fail-closed. Absent or empty authorized_apps
+// publishes nothing. IsAuthorized denies a null rule set outright, and an
+// input.json with no authorized_apps key leaves $authorized null (an empty
+// array matches nothing in the foreach), so every window is skipped. The
+// behaviour lives in PowerShell and needs a real desktop to exercise, so it is
+// pinned against the script text here, exactly as the other RR-07 checks.
+// ---------------------------------------------------------------------------
+
+test('absent or empty authorized_apps publishes no window — enumerate_windows fails closed (R4 round 2)', () => {
+  // IsAuthorized denies null rules outright, so an input.json with no
+  // authorized_apps key publishes nothing.
+  assert.ok(
+    DESKTOP_UIA_PS1.includes('if ($null -eq $rules) { return $false }'),
+    'IsAuthorized must deny when authorized_apps is absent (null)',
+  );
+  // An empty array matches nothing: the foreach never returns true.
+  assert.ok(
+    DESKTOP_UIA_PS1.includes('foreach ($r in $rules) { if (AppRuleMatches $r $id) { return $true } }'),
+    'IsAuthorized must only authorise via a matching rule (empty array denies)',
+  );
+  // enumerate_windows takes authorized_apps straight from input.json as DATA;
+  // nothing supplies a fallback bound.
+  assert.ok(
+    DESKTOP_UIA_PS1.includes('$authorized = $req.authorized_apps'),
+    'enumerate_windows must read authorized_apps from input.json',
+  );
+  // Every candidate window passes through IsAuthorized before a title read or
+  // a max_windows count, so null/empty rules publish nothing.
+  const enumerateBlock = DESKTOP_UIA_PS1.slice(DESKTOP_UIA_PS1.indexOf('enumerate_windows'));
+  assert.ok(
+    enumerateBlock.includes('if (-not (IsAuthorized $authorized $identity))'),
+    'the enumerate walk must gate every window on IsAuthorized',
+  );
+  // The corrected comment must state the fail-closed rule, not "no bound".
+  assert.ok(
+    DESKTOP_UIA_PS1.includes('Absent or empty means NO window is published'),
+    'the enumerate_windows comment must state that absent/empty authorized_apps publishes nothing',
+  );
+  assert.ok(
+    !DESKTOP_UIA_PS1.includes('Absent means no bound'),
+    'the script must not describe absent authorized_apps as an unrestricted/no-bound path',
+  );
+});
+
+// ---------------------------------------------------------------------------
 // A9: the probe reads the version resource's OriginalFilename and emits it as
 // `original_filename`, and the PowerShell child environment never carries
 // PSModulePath.
