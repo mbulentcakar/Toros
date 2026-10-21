@@ -214,3 +214,28 @@ passes no rules. Production cannot be weakened to suit the tests, so:
    `fs.realpathSync.native`). Tests that need a different bound pass it explicitly. The RR-07 test
    that uses an out-of-bound second fixture must still pass.
 3. The orchestrator re-runs the native suites. The implementer still does not.
+
+## R4 round 3 — after the Argon review of a692371 (2026-10-21)
+
+All three findings are accepted.
+
+1. **The in-PowerShell match must be exactly as strict as policy (P2).** In `AppRuleMatches`
+   (`DESKTOP_UIA_PS1`):
+   - use case-sensitive `-ceq` for `image_sha256`, `signer` and `product_name`;
+   - keep the case-insensitive comparison only for `image_path` and `original_filename`;
+   - check for `$null` explicitly before any `[string]` coercion, so a null field never equals
+     an empty string.
+
+   Pin the new lines in `probe.test.ts`. Add a non-native test: a rule whose signer differs only
+   in case does not authorise.
+2. **Continuation tokens are bound to the window, never extended, and never fall through (P2).**
+   - Any request that carries `continuation_token`, whatever its value, goes to the continuation
+     path. An empty or non-string token returns `refresh_required`.
+   - When `window_id` is present and differs from the token's window → `refresh_required`.
+   - The next token keeps the **original** `issued_at`, so the whole pagination chain lives at
+     most 60 s from page 1.
+   - Tests: a foreign `job_id`; a mismatched `window_id`; an empty token; a chain still running
+     past 60 s.
+3. **`desktop.state` re-verification does not walk (P3).**
+   - `invokeState` passes `expected_identity: entry.identity` to `inspectWindow`.
+   - `inspect_window` calls `GetFirstChild` only when `depth > 0`.
