@@ -196,28 +196,44 @@ try {
     $sha = $null
     if ($hashCache.ContainsKey($cacheKey)) { $sha = $hashCache[$cacheKey] }
     else { try { $sha = [TorosNative]::FileSha256($imagePath) } catch { return $null }; $hashCache[$cacheKey] = $sha }
-    $sig = $null; try { $sig = Get-AuthenticodeSignature -LiteralPath $imagePath } catch { $sig = $null }
-    $sigStatus = 'unsigned'; $signer = $null
-    if ($null -ne $sig) {
-      $status = [string]$sig.Status
-      if ($status -eq 'Valid') {
-        if ($null -ne $sig.SignerCertificate) {
-          $cn = $sig.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
-          if (-not [string]::IsNullOrWhiteSpace([string]$cn)) { $sigStatus = 'valid'; $signer = [string]$cn }
-        }
-        if ($sigStatus -ne 'valid') {
-          # A valid signature whose subject CN could not be read must not become
-          # an unsigned identity: drop the window rather than misreport the signer.
-          return $null
-        }
-      } elseif ($status -eq 'HashMismatch') {
-        $sigStatus = 'invalid'
-      } else {
-        $sigStatus = 'unsigned'
+    $sig = $null; try { $sig = Get-AuthenticodeSignature -LiteralPath $imagePath } catch { return $null }
+    if ($null -eq $sig) { return $null }
+    $sigStatus = $null; $signer = $null
+    $status = [string]$sig.Status
+    if ($status -eq 'Valid') {
+      if ($null -ne $sig.SignerCertificate) {
+        $cn = $sig.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+        if (-not [string]::IsNullOrWhiteSpace([string]$cn)) { $sigStatus = 'valid'; $signer = [string]$cn }
       }
+      if ($sigStatus -ne 'valid') {
+        # A valid signature whose subject CN could not be read must not become
+        # an unsigned identity: drop the window rather than misreport the signer.
+        return $null
+      }
+    } elseif ($status -eq 'HashMismatch') {
+      $sigStatus = 'invalid'
+    } elseif ($status -eq 'NotSigned') {
+      # Only a real NotSigned status maps to unsigned (amendment A9). Any other
+      # status (UnknownError, NotTrusted, NotSupportedFileFormat, Incompatible)
+      # means the signature could not be established, which is 'invalid', never
+      # 'unsigned' — 'unsigned' must mean "genuinely no signature".
+      $sigStatus = 'unsigned'
+    } else {
+      $sigStatus = 'invalid'
     }
     $product = $null; try { $product = [string]$fi.VersionInfo.ProductName } catch { }
     if ([string]::IsNullOrWhiteSpace($product)) { $product = $null }
+    # OriginalFilename (amendment A9): the version resource's original file name,
+    # which survives renames and copies. Trimmed; null when absent or blank.
+    $original = $null; try { $original = [string]$fi.VersionInfo.OriginalFilename } catch { }
+    if ($null -ne $original) { $original = $original.Trim() }
+    if ([string]::IsNullOrWhiteSpace($original)) { $original = $null }
+    # An OriginalFilename over 260 characters, or one carrying a path separator,
+    # is normalised to $null here (amendment A9 round 2): image_sha256/image_path
+    # rules still work while a signer rule never matches a value the resolver
+    # would refuse. A malformed value must not waste a max_windows slot only to
+    # be rejected later in Node.
+    if ($null -ne $original -and ($original.Length -gt 260 -or $original.Contains('\\') -or $original.Contains('/'))) { $original = $null }
     $proc = $null; try { $proc = Get-Process -Id $winPid -ErrorAction Stop } catch { return $null }
     # The creation time read can throw on protected/exiting processes; a failure
     # drops the window rather than aborting the whole probe. The format string is
@@ -227,7 +243,7 @@ try {
     try { $createdAt = $proc.StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [System.Globalization.CultureInfo]::InvariantCulture) } catch { return $null }
     $sessId = [TorosNative]::SessionId($winPid)
     if ($sessId -lt 0) { return $null }
-    return @{ pid=$winPid; created_at=$createdAt; image_path=$imagePath; image_sha256=[string]$sha.ToLowerInvariant(); signature=$sigStatus; signer=$signer; product_name=$product; session_id=$sessId }
+    return @{ pid=$winPid; created_at=$createdAt; image_path=$imagePath; image_sha256=[string]$sha.ToLowerInvariant(); signature=$sigStatus; signer=$signer; product_name=$product; original_filename=$original; session_id=$sessId }
   }
 
   if ([string]$req.action -eq 'enumerate_windows') {
@@ -364,6 +380,24 @@ function powershellPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
 
+/**
+ * The child environment for a Windows PowerShell 5.1 spawn (amendment A9): a
+ * copy of `process.env` with `PSModulePath` removed, so 5.1 rebuilds its own
+ * default module path instead of inheriting a possibly-polluted one. The copy
+ * is deliberate — `process.env` is never mutated.
+ */
+export function powershellChildEnvironment(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // Windows environment variable names are case-insensitive, so a polluted env
+  // block may carry any casing (`psmodulepath`, `PsModulePath`, …). Delete every
+  // key whose lower-case form is `psmodulepath`, never just two hard-coded
+  // spellings, so no casing survives into the child.
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'psmodulepath') delete env[key];
+  }
+  return env;
+}
+
 /** Captured stdout/stderr ceiling for the PowerShell child (execFile.maxBuffer). */
 const MAX_BUFFER_BYTES = 1024 * 1024;
 
@@ -379,7 +413,7 @@ export interface ProbeChild {
 export type ProbeSpawn = (
   file: string,
   args: readonly string[],
-  options: { readonly shell: false; readonly windowsHide: boolean; readonly timeout: number; readonly maxBuffer: number },
+  options: { readonly shell: false; readonly windowsHide: boolean; readonly timeout: number; readonly maxBuffer: number; readonly env: NodeJS.ProcessEnv },
   callback: (error: Error | null, stdout: string, stderr: string) => void,
 ) => ProbeChild;
 
@@ -471,7 +505,7 @@ export function runPowerShell(
         child = spawn(
           powershellPath(),
           ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
-          { shell: false, windowsHide: true, timeout: timeoutMs, maxBuffer: MAX_BUFFER_BYTES },
+          { shell: false, windowsHide: true, timeout: timeoutMs, maxBuffer: MAX_BUFFER_BYTES, env: powershellChildEnvironment() },
           (err, stdout, stderr) => {
             if (settled) return;
             if (err) {
@@ -566,6 +600,11 @@ export function parseIdentity(raw: Record<string, unknown>): AppIdentity | null 
   } else if (signer !== null && signer !== undefined) return null;
   const product_name = raw['product_name'];
   if (product_name !== null && product_name !== undefined && typeof product_name !== 'string') return null;
+  const original_filename = raw['original_filename'];
+  // Null, or a non-empty string of at most 260 characters with no path
+  // separators (amendment A9). The version resource's OriginalFilename is a
+  // bare file name, never a path, and an empty string carries no identity.
+  if (original_filename !== null && original_filename !== undefined && (typeof original_filename !== 'string' || original_filename.length === 0 || original_filename.length > 260 || original_filename.includes('\\') || original_filename.includes('/'))) return null;
   const session_id = raw['session_id'];
   if (typeof session_id !== 'number' || !Number.isSafeInteger(session_id) || session_id < 0) return null;
   return {
@@ -576,6 +615,7 @@ export function parseIdentity(raw: Record<string, unknown>): AppIdentity | null 
     signature,
     signer: signature === 'valid' ? (signer as string) : null,
     product_name: typeof product_name === 'string' ? product_name : null,
+    original_filename: typeof original_filename === 'string' ? original_filename : null,
     session_id,
   };
 }

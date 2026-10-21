@@ -176,9 +176,12 @@ function normalizeSeparators(value: string): string {
  * - `image_sha256` compares exactly.
  * - `image_path` compares case-insensitively on the full path after separator
  *   normalisation.
- * - `signer` + `product_name` compare exactly, case-sensitively, and only when
- *   the signature is `valid` — an unsigned or invalid image has no trustworthy
- *   signer, so a signer rule must not authorise it.
+ * - `signer` + `product_name` + `original_filename` (amendment A9): `signer`
+ *   and `product_name` compare exactly, case-sensitively, and only when the
+ *   signature is `valid` — an unsigned or invalid image has no trustworthy
+ *   signer, so a signer rule must not authorise it. `original_filename`
+ *   compares case-insensitively, because the version resource varies in case
+ *   (`PowerShell.EXE`, `NOTEPAD.EXE`); a null original_filename never matches.
  */
 function appRuleMatches(rule: AppRule, identity: AppIdentity): boolean {
   if ('image_sha256' in rule) {
@@ -188,7 +191,10 @@ function appRuleMatches(rule: AppRule, identity: AppIdentity): boolean {
     return normalizeSeparators(identity.image_path).toLowerCase() === normalizeSeparators(rule.image_path).toLowerCase();
   }
   if (identity.signature !== 'valid') return false;
-  return identity.signer === rule.signer && identity.product_name === rule.product_name;
+  return identity.signer === rule.signer
+    && identity.product_name === rule.product_name
+    && identity.original_filename !== null
+    && identity.original_filename.toLowerCase() === rule.original_filename.toLowerCase();
 }
 
 class PolicyImpl implements Policy {

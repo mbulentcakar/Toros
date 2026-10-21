@@ -24,6 +24,7 @@ function makeIdentity(overrides: Partial<AppIdentity> = {}): AppIdentity {
     signature: 'valid',
     signer: 'Contoso Corp',
     product_name: 'Contoso Editor',
+    original_filename: 'app.exe',
     session_id: 7,
     ...overrides,
   };
@@ -169,6 +170,53 @@ describe('F3b desktop adapter — two-phase resolve', () => {
     const body = JSON.parse(result.output) as Record<string, unknown>;
     assert.equal((body.windows as unknown[]).length, 0, 'a changed identity window must be dropped');
     assert.equal(result.receipt_extra.changed, 1);
+  });
+});
+
+describe('F3b desktop adapter — global signer rule (A9)', () => {
+  // A global Notepad rule: signer + product_name + original_filename.
+  const NOTEPAD_RULE = {
+    signer: 'Microsoft Corporation',
+    product_name: 'Notepad',
+    original_filename: 'NOTEPAD.EXE',
+  } as const;
+
+  function notepadIdentity(original_filename: string | null): AppIdentity {
+    return makeIdentity({
+      signer: 'Microsoft Corporation',
+      product_name: 'Notepad',
+      original_filename,
+    });
+  }
+
+  async function resolveWindows(adapter: ReturnType<typeof createDesktopAdapter>): Promise<number> {
+    const ctx = fakeContext();
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    return targets.length;
+  }
+
+  it('a global Notepad rule does not admit a window whose original_filename is PowerShell.EXE', async () => {
+    const probe = makeFakeProbe([
+      makeRawWindow({ identity: notepadIdentity('PowerShell.EXE') }),
+    ]);
+    const adapter = makeAdapter([NOTEPAD_RULE], probe);
+    assert.equal(await resolveWindows(adapter), 0, 'a different original_filename must not match a signer rule');
+  });
+
+  it('the same rule admits notepad.exe (case-insensitive)', async () => {
+    const probe = makeFakeProbe([
+      makeRawWindow({ identity: notepadIdentity('notepad.exe') }),
+    ]);
+    const adapter = makeAdapter([NOTEPAD_RULE], probe);
+    assert.equal(await resolveWindows(adapter), 1, 'original_filename must compare case-insensitively');
+  });
+
+  it('a null original_filename is never admitted by a signer rule', async () => {
+    const probe = makeFakeProbe([
+      makeRawWindow({ identity: notepadIdentity(null) }),
+    ]);
+    const adapter = makeAdapter([NOTEPAD_RULE], probe);
+    assert.equal(await resolveWindows(adapter), 0, 'a null original_filename must never match');
   });
 });
 

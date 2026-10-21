@@ -9,7 +9,10 @@
 export {
   createMachineAdapter,
   DEFAULT_MACHINE_PROBES,
+  createPowerShellDriveTypes,
+  powershellChildEnvironment,
   type AccessCheck,
+  type DriveReaderSpawn,
   type DriveTypes,
   type MachineAdapterOptions,
   type MachineProbe,

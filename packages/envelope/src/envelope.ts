@@ -122,7 +122,7 @@ function validateAppRule(value: unknown, index: number): AppRule {
   const rule = value as Record<string, unknown>;
 
   for (const key of Object.keys(rule)) {
-    if (key !== 'image_sha256' && key !== 'signer' && key !== 'product_name' && key !== 'image_path') {
+    if (key !== 'image_sha256' && key !== 'signer' && key !== 'product_name' && key !== 'original_filename' && key !== 'image_path') {
       throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}] unknown property: ${key}`, { field: 'allowed_apps' });
     }
   }
@@ -130,10 +130,11 @@ function validateAppRule(value: unknown, index: number): AppRule {
   const hasSha = 'image_sha256' in rule;
   const hasSigner = 'signer' in rule;
   const hasProduct = 'product_name' in rule;
+  const hasOriginal = 'original_filename' in rule;
   const hasPath = 'image_path' in rule;
 
   if (hasSha) {
-    if (hasSigner || hasProduct || hasPath) {
+    if (hasSigner || hasProduct || hasOriginal || hasPath) {
       throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}] must have exactly one rule shape`, { field: 'allowed_apps' });
     }
     const sha = rule['image_sha256'];
@@ -143,19 +144,23 @@ function validateAppRule(value: unknown, index: number): AppRule {
     return { image_sha256: sha };
   }
 
-  if (hasSigner || hasProduct) {
-    if (!hasSigner || !hasProduct || hasPath) {
-      throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}] signer and product_name must appear together`, { field: 'allowed_apps' });
+  if (hasSigner || hasProduct || hasOriginal) {
+    if (!hasSigner || !hasProduct || !hasOriginal || hasPath) {
+      throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}] signer, product_name and original_filename must appear together`, { field: 'allowed_apps' });
     }
     const signer = rule['signer'];
     const product = rule['product_name'];
+    const original = rule['original_filename'];
     if (typeof signer !== 'string' || signer.length === 0 || signer.length > 512) {
       throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}].signer must be a non-empty string ≤ 512 characters`, { field: 'allowed_apps' });
     }
     if (typeof product !== 'string' || product.length === 0 || product.length > 512) {
       throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}].product_name must be a non-empty string ≤ 512 characters`, { field: 'allowed_apps' });
     }
-    return { signer, product_name: product };
+    if (typeof original !== 'string' || original.length === 0 || original.length > 260 || original.includes('\\') || original.includes('/')) {
+      throw new TorosError(ErrorCode.E_ENVELOPE_INVALID, `allowed_apps[${index}].original_filename must be a non-empty string ≤ 260 characters with no path separators`, { field: 'allowed_apps' });
+    }
+    return { signer, product_name: product, original_filename: original };
   }
 
   if (hasPath) {

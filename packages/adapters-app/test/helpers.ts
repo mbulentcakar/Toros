@@ -6,6 +6,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 
 import { parseScriptJson } from '../src/json.js';
+import { powershellChildEnvironment } from '../src/adapter.js';
 
 /**
  * Test-only helpers for the Excel adapter acceptance tests. These mirror the
@@ -192,7 +193,7 @@ function runPs(scriptPath: string, timeoutMs: number): Promise<{ code: number; s
     const child: ChildProcess = spawn(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
-      { shell: false, windowsHide: true },
+      { shell: false, windowsHide: true, env: powershellChildEnvironment() },
     );
     let stdout = '';
     let stderr = '';
@@ -283,7 +284,7 @@ export async function startUnrelatedExcel(): Promise<UnrelatedExcel> {
   const child: ChildProcess = spawn(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
-    { shell: false, windowsHide: true, detached: false },
+    { shell: false, windowsHide: true, detached: false, env: powershellChildEnvironment() },
   );
   const childClosed = new Promise<void>((resolve) => {
     child.once('error', () => resolve());

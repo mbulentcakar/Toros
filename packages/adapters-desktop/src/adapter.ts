@@ -100,7 +100,10 @@ function globalRuleMatches(rule: AppRule, identity: AppIdentity): boolean {
     return normalizeSeparators(identity.image_path).toLowerCase() === normalizeSeparators(rule.image_path).toLowerCase();
   }
   if (identity.signature !== 'valid') return false;
-  return identity.signer === rule.signer && identity.product_name === rule.product_name;
+  return identity.signer === rule.signer
+    && identity.product_name === rule.product_name
+    && identity.original_filename !== null
+    && identity.original_filename.toLowerCase() === rule.original_filename.toLowerCase();
 }
 
 function isGloballyAuthorized(authorized: readonly AppRule[], identity: AppIdentity): boolean {

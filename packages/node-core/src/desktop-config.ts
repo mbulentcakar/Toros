@@ -20,11 +20,11 @@ const ABSOLUTE_PATH_PATTERN = /^(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/)/;
  * Validate the node's `desktop.authorized_apps` config (amendment A8, F3b).
  *
  * It becomes the same `AppRule[]` shapes the envelope's `allowed_apps` carries —
- * hash, signer+product, or path — instead of the bare basename strings the
- * pilot adapter accepted. A bare string entry (the old basename form) makes Node
- * Core refuse to start with a message naming the new format, because a basename
- * allowlist is spoofable (AR-10) and silently accepting it would suggest the
- * stronger identity bound is in force when it is not.
+ * hash, signer+product+original_filename, or path — instead of the bare basename
+ * strings the pilot adapter accepted. A bare string entry (the old basename
+ * form) makes Node Core refuse to start with a message naming the new format,
+ * because a basename allowlist is spoofable (AR-10) and silently accepting it
+ * would suggest the stronger identity bound is in force when it is not.
  */
 export function validateDesktopAuthorizedApps(value: unknown, configPath: string): AppRule[] | undefined {
   if (value === undefined) return undefined;
@@ -39,7 +39,7 @@ export function validateDesktopAuthorizedApps(value: unknown, configPath: string
     if (typeof item === 'string') {
       throw new Error(
         `${configPath}: adapters.desktop.authorized_apps[${i}] "${item}" is a bare string; ` +
-        `the new format is an object with exactly one of { image_sha256 }, { signer, product_name }, or { image_path }`,
+        `the new format is an object with exactly one of { image_sha256 }, { signer, product_name, original_filename }, or { image_path }`,
       );
     }
     if (typeof item !== 'object' || item === null || Array.isArray(item)) {
@@ -47,17 +47,18 @@ export function validateDesktopAuthorizedApps(value: unknown, configPath: string
     }
     const rule = item as Record<string, unknown>;
     for (const key of Object.keys(rule)) {
-      if (key !== 'image_sha256' && key !== 'signer' && key !== 'product_name' && key !== 'image_path') {
+      if (key !== 'image_sha256' && key !== 'signer' && key !== 'product_name' && key !== 'original_filename' && key !== 'image_path') {
         throw new Error(`${configPath}: adapters.desktop.authorized_apps[${i}] unknown property: ${key}`);
       }
     }
     const hasSha = 'image_sha256' in rule;
     const hasSigner = 'signer' in rule;
     const hasProduct = 'product_name' in rule;
+    const hasOriginal = 'original_filename' in rule;
     const hasPath = 'image_path' in rule;
 
     if (hasSha) {
-      if (hasSigner || hasProduct || hasPath) {
+      if (hasSigner || hasProduct || hasOriginal || hasPath) {
         throw new Error(`${configPath}: adapters.desktop.authorized_apps[${i}] must have exactly one rule shape`);
       }
       const sha = rule['image_sha256'];
@@ -67,19 +68,23 @@ export function validateDesktopAuthorizedApps(value: unknown, configPath: string
       rules.push({ image_sha256: sha });
       continue;
     }
-    if (hasSigner || hasProduct) {
-      if (!hasSigner || !hasProduct || hasPath) {
-        throw new Error(`${configPath}: adapters.desktop.authorized_apps[${i}] signer and product_name must appear together`);
+    if (hasSigner || hasProduct || hasOriginal) {
+      if (!hasSigner || !hasProduct || !hasOriginal || hasPath) {
+        throw new Error(`${configPath}: adapters.desktop.authorized_apps[${i}] signer, product_name and original_filename must appear together`);
       }
       const signer = rule['signer'];
       const product = rule['product_name'];
+      const original = rule['original_filename'];
       if (typeof signer !== 'string' || signer.length === 0 || signer.length > 512) {
         throw new Error(`${configPath}: adapters.desktop.authorized_apps[${i}].signer must be a non-empty string ≤ 512 characters`);
       }
       if (typeof product !== 'string' || product.length === 0 || product.length > 512) {
         throw new Error(`${configPath}: adapters.desktop.authorized_apps[${i}].product_name must be a non-empty string ≤ 512 characters`);
       }
-      rules.push({ signer, product_name: product });
+      if (typeof original !== 'string' || original.length === 0 || original.length > 260 || original.includes('\\') || original.includes('/')) {
+        throw new Error(`${configPath}: adapters.desktop.authorized_apps[${i}].original_filename must be a non-empty string ≤ 260 characters with no path separators`);
+      }
+      rules.push({ signer, product_name: product, original_filename: original });
       continue;
     }
     if (hasPath) {
@@ -136,20 +141,54 @@ export type NodeSessionIdRunner = (
   args: readonly string[],
 ) => Promise<string>;
 
-/** The real runner: a fixed PowerShell process, shell-less, bounded. */
-export function defaultNodeSessionIdRunner(): NodeSessionIdRunner {
+/** execFile-like spawn shape, injectable so a test can observe the exact
+ *  `options.env` handed to the PowerShell child without ever spawning one. */
+export type SessionSpawn = (
+  file: string,
+  args: readonly string[],
+  options: {
+    readonly shell: false;
+    readonly windowsHide: boolean;
+    readonly timeout: number;
+    readonly maxBuffer: number;
+    readonly env: NodeJS.ProcessEnv;
+  },
+  callback: (error: Error | null, stdout: string, stderr: string) => void,
+) => { readonly kill: () => void };
+
+/** The real runner: a fixed PowerShell process, shell-less, bounded. `spawn` is
+ *  injectable for tests; the default is the real `execFile`. */
+export function defaultNodeSessionIdRunner(spawn: SessionSpawn = execFile): NodeSessionIdRunner {
   return (powershell: string, scriptPath: string, args: readonly string[]): Promise<string> =>
     new Promise((resolve, reject) => {
-      execFile(
+      spawn(
         powershell,
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args],
-        { shell: false, windowsHide: true, timeout: 30_000, maxBuffer: 1024 * 1024 },
+        { shell: false, windowsHide: true, timeout: 30_000, maxBuffer: 1024 * 1024, env: powershellChildEnvironment() },
         (error, stdout, _stderr) => {
           if (error) { reject(error); return; }
           resolve(stdout);
         },
       );
     });
+}
+
+/**
+ * The child environment for a Windows PowerShell 5.1 spawn (amendment A9): a
+ * copy of `process.env` with `PSModulePath` removed, so 5.1 rebuilds its own
+ * default module path instead of inheriting a possibly-polluted one. The copy
+ * is deliberate — `process.env` is never mutated.
+ */
+export function powershellChildEnvironment(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // Windows environment variable names are case-insensitive, so a polluted env
+  // block may carry any casing (`psmodulepath`, `PsModulePath`, …). Delete every
+  // key whose lower-case form is `psmodulepath`, never just two hard-coded
+  // spellings, so no casing survives into the child.
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'psmodulepath') delete env[key];
+  }
+  return env;
 }
 
 /**

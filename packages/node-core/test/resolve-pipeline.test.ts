@@ -40,6 +40,7 @@ function appIdentity(overrides: Partial<AppIdentity> = {}): AppIdentity {
     signature: 'valid',
     signer: 'Contoso Corp',
     product_name: 'Contoso Editor',
+    original_filename: 'app.exe',
     session_id: 7,
     ...overrides,
   };
@@ -352,6 +353,31 @@ test('an identity with a malformed image_sha256 is refused', async () => {
   await expectIdentityFailure(appIdentity({ image_sha256: 'zzz' }));
   await expectIdentityFailure(appIdentity({ image_sha256: 'A'.repeat(64) }));
   await expectIdentityFailure(appIdentity({ image_sha256: 'a'.repeat(63) }));
+});
+
+test('an identity with a malformed original_filename is refused (amendment A9)', async () => {
+  await expectIdentityFailure(appIdentity({ original_filename: 'dir\\app.exe' }));
+  await expectIdentityFailure(appIdentity({ original_filename: 'dir/app.exe' }));
+  await expectIdentityFailure(appIdentity({ original_filename: 'x'.repeat(261) }));
+  await expectIdentityFailure(appIdentity({ original_filename: '' }));
+});
+
+test('an identity with a null original_filename is accepted (amendment A9)', async (t) => {
+  const adapter: Adapter = {
+    manifest: fulfillableManifest(),
+    resolver: {
+      async resolve(): Promise<readonly ResolvedTarget[]> {
+        return [appTarget('x', appIdentity({ original_filename: null }))];
+      },
+    },
+    async init() {},
+    async invoke(): Promise<ActionResult> { return { output: 'ok', truncated: false, artifacts: [], receipt_extra: {} }; },
+    async dispose() {},
+  };
+  const f = await fixture(adapter, { allowed_apps: [{ image_sha256: 'a'.repeat(64) }] });
+  t.after(() => finish(f));
+  const response = await invoke(f.port, f.job);
+  assert.equal(response.body.error, undefined, `invoke failed: ${JSON.stringify(response.body)}`);
 });
 
 // ---------------------------------------------------------------------------
