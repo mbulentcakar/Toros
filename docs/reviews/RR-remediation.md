@@ -195,3 +195,22 @@ All four findings are accepted.
 4. **Refuse an empty string (P3).** `validateAppIdentity` and `parseIdentity` accept
    `original_filename` only as `null` or a string of 1–260 characters. Add `''` rejection tests in
    `allowed-apps.test.ts`, `main-config.test.ts`, `resolve-pipeline.test.ts` and `probe.test.ts`.
+
+## R4 round 2 — the orchestrator's native run of 0f9ce66 (2026-10-21)
+
+The native desktop suites ran on an unlocked desktop: **6 passed, 6 failed**. Every failure is the same: the fixture window is never enumerated. On the same desktop, R2 (`39daf7b`) passes 10/10, so the cause is R4.
+
+`enumerate_windows` denies every window when `authorized_apps` is absent: `IsAuthorized` returns
+`$false` for null rules. That is the right production behaviour (fail closed). But the comment next
+to it says that absence means "no bound (the test-only unrestricted path)", and `fixtureProbe`
+passes no rules. Production cannot be weakened to suit the tests, so:
+
+1. **Keep fail-closed, and fix the comment (P1 test breakage).** Absent or empty `authorized_apps`
+   means no window is published. Correct the comment in `DESKTOP_UIA_PS1`, and pin the behaviour
+   with a non-native test (the probe's `input.json` without rules → the script denies).
+2. **The fixture probe carries its own bound.** `fixtureProbe(fixture, rules?)` passes
+   `authorized_apps`. By default that is `[{ image_path: <the fixture's canonical image path> }]`,
+   the long real path that `ReadIdentity` reports (the fixture's running copy, resolved with
+   `fs.realpathSync.native`). Tests that need a different bound pass it explicitly. The RR-07 test
+   that uses an out-of-bound second fixture must still pass.
+3. The orchestrator re-runs the native suites. The implementer still does not.
