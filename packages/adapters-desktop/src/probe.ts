@@ -252,18 +252,27 @@ try {
   # out-of-scope window is never read and never counted. authorized_apps arrive
   # as DATA via input.json, never interpolated into this script.
   function AppRuleMatches($rule, $id) {
+    # R4 round 3 (P2): the in-PowerShell match must be exactly as strict as
+    # policy's appRuleMatches. image_sha256, signer and product_name compare
+    # case-SENSITIVELY (-ceq); only image_path and original_filename are
+    # case-insensitive. Each field is checked for $null before any [string]
+    # coercion, so a null field never coerces to '' and equals an empty rule.
     if ($null -ne $rule.image_sha256) {
-      return ([string]$rule.image_sha256 -eq [string]$id.image_sha256)
+      if ($null -eq $id.image_sha256) { return $false }
+      return ([string]$rule.image_sha256 -ceq [string]$id.image_sha256)
     }
     if ($null -ne $rule.image_path) {
+      if ($null -eq $id.image_path) { return $false }
       $idPath = ([string]$id.image_path).Replace('\\', '/').ToLowerInvariant()
       $rulePath = ([string]$rule.image_path).Replace('\\', '/').ToLowerInvariant()
       return ($idPath -eq $rulePath)
     }
-    if ([string]$id.signature -ne 'valid') { return $false }
-    if ($null -eq $id.original_filename) { return $false }
-    return (([string]$id.signer -eq [string]$rule.signer) -and
-            ([string]$id.product_name -eq [string]$rule.product_name) -and
+    if ($null -eq $id.signature -or [string]$id.signature -ne 'valid') { return $false }
+    if ($null -eq $id.signer -or $null -eq $rule.signer) { return $false }
+    if ($null -eq $id.product_name -or $null -eq $rule.product_name) { return $false }
+    if ($null -eq $id.original_filename -or $null -eq $rule.original_filename) { return $false }
+    return (([string]$id.signer -ceq [string]$rule.signer) -and
+            ([string]$id.product_name -ceq [string]$rule.product_name) -and
             ([string]$id.original_filename).ToLowerInvariant() -eq ([string]$rule.original_filename).ToLowerInvariant())
   }
   function IsAuthorized($rules, $id) {
@@ -388,7 +397,11 @@ try {
     $seen = New-Object 'System.Collections.Generic.HashSet[string]'
     $truncated = $false
     $stack = New-Object 'System.Collections.Generic.Stack[object]'
-    $curr = $null; try { $curr = $cwalker.GetFirstChild($target) } catch { }
+    # R4 round 3 (P3): walk the control subtree only when a depth was requested.
+    # A depth-0 re-verification read (desktop.state) must not descend even one
+    # child, so a recycled HWND never yields the new owner's first control.
+    $curr = $null
+    if ($depth -gt 0) { try { $curr = $cwalker.GetFirstChild($target) } catch { } }
     $d = 1
     while ($null -ne $curr) {
       if ($controls.Count -ge $maxc) { $truncated = $true; break }

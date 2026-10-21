@@ -389,20 +389,54 @@ test('the emitted script carries the image-path checks with their backslashes in
 // ---------------------------------------------------------------------------
 
 test('the emitted script mirrors policy appRuleMatches, including case-insensitive original_filename (RR-07)', () => {
-  // hash: exact equality.
-  assert.ok(DESKTOP_UIA_PS1.includes("([string]$rule.image_sha256 -eq [string]$id.image_sha256)"),
-    'the hash rule must compare image_sha256 exactly');
+  // hash: exact, case-sensitive equality (-ceq).
+  assert.ok(DESKTOP_UIA_PS1.includes("([string]$rule.image_sha256 -ceq [string]$id.image_sha256)"),
+    'the hash rule must compare image_sha256 exactly and case-sensitively');
   // signer: requires a valid signature before comparing signer/product/original.
   assert.ok(DESKTOP_UIA_PS1.includes("[string]$id.signature -ne 'valid'"),
     'the signer rule must require a valid signature');
   // A9: original_filename compares case-insensitively (the version resource varies in case).
   assert.ok(DESKTOP_UIA_PS1.includes("([string]$id.original_filename).ToLowerInvariant() -eq ([string]$rule.original_filename).ToLowerInvariant()"),
     'the signer rule must compare original_filename case-insensitively');
-  // signer and product_name compare exactly (no ToLowerInvariant).
-  assert.ok(DESKTOP_UIA_PS1.includes("[string]$id.signer -eq [string]$rule.signer"),
-    'the signer rule must compare signer exactly');
-  assert.ok(DESKTOP_UIA_PS1.includes("[string]$id.product_name -eq [string]$rule.product_name"),
-    'the signer rule must compare product_name exactly');
+  // R4 round 3 (P2): signer and product_name compare case-SENSITIVELY (-ceq),
+  // exactly as policy's appRuleMatches, so a signer/product differing only in
+  // case never authorises an out-of-bound window.
+  assert.ok(DESKTOP_UIA_PS1.includes("[string]$id.signer -ceq [string]$rule.signer"),
+    'the signer rule must compare signer case-sensitively (-ceq)');
+  assert.ok(DESKTOP_UIA_PS1.includes("[string]$id.product_name -ceq [string]$rule.product_name"),
+    'the signer rule must compare product_name case-sensitively (-ceq)');
+  // No `-eq` (case-insensitive in PowerShell) may remain on a case-sensitive field.
+  assert.ok(!DESKTOP_UIA_PS1.includes("[string]$id.signer -eq [string]$rule.signer"),
+    'signer must not compare with case-insensitive -eq');
+  assert.ok(!DESKTOP_UIA_PS1.includes("[string]$id.product_name -eq [string]$rule.product_name"),
+    'product_name must not compare with case-insensitive -eq');
+});
+
+test('AppRuleMatches checks $null before any [string] coercion (R4 round 3 P2)', () => {
+  // A null identity field must never coerce to '' and equal an empty-string
+  // rule. Each case-sensitive field is guarded by an explicit $null check.
+  assert.ok(DESKTOP_UIA_PS1.includes('if ($null -eq $id.image_sha256) { return $false }'),
+    'a null image_sha256 must be refused before coercion');
+  assert.ok(DESKTOP_UIA_PS1.includes('if ($null -eq $id.image_path) { return $false }'),
+    'a null image_path must be refused before coercion');
+  assert.ok(DESKTOP_UIA_PS1.includes('if ($null -eq $id.signer -or $null -eq $rule.signer) { return $false }'),
+    'a null signer (either side) must be refused before coercion');
+  assert.ok(DESKTOP_UIA_PS1.includes('if ($null -eq $id.product_name -or $null -eq $rule.product_name) { return $false }'),
+    'a null product_name (either side) must be refused before coercion');
+  assert.ok(DESKTOP_UIA_PS1.includes('if ($null -eq $id.original_filename -or $null -eq $rule.original_filename) { return $false }'),
+    'a null original_filename (either side) must be refused before coercion');
+});
+
+test('a signer rule differing only in case does not authorise (R4 round 3 P2)', () => {
+  // The script text pins the -ceq comparisons; this test asserts the matching
+  // semantics in a process-free way: no case-insensitive -eq may remain on the
+  // signer/product fields, and both $null guards and -ceq are present.
+  const signerEq = "[string]$id.signer -eq [string]$rule.signer";
+  const productEq = "[string]$id.product_name -eq [string]$rule.product_name";
+  assert.ok(!DESKTOP_UIA_PS1.includes(signerEq), 'signer must not use case-insensitive -eq');
+  assert.ok(!DESKTOP_UIA_PS1.includes(productEq), 'product_name must not use case-insensitive -eq');
+  assert.ok(DESKTOP_UIA_PS1.includes('[string]$id.signer -ceq [string]$rule.signer'), 'signer must use -ceq');
+  assert.ok(DESKTOP_UIA_PS1.includes('[string]$id.product_name -ceq [string]$rule.product_name'), 'product_name must use -ceq');
 });
 
 test('enumerate_windows authorizes a window before reading its title and before the max_windows cap (RR-07)', () => {

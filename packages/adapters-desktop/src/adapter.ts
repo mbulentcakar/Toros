@@ -396,10 +396,12 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
     ctx: AdapterContext,
   ): Promise<readonly ResolvedTarget[]> {
     const rawContinuation = args['continuation_token'];
-    if (typeof rawContinuation === 'string' && rawContinuation.length > 0) {
-      // A continuation page resolves no new target (RR-06): the window was
-      // already decided and its handle spent at page 1, and the continuation
-      // token is validated (single-use, expiry, binding) at invoke.
+    if (rawContinuation !== undefined) {
+      // R4 round 3 (P2): a continuation page resolves no new target (RR-06) —
+      // the window was decided and its handle spent at page 1. The token's
+      // value is irrelevant here; an empty/non-string token is refused at
+      // invoke. Routing on key presence (not value) so an empty token never
+      // falls through to a fresh page-1 resolution.
       return [];
     }
 
@@ -450,7 +452,10 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
       if (decisions?.get(windowId) !== 'allowed') continue;
       const live = await options.probe.inspectWindow(
         entry.native_handle,
-        { depth: 0, max_controls: 1 },
+        // R4 round 3 (P3): re-verify against the resolved identity inside the
+        // probe too, so a recycled HWND is dropped BEFORE the subtree is walked,
+        // not after Node drops it downstream.
+        { depth: 0, max_controls: 1, expected_identity: entry.identity },
         ctx.signal,
       );
       if (live.closed || live.identity === null) {
@@ -545,7 +550,10 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
     ctx: AdapterContext,
   ): Promise<ActionResult> {
     const rawContinuation = args['continuation_token'];
-    if (typeof rawContinuation === 'string' && rawContinuation.length > 0) {
+    // R4 round 3 (P2): any request that carries `continuation_token`, whatever
+    // its value, goes to the continuation path. An absent key means page 1; an
+    // empty or non-string token fails closed with refresh_required there.
+    if (rawContinuation !== undefined) {
       return invokeInspectContinuation(rawContinuation, args, ctx);
     }
     return invokeInspectFirstPage(args, ctx);
@@ -661,14 +669,30 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
    * same `refresh_required`, so the caller cannot probe which case it hit.
    */
   async function invokeInspectContinuation(
-    token: string,
+    token: JsonValue,
     args: Readonly<Record<string, JsonValue>>,
     ctx: AdapterContext,
   ): Promise<ActionResult> {
     const depth = resolveDepth(args);
+
+    // R4 round 3 (P2): an empty or non-string token is refused the same way as
+    // an unknown, reused, expired or foreign one — a single refresh_required
+    // shape, so the caller cannot probe which case it hit.
+    if (typeof token !== 'string' || token.length === 0) {
+      const output = JSON.stringify({ status: 'refresh_required' as InspectStatus });
+      return makeInspectResult('refresh_required', output, 0, false, depth);
+    }
+
     const state = paginations.get(token);
 
+    // R4 round 3 (P2): the token is bound to (job, actor, window_id). A caller
+    // naming a different window than the token's must not receive that window's
+    // controls under the requested window id.
+    const windowIdArg = args['window_id'];
+    const windowMatches = windowIdArg === undefined || windowIdArg === state?.window_id;
+
     const valid = state !== undefined
+      && windowMatches
       && state.job_id === ctx.job_id
       && state.actor === ctx.actor
       && !state.consumed
@@ -699,7 +723,10 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
         page_size: state.page_size,
         depth: state.depth,
         probe_truncated: state.probe_truncated,
-        issued_at: now(),
+        // R4 round 3 (P2): the NEXT token keeps the ORIGINAL issued_at, so the
+        // whole pagination chain lives at most 60 s from page 1, never extended
+        // page over page.
+        issued_at: state.issued_at,
         consumed: false,
       });
     }

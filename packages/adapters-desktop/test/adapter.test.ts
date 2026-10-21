@@ -613,4 +613,128 @@ describe('F3b desktop adapter — restored F2 unit coverage', () => {
     const result = await adapter.invoke('inspect', { session_scope: 'interactive', continuation_token: 'bogus-token' }, { ...ctx, target_decisions: emptyMap() });
     assert.equal((JSON.parse(result.output) as { status: string }).status, 'refresh_required');
   });
+
+  it('an empty continuation token returns refresh_required (never falls through to page 1)', async () => {
+    const controls: RawControl[] = [0, 1].map((i) => ({
+      native_id: `r${i}`,
+      control_type: 'CheckBox',
+      automation_id: `cb${i}`,
+      enabled: true,
+      patterns: [],
+    }));
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), controls);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctx = fakeContext();
+
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    const key = (targets[0]! as { key: string }).key;
+    const tok = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
+
+    // An empty (and a non-string) continuation_token must go to the continuation
+    // path and fail closed — never resolve a fresh page-1 inspect.
+    const empty = await adapter.invoke('inspect', { session_scope: 'interactive', continuation_token: '', freshness_token: tok.freshness_token, window_id: key }, { ...ctx, target_decisions: allowedMap(key) });
+    assert.equal((JSON.parse(empty.output) as { status: string }).status, 'refresh_required');
+
+    const nonString = await adapter.invoke('inspect', { session_scope: 'interactive', continuation_token: 42, freshness_token: tok.freshness_token, window_id: key }, { ...ctx, target_decisions: allowedMap(key) });
+    assert.equal((JSON.parse(nonString.output) as { status: string }).status, 'refresh_required');
+  });
+
+  it('a continuation token from a foreign job_id returns refresh_required', async () => {
+    const controls: RawControl[] = [0, 1, 2].map((i) => ({
+      native_id: `r${i}`,
+      control_type: 'CheckBox',
+      automation_id: `cb${i}`,
+      enabled: true,
+      patterns: [],
+    }));
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), controls);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctxA = fakeContext({ job_id: 'job-a' });
+
+    const targets = await adapter.resolver!.resolve('state', {}, ctxA);
+    const key = (targets[0]! as { key: string }).key;
+    const tok = JSON.parse((await adapter.invoke('state', {}, { ...ctxA, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
+    await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: tok.freshness_token }, ctxA);
+
+    const page1 = await adapter.invoke('inspect', { window_id: key, freshness_token: tok.freshness_token, page_size: 2 }, { ...ctxA, target_decisions: allowedMap(key) });
+    const token1 = (JSON.parse(page1.output) as { continuation_token?: string }).continuation_token!;
+    assert.ok(token1, 'page 1 must mint a continuation token');
+
+    // A different job presenting the same token → refresh_required.
+    const ctxB = fakeContext({ job_id: 'job-b' });
+    const result = await adapter.invoke('inspect', { session_scope: 'interactive', continuation_token: token1 }, { ...ctxB, target_decisions: emptyMap() });
+    assert.equal((JSON.parse(result.output) as { status: string }).status, 'refresh_required');
+  });
+
+  it('a mismatched window_id at redemption returns refresh_required (token is window-bound)', async () => {
+    const controls: RawControl[] = [0, 1, 2].map((i) => ({
+      native_id: `r${i}`,
+      control_type: 'CheckBox',
+      automation_id: `cb${i}`,
+      enabled: true,
+      patterns: [],
+    }));
+    // Two windows so a foreign window_id can be named.
+    const probe = makeFakeProbe(
+      [
+        makeRawWindow({ native_handle: '100', identity: makeIdentity() }),
+        makeRawWindow({ native_handle: '200', identity: makeIdentity() }),
+      ],
+      'active',
+      makeIdentity(),
+      controls,
+    );
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe);
+    const ctx = fakeContext();
+
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    const key = (targets[0]! as { key: string }).key;
+    const tok = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
+    await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: tok.freshness_token }, ctx);
+
+    const page1 = await adapter.invoke('inspect', { window_id: key, freshness_token: tok.freshness_token, page_size: 2 }, { ...ctx, target_decisions: allowedMap(key) });
+    const token1 = (JSON.parse(page1.output) as { continuation_token?: string }).continuation_token!;
+    assert.ok(token1, 'page 1 must mint a continuation token');
+
+    // Presenting the token alongside a different window_id must be refused.
+    const result = await adapter.invoke('inspect', { session_scope: 'interactive', continuation_token: token1, window_id: 'some-other-window' }, { ...ctx, target_decisions: emptyMap() });
+    assert.equal((JSON.parse(result.output) as { status: string }).status, 'refresh_required');
+  });
+
+  it('a pagination chain is not extended past 60 s from page 1 (issued_at preserved)', async () => {
+    const controls: RawControl[] = [0, 1, 2, 3].map((i) => ({
+      native_id: `r${i}`,
+      control_type: 'CheckBox',
+      automation_id: `cb${i}`,
+      enabled: true,
+      patterns: [],
+    }));
+    let nowMs = 0;
+    const probe = makeFakeProbe([makeRawWindow()], 'active', makeIdentity(), controls);
+    const adapter = makeAdapter([{ image_sha256: IN_SCOPE_SHA }], probe, () => nowMs);
+    const ctx = fakeContext();
+
+    const targets = await adapter.resolver!.resolve('state', {}, ctx);
+    const key = (targets[0]! as { key: string }).key;
+    const tok = JSON.parse((await adapter.invoke('state', {}, { ...ctx, target_decisions: allowedMap(key) })).output) as { freshness_token: string };
+    await adapter.resolver!.resolve('inspect', { window_id: key, freshness_token: tok.freshness_token }, ctx);
+
+    // Page 1 of size 1 at t=0.
+    const page1 = await adapter.invoke('inspect', { window_id: key, freshness_token: tok.freshness_token, page_size: 1 }, { ...ctx, target_decisions: allowedMap(key) });
+    const token1 = (JSON.parse(page1.output) as { continuation_token?: string }).continuation_token!;
+    assert.ok(token1, 'page 1 must mint a continuation token');
+
+    // Advance 59 s: page 2 must still succeed (issued_at preserved from page 1).
+    nowMs = 59_000;
+    const page2 = await adapter.invoke('inspect', { session_scope: 'interactive', continuation_token: token1 }, { ...ctx, target_decisions: emptyMap() });
+    assert.equal((JSON.parse(page2.output) as { status: string }).status, 'ok');
+    const token2 = (JSON.parse(page2.output) as { continuation_token?: string }).continuation_token!;
+    assert.ok(token2, 'page 2 must mint a continuation token');
+
+    // The next token keeps page 1's issued_at, so past 60 s total it must fail —
+    // the chain never extends to 60 s per page.
+    nowMs = 60_001;
+    const page3 = await adapter.invoke('inspect', { session_scope: 'interactive', continuation_token: token2 }, { ...ctx, target_decisions: emptyMap() });
+    assert.equal((JSON.parse(page3.output) as { status: string }).status, 'refresh_required');
+  });
 });
