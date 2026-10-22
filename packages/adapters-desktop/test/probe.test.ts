@@ -383,6 +383,47 @@ test('the emitted script carries the image-path checks with their backslashes in
 });
 
 // ---------------------------------------------------------------------------
+// R5 FR-01: the probe reads OriginalFilename language-neutrally. Pin the C#
+// helper lines (backslashes included) exactly as they must reach PowerShell, and
+// pin the ReadIdentity call that uses it. A halved backslash here would make the
+// Translation/StringFileInfo keys point at the wrong version-resource block.
+// ---------------------------------------------------------------------------
+
+test('the emitted script carries the language-neutral OriginalFilename helper with backslashes intact (R5 FR-01)', () => {
+  const lines = DESKTOP_UIA_PS1.split('\n').map((line) => line.trim());
+  // String.raw keeps every backslash below exactly as PowerShell must see it.
+  const expected = [
+    String.raw`[DllImport("version.dll", CharSet=CharSet.Unicode, SetLastError=true)]`,
+    String.raw`public static extern uint GetFileVersionInfoSizeEx(uint dwFlags, string lpwstrFilename, out uint lpdwHandle);`,
+    String.raw`public static extern bool GetFileVersionInfoEx(uint dwFlags, string lpwstrFilename, uint dwHandle, uint dwLen, byte[] lpData);`,
+    String.raw`public static extern bool VerQueryValue(byte[] pBlock, string lpSubBlock, out IntPtr lplpBuffer, out uint puLen);`,
+    String.raw`public const uint FILE_VER_GET_NEUTRAL = 0x02;`,
+    String.raw`public static string NeutralOriginalFilename(string path) {`,
+    String.raw`if (!VerQueryValue(data, "\\VarFileInfo\\Translation", out p, out len) || len < 4) return null;`,
+    String.raw`string key = string.Format("\\StringFileInfo\\{0:X4}{1:X4}\\OriginalFilename", langCp & 0xFFFF, (langCp >> 16) & 0xFFFF);`,
+    String.raw`return Marshal.PtrToStringUni(s);`,
+  ];
+  for (const line of expected) {
+    assert.ok(lines.includes(line), `neutral OriginalFilename helper line must reach PowerShell as: ${line}`);
+  }
+});
+
+test('ReadIdentity calls the neutral helper and the old FileVersionInfo OriginalFilename read is gone (R5 FR-01)', () => {
+  const neutralRead = '$original = $null; try { $original = [TorosNative]::NeutralOriginalFilename($imagePath) } catch { }';
+  assert.ok(
+    DESKTOP_UIA_PS1.includes(neutralRead),
+    `ReadIdentity must read OriginalFilename via NeutralOriginalFilename: ${neutralRead}`,
+  );
+  // The old read followed an adjacent en-US MUI, so the inbox binary and its
+  // copies could report different values (NOTEPAD.EXE.MUI vs NOTEPAD.EXE). It
+  // must be gone from the emitted script.
+  assert.ok(
+    !DESKTOP_UIA_PS1.includes('$fi.VersionInfo.OriginalFilename'),
+    'the old FileVersionInfo OriginalFilename read must be gone from the emitted script',
+  );
+});
+
+// ---------------------------------------------------------------------------
 // RR-07: the in-PowerShell authorized_apps matching mirrors policy's
 // appRuleMatches (amendments A8/A9), and it runs before a title read / before
 // the max_windows cap (enumerate) and before the subtree walk (inspect).
@@ -511,10 +552,10 @@ test('absent or empty authorized_apps publishes no window — enumerate_windows 
 // PSModulePath.
 // ---------------------------------------------------------------------------
 
-test('the emitted script reads OriginalFilename and emits original_filename (amendment A9)', () => {
+test('the emitted script reads OriginalFilename language-neutrally and emits original_filename (R5 FR-01)', () => {
   assert.ok(
-    DESKTOP_UIA_PS1.includes('VersionInfo.OriginalFilename'),
-    'the script must read the version resource OriginalFilename',
+    DESKTOP_UIA_PS1.includes('[TorosNative]::NeutralOriginalFilename($imagePath)'),
+    'the script must read the version resource OriginalFilename language-neutrally',
   );
   assert.ok(
     DESKTOP_UIA_PS1.includes('original_filename=$original'),

@@ -334,3 +334,9 @@ resource varies in case: `PowerShell.EXE`, `NOTEPAD.EXE`), while `signer` and
 `product_name` stay exact. Consumers: envelope (validation), policy (matching),
 node-core (identity validation, desktop-config validation), adapters-desktop
 (the probe reads and parses it).
+
+**Clarification (R5, 2026-10-22):** `original_filename` is the **language-neutral**
+OriginalFilename — the value the version resource carries independent of any adjacent
+`en-US\<image>.mui` — for example `NOTEPAD.EXE`, never `NOTEPAD.EXE.MUI`. This is a clarification
+of what the value means, not a type change: the field remains `string | null` and A9's
+case-insensitive comparison is unchanged.
