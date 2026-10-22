@@ -166,6 +166,28 @@ Attack it as hard as the original:
 For each finding, mark `AS-inherited` when a click or type action built on this surface would
 inherit it.
 
+### 2a. Open questions from the interrupted first attempt (2026-10-22)
+
+A first Codex run of this brief was stopped after 12 minutes by the provider's content filter,
+before it wrote a report. Its log showed several checks behaving as intended:
+
+- the continuation-token rejections;
+- the signer rule under PowerShell 5.1 and PowerShell 7;
+- a forbidden capability returning `E_FORBIDDEN`;
+- an out-of-bound fixture title absent from the probe output.
+
+It also left two observations without a conclusion. Settle both, and record any finding with its
+severity:
+
+1. **A page served after the window is gone.** A continuation page was still served
+   (`status: "ok"`) from the page-1 snapshot after the window's process had exited. Is serving a
+   cached snapshot for up to 60 s acceptable, or must every page re-verify the window's identity?
+   Is this `AS-inherited`?
+2. **A renamed image passes re-verification.** After the window's image file was renamed between
+   resolve and invoke, the window still passed (same pid, start time and hash; different path).
+   Re-verification compares pid, creation time and SHA-256, not the path. Can this widen what a
+   `{ image_path }` rule admits, or bypass a `forbidden` term that names a folder or file?
+
 ### 3. Contract integrity
 
 `packages/contracts` differs from the public release (`2847726`) only by A8, A9 and the restored
