@@ -11,7 +11,17 @@ disabled, and spec AS (PR mbulentcakar/Toros#1) stays blocked. Two reviews came 
 
 This file is the brief for the third review: the **final** one. Its verdict is the gate.
 
-> **Dispatch (operator decision, 2026-10-22).**
+> **Dispatch (operator decision, 2026-10-22, revised).** The Codex run below was stopped after
+> 12 minutes by the provider's content filter, with no report written. The operator moved the
+> review to **Grok, `grok-4.7`, high effort**, run headless through the `grok` CLI with
+> `--permission-mode dontAsk` in the same worktree.
+>
+> - **Grok's prior involvement:** in September, Grok code-reviewed the **original** discovery
+>   slices T1–T3. That is the code the 2026-10-13 review found unsafe, and it has since been
+>   largely rewritten. Grok reviewed **none** of the F or RR remediation slices. Treat its
+>   September approvals as untrusted, exactly like everyone else's.
+>
+> The original dispatch, kept for the record:
 >
 > - **Reviewer:** Codex, `gpt-6.1-sol`, high reasoning effort.
 > - **Run mode:** full access, so it can build and run natively, inside the dedicated worktree
