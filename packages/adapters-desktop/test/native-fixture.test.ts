@@ -1,13 +1,19 @@
 import { describe, it, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
 
 import type { Adapter, AdapterContext } from '@toros/contracts';
 
 import { createDesktopAdapter } from '../src/adapter.js';
-import { DESKTOP_UIA_PS1, createPowerShellUiaProbe } from '../src/probe.js';
+import { DESKTOP_UIA_PS1, createPowerShellUiaProbe, powershellChildEnvironment } from '../src/probe.js';
 import {
   fakeContext,
   fixtureProbe,
+  getPowershellPath,
   startFixture,
   stopFixture,
   NATIVE_DESKTOP_TEST_PREFLIGHT,
@@ -56,6 +62,61 @@ async function inspectWindow(
   return JSON.parse(result.output) as Record<string, unknown>;
 }
 
+// ---------------------------------------------------------------------------
+// R5 FR-01 (native): prove the language-neutral OriginalFilename. The fixture is
+// a renamed copy of Windows PowerShell in a fresh temp dir (no en-US subfolder),
+// so its neutral OriginalFilename is the vendor's value. The inbox powershell.exe
+// sits beside an en-US MUI, which is exactly the case FileVersionInfo used to get
+// wrong (PowerShell.EXE.MUI). Both must report the SAME neutral value through the
+// same helper, reusing the TorosNative type from the emitted script.
+// ---------------------------------------------------------------------------
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Extract the `TorosNative` C# class from the emitted script (the sole
+ * `Add-Type @"` here-string), so a test-owned PowerShell re-runs the EXACT type
+ * the probe compiles rather than a hand-copied approximation.
+ */
+function torosNativeAddTypeSource(): string {
+  const start = DESKTOP_UIA_PS1.indexOf('Add-Type @"');
+  if (start < 0) throw new Error('the emitted script must contain an Add-Type here-string');
+  const contentStart = DESKTOP_UIA_PS1.indexOf('\n', start) + 1;
+  const end = DESKTOP_UIA_PS1.indexOf('\n"@', contentStart);
+  if (end < 0) throw new Error('the emitted script must terminate its Add-Type here-string');
+  return DESKTOP_UIA_PS1.slice(contentStart, end);
+}
+
+/**
+ * Run the emitted script's `TorosNative` type in a test-owned Windows PowerShell
+ * and ask it for the neutral OriginalFilename of one executable. Returns null
+ * when the helper yields nothing; throws on a spawn or compile failure so a
+ * broken helper cannot be read as "no value".
+ */
+async function neutralOriginalFilenameViaType(exePath: string): Promise<string | null> {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'toros-neutral-ofn-'));
+  const scriptPath = path.join(tempDir, 'neutral.ps1');
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    'Add-Type @"',
+    torosNativeAddTypeSource(),
+    '"@',
+    `Write-Output ([TorosNative]::NeutralOriginalFilename('${exePath}'))`,
+  ].join('\n');
+  try {
+    fs.writeFileSync(scriptPath, script, 'utf8');
+    const { stdout } = await execFileAsync(
+      getPowershellPath(),
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
+      { windowsHide: true, env: powershellChildEnvironment(), timeout: 60_000, maxBuffer: 1024 * 1024 },
+    );
+    const value = stdout.trim();
+    return value.length === 0 ? null : value;
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 describe('AR-F3b Native Windows Identity Verification', () => {
   const activeFixtures: FixtureInstance[] = [];
 
@@ -100,6 +161,38 @@ describe('AR-F3b Native Windows Identity Verification', () => {
 // A9: the fixture is a renamed copy of the PowerShell executable, so its
     // version resource still carries the vendor's OriginalFilename.
     assert.ok(typeof id.original_filename === 'string' && id.original_filename.length > 0, 'original_filename must be present on the fixture identity');
+  });
+
+  it('the fixture identity reports the language-neutral OriginalFilename, equal to the inbox powershell.exe (R5 FR-01)', nativeDesktopTestOptions, async () => {
+    const fixture = await startFixture({});
+    activeFixtures.push(fixture);
+    const probe = fixtureProbe(fixture);
+
+    const raw = await probe.enumerateWindows({ max_windows: 200 }, new AbortController().signal);
+    if (raw.session_state !== 'active') {
+      throw new Error(`Desktop is not in active state (state=${raw.session_state}). R5 FR-01 requires an interactive, unlocked Windows desktop.`);
+    }
+    const fixtureWindow = raw.windows.find((w) => w.native_handle === String(fixture.hwnd));
+    assert.ok(fixtureWindow, 'the fixture window must be enumerated');
+    const original = fixtureWindow!.identity.original_filename;
+    if (typeof original !== 'string' || original.length === 0) {
+      throw new Error(`fixture identity must carry a non-empty original_filename, got ${String(original)}`);
+    }
+    // The fixture is a renamed copy of Windows PowerShell placed in a fresh temp
+    // dir with no en-US subfolder, so its language-neutral OriginalFilename is the
+    // vendor's value — NOT the MUI-tainted form (PowerShell.EXE.MUI) that
+    // FileVersionInfo.OriginalFilename used to report for the inbox binary.
+    assert.equal(original.toLowerCase(), 'powershell.exe', 'the fixture must report the language-neutral OriginalFilename PowerShell.EXE');
+
+    // Second assertion: the inbox powershell.exe (which sits beside an en-US MUI)
+    // must report the SAME neutral value through the same helper, so a signer rule
+    // names one value whether the operator reads the inbox binary or a copy.
+    const inbox = await neutralOriginalFilenameViaType(getPowershellPath());
+    if (typeof inbox !== 'string' || inbox.length === 0) {
+      throw new Error('the inbox powershell.exe must yield a language-neutral OriginalFilename');
+    }
+    assert.equal(inbox.toLowerCase(), original.toLowerCase(), 'the inbox powershell.exe and its copy must report the same language-neutral OriginalFilename');
+    assert.equal(inbox.toLowerCase(), 'powershell.exe', 'the inbox powershell.exe must report PowerShell.EXE, never PowerShell.EXE.MUI');
   });
 
   it('a polluted PSModulePath does not change the reported signature status (amendment A9)', nativeDesktopTestOptions, async () => {

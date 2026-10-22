@@ -32,6 +32,12 @@ now an array of **application rules**, each exactly one of:
 - `image_path` must be an absolute path, at most 512 characters, matched case-insensitively after
   separator normalisation. There is **no** basename rule anymore.
 
+`original_filename` is the **language-neutral** version-resource OriginalFilename. It can be
+shadowed by an adjacent `en-US\<image>.mui`, so read it from a copy, not the installed binary:
+copy the executable to a folder with no `en-US` subfolder, then read
+`FileVersionInfo.OriginalFilename` on the copy — for example `NOTEPAD.EXE`, never
+`NOTEPAD.EXE.MUI`.
+
 **A bare string entry makes Node Core refuse to start**, with a message naming the new format. If
 an existing install carried basename entries, convert each one to the matching rule shape before
 restarting. Example shapes only — use the hash, signer/product, or absolute path that this

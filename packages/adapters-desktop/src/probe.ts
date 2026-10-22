@@ -121,6 +121,32 @@ public class TorosNative {
     using (var sha = SHA256.Create())
     using (var fs = File.OpenRead(path)) { return BitConverter.ToString(sha.ComputeHash(fs)).Replace("-", "").ToLowerInvariant(); }
   }
+  // R5 FR-01: read OriginalFilename LANGUAGE-NEUTRALLY. FileVersionInfo.OriginalFilename
+  // follows an adjacent en-US language MUI (e.g. NOTEPAD.EXE.MUI) when one exists, so the
+  // same binary can report a different value depending on where it sits. This helper reads
+  // the neutral version resource directly (FILE_VER_GET_NEUTRAL flag), so the installed
+  // binary and its renamed copies report the same OriginalFilename.
+  [DllImport("version.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern uint GetFileVersionInfoSizeEx(uint dwFlags, string lpwstrFilename, out uint lpdwHandle);
+  [DllImport("version.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern bool GetFileVersionInfoEx(uint dwFlags, string lpwstrFilename, uint dwHandle, uint dwLen, byte[] lpData);
+  [DllImport("version.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern bool VerQueryValue(byte[] pBlock, string lpSubBlock, out IntPtr lplpBuffer, out uint puLen);
+  public const uint FILE_VER_GET_NEUTRAL = 0x02;
+  public static string NeutralOriginalFilename(string path) {
+    uint h;
+    uint size = GetFileVersionInfoSizeEx(FILE_VER_GET_NEUTRAL, path, out h);
+    if (size == 0) return null;
+    byte[] data = new byte[size];
+    if (!GetFileVersionInfoEx(FILE_VER_GET_NEUTRAL, path, 0, size, data)) return null;
+    IntPtr p; uint len;
+    if (!VerQueryValue(data, "\\\\VarFileInfo\\\\Translation", out p, out len) || len < 4) return null;
+    int langCp = Marshal.ReadInt32(p);
+    string key = string.Format("\\\\StringFileInfo\\\\{0:X4}{1:X4}\\\\OriginalFilename", langCp & 0xFFFF, (langCp >> 16) & 0xFFFF);
+    IntPtr s; uint slen;
+    if (!VerQueryValue(data, key, out s, out slen) || slen == 0) return null;
+    return Marshal.PtrToStringUni(s);
+  }
 }
 "@
 $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
@@ -224,8 +250,13 @@ try {
     $product = $null; try { $product = [string]$fi.VersionInfo.ProductName } catch { }
     if ([string]::IsNullOrWhiteSpace($product)) { $product = $null }
     # OriginalFilename (amendment A9): the version resource's original file name,
-    # which survives renames and copies. Trimmed; null when absent or blank.
-    $original = $null; try { $original = [string]$fi.VersionInfo.OriginalFilename } catch { }
+    # which survives renames and copies. Read LANGUAGE-NEUTRALLY (R5 FR-01):
+    # FileVersionInfo.OriginalFilename follows an adjacent en-US language MUI when
+    # one exists, so an inbox binary and its copies can otherwise report different
+    # values. NeutralOriginalFilename reads the neutral version resource directly,
+    # so both report the same value. A failed read (null or throw) is $null here,
+    # never a dropped identity. Trimmed; null when absent or blank.
+    $original = $null; try { $original = [TorosNative]::NeutralOriginalFilename($imagePath) } catch { }
     if ($null -ne $original) { $original = $original.Trim() }
     if ([string]::IsNullOrWhiteSpace($original)) { $original = $null }
     # An OriginalFilename over 260 characters, or one carrying a path separator,
