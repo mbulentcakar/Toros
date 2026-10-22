@@ -126,8 +126,7 @@ type Readiness =
   | 'usable'
   | 'missing_adapter'
   | 'unsupported_platform'
-  | 'missing_prerequisite'
-  | 'unauthorized';
+  | 'missing_prerequisite';
 
 /**
  * An entry as it is built during the scan, before the AR-09 job-scope filter
@@ -144,7 +143,7 @@ interface InternalEntry {
   adapterId: string;
 }
 
-/** The output shape. `unauthorized` entries carry only `id` and `readiness`. */
+/** The output shape. `unauthorized` is never emitted (RR-03): an out-of-job entry is omitted entirely. */
 interface PublicEntry {
   id: string;
   readiness: Readiness;
@@ -532,23 +531,50 @@ export function createMachineAdapter(options: MachineAdapterOptions): Adapter {
       let probeCount = 0;
       let pathEntriesSkipped = 0;
 
+      // RR-03 — the allowed-adapter set is computed BEFORE any probe or
+      // filesystem read, from Core's per-capability decisions. An entry whose
+      // adapter has no allowed capability is omitted from the output entirely:
+      // no `unauthorized` stub, no count, and its probe is never examined.
+      const decisions = ctx.target_decisions ?? new Map<string, 'allowed' | 'denied'>();
+      const allowedAdapters = new Set<string>();
+      for (const [key, decision] of decisions) {
+        if (decision === 'allowed') {
+          const adapterId = key.split('.')[0];
+          if (adapterId !== undefined) allowedAdapters.add(adapterId);
+        }
+      }
+
       // A pre-aborted signal means the action is over before it began: probe
       // nothing, and — because resolveFixedDrives is never reached — spawn
       // nothing and access nothing (AR-08).
       if (!ctx.signal.aborted) {
-        const fixedDrives = await resolveFixedDrives(
-          options.node_platform,
-          driveReader,
-          ctx.signal,
-          options.timeout_ms,
-          nowFn,
-          driveCache,
+        // Only probes whose adapter is allowed are examined (RR-03): an out-of-
+        // job adapter's probe is never touched — no drive read, no access.
+        const allowedProbes = options.probes.filter((p) =>
+          allowedAdapters.has(p.backs_adapter ?? p.id),
         );
-        const pathFilter = filterPathEntries(pathEnvFn(), options.node_platform, fixedDrives);
-        pathEntriesSkipped = pathFilter.skipped;
+        const needsDetection = allowedProbes.some((p) =>
+          p.platforms.includes(options.node_platform),
+        );
 
-        // Process each probe in the catalog.
-        for (const probe of options.probes) {
+        let fixedDrives: ReadonlySet<string> = new Set<string>();
+        let keptPathEntries: readonly string[] = [];
+        if (needsDetection) {
+          fixedDrives = await resolveFixedDrives(
+            options.node_platform,
+            driveReader,
+            ctx.signal,
+            options.timeout_ms,
+            nowFn,
+            driveCache,
+          );
+          const pathFilter = filterPathEntries(pathEnvFn(), options.node_platform, fixedDrives);
+          pathEntriesSkipped = pathFilter.skipped;
+          keptPathEntries = pathFilter.kept;
+        }
+
+        // Process each allowed probe in the catalog.
+        for (const probe of allowedProbes) {
           if (ctx.signal.aborted) break;
           probeCount++;
 
@@ -564,7 +590,7 @@ export function createMachineAdapter(options: MachineAdapterOptions): Adapter {
               ctx.signal,
               fixedDrives,
               accessFn,
-              pathFilter.kept,
+              keptPathEntries,
             );
             // Abort observed during detection: stop the scan, but do not record
             // this probe as `missing_prerequisite` — a `false` from detectPresent
@@ -601,10 +627,12 @@ export function createMachineAdapter(options: MachineAdapterOptions): Adapter {
           });
         }
 
-        // Registered adapter ids that have no probe → `registered`.
+        // Registered adapter ids that have no probe → `registered`. Only those
+        // whose adapter is allowed are reported (RR-03); the rest are omitted.
         const registeredIds = options.registered_adapter_ids();
         for (const regId of registeredIds) {
           if (ctx.signal.aborted) break;
+          if (!allowedAdapters.has(regId)) continue;
           const hasProbe = options.probes.some(
             (p) => p.backs_adapter === regId || p.id === regId,
           );
@@ -619,25 +647,10 @@ export function createMachineAdapter(options: MachineAdapterOptions): Adapter {
         }
       }
 
-      // AR-09 — job-scoped inventory. Core supplies a decision per resolved
-      // capability target; an entry is reported in full only when at least one
-      // capability backed by its adapter was allowed. Otherwise it is reduced
-      // to `{ id, readiness: 'unauthorized' }`. Absent `target_decisions` is
-      // treated as an empty decision map, so without explicit decisions every
-      // entry fails closed to `unauthorized` (AR-F5 round 3, P2).
-      const decisions = ctx.target_decisions ?? new Map<string, 'allowed' | 'denied'>();
-      const allowedAdapters = new Set<string>();
-      for (const [key, decision] of decisions) {
-        if (decision === 'allowed') {
-          const adapterId = key.split('.')[0];
-          if (adapterId !== undefined) allowedAdapters.add(adapterId);
-        }
-      }
-      const publicEntries: PublicEntry[] = internalEntries.map((entry) =>
-        allowedAdapters.has(entry.adapterId)
-          ? toPublicEntry(entry)
-          : { id: entry.id, readiness: 'unauthorized' },
-      );
+      // RR-03 — every entry that reached here belongs to an allowed adapter, so
+      // the previous `unauthorized` reduction is gone: an entry is reported in
+      // full, or not at all.
+      const publicEntries: PublicEntry[] = internalEntries.map(toPublicEntry);
 
       // Apply capability_filter substring match on id and backs_adapter.
       let filteredEntries = publicEntries;

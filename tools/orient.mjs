@@ -197,7 +197,91 @@ export function readVersion(execPath, { run = spawnSync, timeout = 8000 } = {}) 
 
 /** Node Core tolerates a UTF-8 BOM (packages/node-core/src/main.ts). So does this. */
 export function parseConfigText(text) {
-  return JSON.parse(text.replace(/^﻿/, ''));
+  return JSON.parse(text.replace(/^\uFEFF/, ''));
+}
+
+/**
+ * The only characters a token may contain: printable ASCII 0x21–0x7E (F1,
+ * packages/node-core/src/core.ts). The HTTP header boundary strips surrounding
+ * whitespace from a bearer value, so a token that differs from another only by
+ * whitespace is indistinguishable on the wire. Refusing any character outside
+ * this range — spaces, tabs and line breaks included — means whitespace can
+ * never reach a comparison.
+ */
+const PRINTABLE_ASCII = /^[\x21-\x7E]*$/;
+
+/**
+ * Validate the node's `adapters.desktop.authorized_apps` config against the
+ * same rule shapes @toros/node-core enforces at startup
+ * (`validateDesktopAuthorizedApps`, amendment A8/F3b and A9). orient.mjs cannot
+ * import that module — it must work on a fresh clone with no build — so the
+ * three shapes are restated here exactly: `{ image_sha256 }`,
+ * `{ signer, product_name, original_filename }`, or `{ image_path }`.
+ *
+ * Returns findings; an absent `value` (no desktop config) is valid and returns
+ * nothing.
+ */
+function validateAuthorizedAppsRules(value) {
+  if (value === undefined) return [];
+  const out = [];
+  const area = 'config';
+  if (!Array.isArray(value)) {
+    out.push(finding(BLOCK, area, '`adapters.desktop.authorized_apps` must be an array of application rules'));
+    return out;
+  }
+  value.forEach((item, i) => {
+    const at = `adapters.desktop.authorized_apps[${i}]`;
+    if (typeof item === 'string') {
+      out.push(finding(BLOCK, area, `\`${at}\` is a bare string`, JSON.stringify(item),
+        'use an object with exactly one of { image_sha256 }, { signer, product_name, original_filename }, or { image_path }'));
+      return;
+    }
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      out.push(finding(BLOCK, area, `\`${at}\` must be an application rule object`));
+      return;
+    }
+    for (const key of Object.keys(item)) {
+      if (!['image_sha256', 'signer', 'product_name', 'original_filename', 'image_path'].includes(key)) {
+        out.push(finding(BLOCK, area, `\`${at}\` has an unknown property`, key));
+      }
+    }
+    const hasSha = 'image_sha256' in item;
+    const hasSigner = 'signer' in item;
+    const hasProduct = 'product_name' in item;
+    const hasOriginal = 'original_filename' in item;
+    const hasPath = 'image_path' in item;
+    if (hasSha) {
+      if (hasSigner || hasProduct || hasOriginal || hasPath) {
+        out.push(finding(BLOCK, area, `\`${at}\` must have exactly one rule shape`));
+      } else if (typeof item.image_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(item.image_sha256)) {
+        out.push(finding(BLOCK, area, `\`${at}.image_sha256\` must be 64 lower-case hex characters`));
+      }
+    } else if (hasSigner || hasProduct || hasOriginal) {
+      if (!hasSigner || !hasProduct || !hasOriginal || hasPath) {
+        out.push(finding(BLOCK, area, `\`${at}\` signer, product_name and original_filename must appear together`));
+      } else {
+        if (typeof item.signer !== 'string' || item.signer.length === 0 || item.signer.length > 512) {
+          out.push(finding(BLOCK, area, `\`${at}.signer\` must be a non-empty string ≤ 512 characters`));
+        }
+        if (typeof item.product_name !== 'string' || item.product_name.length === 0 || item.product_name.length > 512) {
+          out.push(finding(BLOCK, area, `\`${at}.product_name\` must be a non-empty string ≤ 512 characters`));
+        }
+        if (typeof item.original_filename !== 'string' || item.original_filename.length === 0
+          || item.original_filename.length > 260 || item.original_filename.includes('\\') || item.original_filename.includes('/')) {
+          out.push(finding(BLOCK, area, `\`${at}.original_filename\` must be a non-empty string ≤ 260 characters with no path separators`));
+        }
+      }
+    } else if (hasPath) {
+      if (typeof item.image_path !== 'string' || item.image_path.length === 0 || item.image_path.length > 512) {
+        out.push(finding(BLOCK, area, `\`${at}.image_path\` must be a non-empty string ≤ 512 characters`));
+      } else if (!/^(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/)/.test(item.image_path)) {
+        out.push(finding(BLOCK, area, `\`${at}.image_path\` must be absolute`));
+      }
+    } else {
+      out.push(finding(BLOCK, area, `\`${at}\` must have exactly one rule shape`));
+    }
+  });
+  return out;
 }
 
 /**
@@ -216,6 +300,9 @@ export function validateNodeConfig(config, { exists = existsSync } = {}) {
   if (typeof config.token !== 'string' || config.token.length < 32) {
     out.push(finding(BLOCK, area, '`token` must be a string of at least 32 characters', '',
       'node -e "console.log(require(\'node:crypto\').randomBytes(32).toString(\'hex\'))"'));
+  } else if (!PRINTABLE_ASCII.test(config.token)) {
+    out.push(finding(BLOCK, area, '`token` must contain only printable ASCII (0x21–0x7E), with no spaces, tabs or line breaks',
+      'whitespace would be stripped at the HTTP header boundary, making two tokens indistinguishable on the wire'));
   } else {
     out.push(finding(OK, area, '`token` present', `${config.token.length} characters`));
   }
@@ -249,6 +336,8 @@ export function validateNodeConfig(config, { exists = existsSync } = {}) {
     }
   } else if (typeof operatorToken !== 'string' || operatorToken.length < 32) {
     out.push(finding(BLOCK, area, '`operator_token` must be a string of at least 32 characters'));
+  } else if (!PRINTABLE_ASCII.test(operatorToken)) {
+    out.push(finding(BLOCK, area, '`operator_token` must contain only printable ASCII (0x21–0x7E), with no spaces, tabs or line breaks'));
   } else if (operatorToken === config.token) {
     out.push(finding(BLOCK, area, '`operator_token` must differ from `token`',
       'they are currently identical',
@@ -292,6 +381,10 @@ export function validateNodeConfig(config, { exists = existsSync } = {}) {
     out.push(finding(BLOCK, area, '`coordinator_entry` does not exist', config.coordinator_entry,
       'Node Core verifies this once at startup and refuses to start without it'));
   }
+
+  // F3b/A9: the desktop application allowlist must be valid AppRule shapes, the
+  // same rules Node Core enforces at startup (validateDesktopAuthorizedApps).
+  out.push(...validateAuthorizedAppsRules(config.adapters?.desktop?.authorized_apps));
 
   return out;
 }

@@ -372,6 +372,137 @@ test('the emitted script carries the image-path checks with their backslashes in
   // and an overlong/path-separator OriginalFilename survives to Node.
   const originalBound = String.raw`if ($null -ne $original -and ($original.Length -gt 260 -or $original.Contains('\') -or $original.Contains('/'))) { $original = $null }`;
   assert.ok(lines.includes(originalBound), `OriginalFilename bound must reach PowerShell as: ${originalBound}`);
+
+  // Round 4 (RR-07): the authorized_apps path normalisation carries a literal
+  // backslash in its `Replace('\', '/')` term. A halved backslash would compare
+  // image paths against a wrong literal and could admit an out-of-scope window.
+  const idPathReplace = String.raw`$idPath = ([string]$id.image_path).Replace('\', '/').ToLowerInvariant()`;
+  const rulePathReplace = String.raw`$rulePath = ([string]$rule.image_path).Replace('\', '/').ToLowerInvariant()`;
+  assert.ok(lines.includes(idPathReplace), `image-path rule normalisation must reach PowerShell as: ${idPathReplace}`);
+  assert.ok(lines.includes(rulePathReplace), `image-path rule normalisation must reach PowerShell as: ${rulePathReplace}`);
+});
+
+// ---------------------------------------------------------------------------
+// RR-07: the in-PowerShell authorized_apps matching mirrors policy's
+// appRuleMatches (amendments A8/A9), and it runs before a title read / before
+// the max_windows cap (enumerate) and before the subtree walk (inspect).
+// ---------------------------------------------------------------------------
+
+test('the emitted script mirrors policy appRuleMatches, including case-insensitive original_filename (RR-07)', () => {
+  // hash: exact, case-sensitive equality (-ceq).
+  assert.ok(DESKTOP_UIA_PS1.includes("([string]$rule.image_sha256 -ceq [string]$id.image_sha256)"),
+    'the hash rule must compare image_sha256 exactly and case-sensitively');
+  // signer: requires a valid signature before comparing signer/product/original.
+  assert.ok(DESKTOP_UIA_PS1.includes("[string]$id.signature -ne 'valid'"),
+    'the signer rule must require a valid signature');
+  // A9: original_filename compares case-insensitively (the version resource varies in case).
+  assert.ok(DESKTOP_UIA_PS1.includes("([string]$id.original_filename).ToLowerInvariant() -eq ([string]$rule.original_filename).ToLowerInvariant()"),
+    'the signer rule must compare original_filename case-insensitively');
+  // R4 round 3 (P2): signer and product_name compare case-SENSITIVELY (-ceq),
+  // exactly as policy's appRuleMatches, so a signer/product differing only in
+  // case never authorises an out-of-bound window.
+  assert.ok(DESKTOP_UIA_PS1.includes("[string]$id.signer -ceq [string]$rule.signer"),
+    'the signer rule must compare signer case-sensitively (-ceq)');
+  assert.ok(DESKTOP_UIA_PS1.includes("[string]$id.product_name -ceq [string]$rule.product_name"),
+    'the signer rule must compare product_name case-sensitively (-ceq)');
+  // No `-eq` (case-insensitive in PowerShell) may remain on a case-sensitive field.
+  assert.ok(!DESKTOP_UIA_PS1.includes("[string]$id.signer -eq [string]$rule.signer"),
+    'signer must not compare with case-insensitive -eq');
+  assert.ok(!DESKTOP_UIA_PS1.includes("[string]$id.product_name -eq [string]$rule.product_name"),
+    'product_name must not compare with case-insensitive -eq');
+});
+
+test('AppRuleMatches checks $null before any [string] coercion (R4 round 3 P2)', () => {
+  // A null identity field must never coerce to '' and equal an empty-string
+  // rule. Each case-sensitive field is guarded by an explicit $null check.
+  assert.ok(DESKTOP_UIA_PS1.includes('if ($null -eq $id.image_sha256) { return $false }'),
+    'a null image_sha256 must be refused before coercion');
+  assert.ok(DESKTOP_UIA_PS1.includes('if ($null -eq $id.image_path) { return $false }'),
+    'a null image_path must be refused before coercion');
+  assert.ok(DESKTOP_UIA_PS1.includes('if ($null -eq $id.signer -or $null -eq $rule.signer) { return $false }'),
+    'a null signer (either side) must be refused before coercion');
+  assert.ok(DESKTOP_UIA_PS1.includes('if ($null -eq $id.product_name -or $null -eq $rule.product_name) { return $false }'),
+    'a null product_name (either side) must be refused before coercion');
+  assert.ok(DESKTOP_UIA_PS1.includes('if ($null -eq $id.original_filename -or $null -eq $rule.original_filename) { return $false }'),
+    'a null original_filename (either side) must be refused before coercion');
+});
+
+test('a signer rule differing only in case does not authorise (R4 round 3 P2)', () => {
+  // The script text pins the -ceq comparisons; this test asserts the matching
+  // semantics in a process-free way: no case-insensitive -eq may remain on the
+  // signer/product fields, and both $null guards and -ceq are present.
+  const signerEq = "[string]$id.signer -eq [string]$rule.signer";
+  const productEq = "[string]$id.product_name -eq [string]$rule.product_name";
+  assert.ok(!DESKTOP_UIA_PS1.includes(signerEq), 'signer must not use case-insensitive -eq');
+  assert.ok(!DESKTOP_UIA_PS1.includes(productEq), 'product_name must not use case-insensitive -eq');
+  assert.ok(DESKTOP_UIA_PS1.includes('[string]$id.signer -ceq [string]$rule.signer'), 'signer must use -ceq');
+  assert.ok(DESKTOP_UIA_PS1.includes('[string]$id.product_name -ceq [string]$rule.product_name'), 'product_name must use -ceq');
+});
+
+test('enumerate_windows authorizes a window before reading its title and before the max_windows cap (RR-07)', () => {
+  const enumerateBlock = DESKTOP_UIA_PS1.slice(DESKTOP_UIA_PS1.indexOf('enumerate_windows'));
+  const authorizeIdx = enumerateBlock.indexOf('IsAuthorized $authorized $identity');
+  const maxwIdx = enumerateBlock.indexOf('$ws.Count -ge $maxw');
+  const titleIdx = enumerateBlock.indexOf('::WindowText');
+  assert.ok(authorizeIdx >= 0, 'script must call IsAuthorized in the enumerate walk');
+  assert.ok(maxwIdx >= 0, 'script must contain the max_windows cap check');
+  assert.ok(titleIdx >= 0, 'script must contain a native window text read');
+  assert.ok(authorizeIdx < titleIdx, 'IsAuthorized must run before the native title read');
+  assert.ok(authorizeIdx < maxwIdx, 'IsAuthorized must run before the max_windows cap check');
+});
+
+test('inspect_window checks sameIdentity before walking the UIA subtree (RR-07)', () => {
+  const inspectBlock = DESKTOP_UIA_PS1.slice(DESKTOP_UIA_PS1.indexOf('inspect_window'));
+  const identityCheckIdx = inspectBlock.indexOf('expected_image_sha256');
+  const walkIdx = inspectBlock.indexOf('ControlViewWalker');
+  assert.ok(identityCheckIdx >= 0, 'script must compare the expected sha-256 before walking');
+  assert.ok(walkIdx >= 0, 'script must walk the control subtree');
+  assert.ok(identityCheckIdx < walkIdx, 'the sameIdentity check must run before ControlViewWalker');
+});
+
+// ---------------------------------------------------------------------------
+// R4 round 2: enumerate_windows is fail-closed. Absent or empty authorized_apps
+// publishes nothing. IsAuthorized denies a null rule set outright, and an
+// input.json with no authorized_apps key leaves $authorized null (an empty
+// array matches nothing in the foreach), so every window is skipped. The
+// behaviour lives in PowerShell and needs a real desktop to exercise, so it is
+// pinned against the script text here, exactly as the other RR-07 checks.
+// ---------------------------------------------------------------------------
+
+test('absent or empty authorized_apps publishes no window — enumerate_windows fails closed (R4 round 2)', () => {
+  // IsAuthorized denies null rules outright, so an input.json with no
+  // authorized_apps key publishes nothing.
+  assert.ok(
+    DESKTOP_UIA_PS1.includes('if ($null -eq $rules) { return $false }'),
+    'IsAuthorized must deny when authorized_apps is absent (null)',
+  );
+  // An empty array matches nothing: the foreach never returns true.
+  assert.ok(
+    DESKTOP_UIA_PS1.includes('foreach ($r in $rules) { if (AppRuleMatches $r $id) { return $true } }'),
+    'IsAuthorized must only authorise via a matching rule (empty array denies)',
+  );
+  // enumerate_windows takes authorized_apps straight from input.json as DATA;
+  // nothing supplies a fallback bound.
+  assert.ok(
+    DESKTOP_UIA_PS1.includes('$authorized = $req.authorized_apps'),
+    'enumerate_windows must read authorized_apps from input.json',
+  );
+  // Every candidate window passes through IsAuthorized before a title read or
+  // a max_windows count, so null/empty rules publish nothing.
+  const enumerateBlock = DESKTOP_UIA_PS1.slice(DESKTOP_UIA_PS1.indexOf('enumerate_windows'));
+  assert.ok(
+    enumerateBlock.includes('if (-not (IsAuthorized $authorized $identity))'),
+    'the enumerate walk must gate every window on IsAuthorized',
+  );
+  // The corrected comment must state the fail-closed rule, not "no bound".
+  assert.ok(
+    DESKTOP_UIA_PS1.includes('Absent or empty means NO window is published'),
+    'the enumerate_windows comment must state that absent/empty authorized_apps publishes nothing',
+  );
+  assert.ok(
+    !DESKTOP_UIA_PS1.includes('Absent means no bound'),
+    'the script must not describe absent authorized_apps as an unrestricted/no-bound path',
+  );
 });
 
 // ---------------------------------------------------------------------------

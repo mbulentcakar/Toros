@@ -26,9 +26,14 @@ export interface UiaProbe {
    * Enumerate top-level windows in the current session, each with the owning
    * process's OS-observed identity. `locked`/`disconnected` means the session
    * is unavailable and no windows are read.
+   *
+   * `authorized_apps` (RR-07) is the node's global application bound; the real
+   * probe evaluates it in PowerShell *before* reading a window's native title
+   * and before it counts toward `max_windows`, so an out-of-scope window is
+   * never read and never counted. Absent means no bound is applied (test seam).
    */
   enumerateWindows(
-    opts: { max_windows: number },
+    opts: { max_windows: number; authorized_apps?: readonly AppRule[] },
     signal: AbortSignal,
   ): Promise<
     | { readonly session_state: 'active'; readonly windows: readonly RawWindow[]; readonly truncated: boolean }
@@ -40,10 +45,14 @@ export interface UiaProbe {
    * process now owning the handle, so the adapter can re-verify pid / creation
    * time / sha-256 against what it resolved (native handles are reused by the OS),
    * and `controls` are the bounded metadata (never a name or a value).
+   *
+   * `expected_identity` (RR-07) lets the real probe check `sameIdentity` *before*
+   * walking the UIA subtree, so a reused handle never yields the new owner's tree.
+   * Absent means the check is skipped (test seam).
    */
   inspectWindow(
     nativeHandle: string,
-    opts: { depth: number; max_controls: number },
+    opts: { depth: number; max_controls: number; expected_identity?: AppIdentity },
     signal: AbortSignal,
   ): Promise<
     | { readonly closed: true }
@@ -154,6 +163,38 @@ function sameIdentity(a: AppIdentity, b: AppIdentity): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Per-(job, actor, window) inspect pagination (RR-06)
+// ---------------------------------------------------------------------------
+
+/**
+ * One captured, already-filtered inspect result being paged through. Page 1
+ * walks the UIA subtree once and captures the full filtered control list;
+ * every later page slices that capture rather than re-walking the tree (so
+ * pagination never reopens replay). Each continuation token is single-use and
+ * bound to the (job, actor, window) that minted it.
+ */
+interface PaginationState {
+  job_id: string;
+  actor: string;
+  window_id: string;
+  /** The full filtered control list captured at page 1, in stable order. */
+  controls: readonly RawControl[];
+  /** Index of the first control not yet returned. */
+  cursor: number;
+  page_size: number;
+  /** The depth the page-1 subtree walk used, for the receipt. */
+  depth: number;
+  /** Whether the page-1 probe truncated the subtree walk (cap hit). */
+  probe_truncated: boolean;
+  issued_at: number;
+  /** Set once a page has been served; a spent token is never replayed. */
+  consumed: boolean;
+}
+
+/** At most this many live pagination states, across all (job, actor, window) tuples. */
+const MAX_LIVE_PAGINATIONS = 64;
+
+// ---------------------------------------------------------------------------
 // Manifest
 // ---------------------------------------------------------------------------
 
@@ -181,15 +222,19 @@ function buildManifest(options: DesktopAdapterOptions): AdapterManifest {
     input_schema: {
       type: 'object',
       additionalProperties: false,
-      required: ['window_id', 'freshness_token', 'session_scope'],
+      // Page 1 carries window_id + freshness_token; page N+1 carries only the
+      // continuation_token minted by the previous page (RR-06). Neither pair is
+      // required at the schema level so both shapes validate; the adapter
+      // returns refresh_required when neither is usable.
+      required: ['session_scope'],
       properties: {
         session_scope: { type: 'string', enum: ['interactive'] },
         window_id: { type: 'string' },
         freshness_token: { type: 'string' },
         depth: { type: 'integer', minimum: 1, maximum: 10 },
         control_filter: { type: 'string' },
-        page: { type: 'integer', minimum: 1 },
         page_size: { type: 'integer', minimum: 1 },
+        continuation_token: { type: 'string' },
       },
     },
     path_fields: [],
@@ -225,6 +270,10 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
   // be evicted at the 32-enumeration cap.
   const enumerations = new Map<string, StoredEnumeration>();
 
+  // Per-continuation-token inspect pagination (RR-06), in insertion order so the
+  // oldest can be evicted at the cap.
+  const paginations = new Map<string, PaginationState>();
+
   function lookupEnumeration(ctx: AdapterContext): StoredEnumeration | null {
     return enumerations.get(enumerationKey(ctx.job_id, ctx.actor)) ?? null;
   }
@@ -237,6 +286,15 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
       const oldest = enumerations.keys().next().value;
       if (oldest === undefined) break;
       enumerations.delete(oldest);
+    }
+  }
+
+  function storePagination(token: string, state: PaginationState): void {
+    paginations.set(token, state);
+    while (paginations.size > MAX_LIVE_PAGINATIONS) {
+      const oldest = paginations.keys().next().value;
+      if (oldest === undefined) break;
+      paginations.delete(oldest);
     }
   }
 
@@ -283,7 +341,10 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
     _args: Readonly<Record<string, JsonValue>>,
     ctx: AdapterContext,
   ): Promise<readonly ResolvedTarget[]> {
-    const result = await options.probe.enumerateWindows({ max_windows: options.max_windows }, ctx.signal);
+    const result = await options.probe.enumerateWindows(
+      { max_windows: options.max_windows, authorized_apps: options.authorized_apps },
+      ctx.signal,
+    );
 
     if (result.session_state !== 'active') {
       // Unavailable session: store the reason for invoke to report and resolve
@@ -334,6 +395,16 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
     args: Readonly<Record<string, JsonValue>>,
     ctx: AdapterContext,
   ): Promise<readonly ResolvedTarget[]> {
+    const rawContinuation = args['continuation_token'];
+    if (rawContinuation !== undefined) {
+      // R4 round 3 (P2): a continuation page resolves no new target (RR-06) —
+      // the window was decided and its handle spent at page 1. The token's
+      // value is irrelevant here; an empty/non-string token is refused at
+      // invoke. Routing on key presence (not value) so an empty token never
+      // falls through to a fresh page-1 resolution.
+      return [];
+    }
+
     const windowId = typeof args['window_id'] === 'string' ? args['window_id'] : '';
     const token = typeof args['freshness_token'] === 'string' ? args['freshness_token'] : '';
 
@@ -381,7 +452,10 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
       if (decisions?.get(windowId) !== 'allowed') continue;
       const live = await options.probe.inspectWindow(
         entry.native_handle,
-        { depth: 0, max_controls: 1 },
+        // R4 round 3 (P3): re-verify against the resolved identity inside the
+        // probe too, so a recycled HWND is dropped BEFORE the subtree is walked,
+        // not after Node drops it downstream.
+        { depth: 0, max_controls: 1, expected_identity: entry.identity },
         ctx.signal,
       );
       if (live.closed || live.identity === null) {
@@ -433,30 +507,73 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
 
   type InspectStatus = 'ok' | 'refresh_required' | 'denied' | 'unavailable';
 
+  function resolveDepth(args: Readonly<Record<string, JsonValue>>): number {
+    const rawDepth = args['depth'];
+    return typeof rawDepth === 'number' && Number.isFinite(rawDepth) && rawDepth >= 1
+      ? Math.min(Math.floor(rawDepth), 10)
+      : 3;
+  }
+
+  function resolvePageSize(args: Readonly<Record<string, JsonValue>>): number {
+    const rawPageSize = args['page_size'];
+    return typeof rawPageSize === 'number' && Number.isFinite(rawPageSize) && rawPageSize >= 1
+      ? Math.floor(rawPageSize)
+      : DEFAULT_PAGE_SIZE;
+  }
+
+  /** Map a raw control to its public shape — structure only, never a value, never a name. */
+  function toPublicControl(raw: RawControl): PublicControl {
+    const hasValidId = isValidAutomationId(raw.automation_id);
+    return {
+      control_id: randomUUID(),
+      type: raw.control_type,
+      ...(hasValidId ? { automation_id: raw.automation_id } : {}),
+      enabled: raw.enabled,
+      patterns: raw.patterns,
+    };
+  }
+
+  /** Filter the raw controls (substring over type and automation_id only), before paginating. */
+  function filterControls(controls: readonly RawControl[], controlFilter: string): readonly RawControl[] {
+    if (controlFilter.length === 0) return controls;
+    const filterLower = controlFilter.toLowerCase();
+    return controls.filter((c) =>
+      c.control_type.toLowerCase().includes(filterLower) ||
+      (typeof c.automation_id === 'string' &&
+        isValidAutomationId(c.automation_id) &&
+        c.automation_id.toLowerCase().includes(filterLower)),
+    );
+  }
+
   async function invokeInspect(
+    args: Readonly<Record<string, JsonValue>>,
+    ctx: AdapterContext,
+  ): Promise<ActionResult> {
+    const rawContinuation = args['continuation_token'];
+    // R4 round 3 (P2): any request that carries `continuation_token`, whatever
+    // its value, goes to the continuation path. An absent key means page 1; an
+    // empty or non-string token fails closed with refresh_required there.
+    if (rawContinuation !== undefined) {
+      return invokeInspectContinuation(rawContinuation, args, ctx);
+    }
+    return invokeInspectFirstPage(args, ctx);
+  }
+
+  /**
+   * Page 1 of `desktop.inspect` (RR-06). It consumes the window handle and
+   * walks the UIA subtree once, capturing the full filtered control list; when
+   * more than `page_size` controls remain, it mints a single-use continuation
+   * token bound to (job, actor, window_id).
+   */
+  async function invokeInspectFirstPage(
     args: Readonly<Record<string, JsonValue>>,
     ctx: AdapterContext,
   ): Promise<ActionResult> {
     const windowId = typeof args['window_id'] === 'string' ? args['window_id'] : '';
     const freshnessToken = typeof args['freshness_token'] === 'string' ? args['freshness_token'] : '';
-
-    // Resolve depth from args, default 3
-    const rawDepth = args['depth'];
-    const depth = typeof rawDepth === 'number' && Number.isFinite(rawDepth) && rawDepth >= 1
-      ? Math.min(Math.floor(rawDepth), 10)
-      : 3;
-
+    const depth = resolveDepth(args);
     const controlFilter = typeof args['control_filter'] === 'string' ? args['control_filter'] : '';
-
-    const rawPage = args['page'];
-    const page = typeof rawPage === 'number' && Number.isFinite(rawPage) && rawPage >= 1
-      ? Math.floor(rawPage)
-      : 1;
-
-    const rawPageSize = args['page_size'];
-    const pageSize = typeof rawPageSize === 'number' && Number.isFinite(rawPageSize) && rawPageSize >= 1
-      ? Math.floor(rawPageSize)
-      : DEFAULT_PAGE_SIZE;
+    const pageSize = resolvePageSize(args);
 
     const enumeration = lookupEnumeration(ctx);
     // One shape for every rejection, so a caller cannot probe which case it hit:
@@ -486,13 +603,13 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
       return makeInspectResult('denied', output, 0, false, depth);
     }
 
-    // ---- probe call (re-verifies the live identity) ----
+    // ---- probe call (re-verifies the live identity BEFORE walking the tree) ----
     // The probe returns up to max_controls in document order; the adapter filters
     // and paginates, so a filter match on a later part of the tree is never dropped
     // by probe-side paging and page order is stable.
     const probeResult = await options.probe.inspectWindow(
       entry.native_handle,
-      { depth, max_controls: options.max_controls },
+      { depth, max_controls: options.max_controls, expected_identity: entry.identity },
       ctx.signal,
     );
 
@@ -510,45 +627,121 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
       return makeInspectResult('unavailable', output, 0, false, depth);
     }
 
-    // Filter (substring over type and automation_id only) BEFORE paginating.
-    let filtered = probeResult.controls;
-    if (controlFilter.length > 0) {
-      const filterLower = controlFilter.toLowerCase();
-      filtered = filtered.filter((c) =>
-        c.control_type.toLowerCase().includes(filterLower) ||
-        (typeof c.automation_id === 'string' &&
-          isValidAutomationId(c.automation_id) &&
-          c.automation_id.toLowerCase().includes(filterLower)),
-      );
+    // Capture the full filtered list once, then page over it.
+    const filtered = filterControls(probeResult.controls, controlFilter);
+    const pageSlice = filtered.slice(0, pageSize);
+    const morePages = filtered.length > pageSize;
+
+    let continuationToken: string | undefined;
+    if (morePages) {
+      continuationToken = randomUUID();
+      storePagination(continuationToken, {
+        job_id: ctx.job_id,
+        actor: ctx.actor,
+        window_id: windowId,
+        controls: filtered,
+        cursor: pageSize,
+        page_size: pageSize,
+        depth,
+        probe_truncated: probeResult.truncated,
+        issued_at: now(),
+        consumed: false,
+      });
     }
 
-    // Paginate the filtered list, adapter-side.
-    const start = (page - 1) * pageSize;
-    const pageSlice = filtered.slice(start, start + pageSize);
-    const morePages = start + pageSize < filtered.length;
+    const publicControls = pageSlice.map(toPublicControl);
     const truncated = probeResult.truncated || morePages;
-    const nextPage = morePages ? page + 1 : undefined;
-
-    // Map to public controls — structure only, never a value, never a name.
-    const publicControls: PublicControl[] = pageSlice.map((raw) => {
-      const hasValidId = isValidAutomationId(raw.automation_id);
-      return {
-        control_id: randomUUID(),
-        type: raw.control_type,
-        ...(hasValidId ? { automation_id: raw.automation_id } : {}),
-        enabled: raw.enabled,
-        patterns: raw.patterns,
-      };
-    });
 
     const output = JSON.stringify({
       status: 'ok' as InspectStatus,
       controls: publicControls,
       truncated,
-      ...(nextPage !== undefined ? { next_page: nextPage } : {}),
+      ...(continuationToken !== undefined ? { continuation_token: continuationToken } : {}),
     });
 
     return makeInspectResult('ok', output, publicControls.length, truncated, depth);
+  }
+
+  /**
+   * Page N+1 of `desktop.inspect` (RR-06). The previous page's continuation
+   * token is required; it is single-use, bound to (job, actor, window_id), and
+   * valid for 60 s. A reused, foreign, expired or unknown token all return the
+   * same `refresh_required`, so the caller cannot probe which case it hit.
+   */
+  async function invokeInspectContinuation(
+    token: JsonValue,
+    args: Readonly<Record<string, JsonValue>>,
+    ctx: AdapterContext,
+  ): Promise<ActionResult> {
+    const depth = resolveDepth(args);
+
+    // R4 round 3 (P2): an empty or non-string token is refused the same way as
+    // an unknown, reused, expired or foreign one — a single refresh_required
+    // shape, so the caller cannot probe which case it hit.
+    if (typeof token !== 'string' || token.length === 0) {
+      const output = JSON.stringify({ status: 'refresh_required' as InspectStatus });
+      return makeInspectResult('refresh_required', output, 0, false, depth);
+    }
+
+    const state = paginations.get(token);
+
+    // R4 round 3 (P2): the token is bound to (job, actor, window_id). A caller
+    // naming a different window than the token's must not receive that window's
+    // controls under the requested window id.
+    const windowIdArg = args['window_id'];
+    const windowMatches = windowIdArg === undefined || windowIdArg === state?.window_id;
+
+    const valid = state !== undefined
+      && windowMatches
+      && state.job_id === ctx.job_id
+      && state.actor === ctx.actor
+      && !state.consumed
+      && now() - state.issued_at <= HANDLE_TTL_MS;
+
+    if (!valid) {
+      const output = JSON.stringify({ status: 'refresh_required' as InspectStatus });
+      return makeInspectResult('refresh_required', output, 0, false, depth);
+    }
+
+    // Spend the token before serving, so a replay of page 2's token cannot
+    // re-serve page 3.
+    state.consumed = true;
+
+    const pageSlice = state.controls.slice(state.cursor, state.cursor + state.page_size);
+    const newCursor = state.cursor + pageSlice.length;
+    const morePages = newCursor < state.controls.length;
+
+    let nextToken: string | undefined;
+    if (morePages) {
+      nextToken = randomUUID();
+      storePagination(nextToken, {
+        job_id: ctx.job_id,
+        actor: ctx.actor,
+        window_id: state.window_id,
+        controls: state.controls,
+        cursor: newCursor,
+        page_size: state.page_size,
+        depth: state.depth,
+        probe_truncated: state.probe_truncated,
+        // R4 round 3 (P2): the NEXT token keeps the ORIGINAL issued_at, so the
+        // whole pagination chain lives at most 60 s from page 1, never extended
+        // page over page.
+        issued_at: state.issued_at,
+        consumed: false,
+      });
+    }
+
+    const publicControls = pageSlice.map(toPublicControl);
+    const truncated = morePages || state.probe_truncated;
+
+    const output = JSON.stringify({
+      status: 'ok' as InspectStatus,
+      controls: publicControls,
+      truncated,
+      ...(nextToken !== undefined ? { continuation_token: nextToken } : {}),
+    });
+
+    return makeInspectResult('ok', output, publicControls.length, truncated, state.depth);
   }
 
   function makeInspectResult(
@@ -591,6 +784,7 @@ export function createDesktopAdapter(options: DesktopAdapterOptions): Adapter {
 
     async dispose(): Promise<void> {
       enumerations.clear();
+      paginations.clear();
     },
   };
 
