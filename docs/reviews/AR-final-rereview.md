@@ -227,3 +227,140 @@ severity:
 ---
 
 <!-- final re-review findings go here -->
+
+# Final native re-review — 2026-10-22
+
+- **Reviewer:** Grok, `grok-4.7`. September approvals of the original T1–T3 slices are treated as untrusted. This review re-derived every conclusion from the current tree and from live runs. Review comments on PRs #11, #12 and #14–#17 were not opened until the findings below were written.
+- **Baseline:** `main` at `d429ad3` (`d429ad3e7f4997662ee9ec670ab7e92aae2ef4fc`). This branch adds only the brief commits above that.
+- **Host:** native Windows NT 10.0.26300.0, interactive desktop, input desktop `Default` at the start of the native work and again before this report. Node.js 24.13.1. Windows PowerShell 5.1 for the probe and for the signature reads; the parent shell was PowerShell 7.6.7.
+- **Safety:** every UI Automation probe was bound to a pid this review started (`restrict_to_pid`). Targets were the repository canary fixture, copies of inbox binaries in a fresh temp directory, and one inbox `notepad.exe` this review launched against a file it created. No operator application, mail or document was inspected. Experiments lived in a temp directory outside the repository and were deleted afterwards. Every process this review started was killed.
+
+## Verdict: do not clear
+
+The eighteen earlier findings are closed on the current API. The new surface has one defect that the signer rule depends on, and it is enough to keep the gate shut.
+
+**FR-01 (Medium, demonstrated, AS-inherited).** `OriginalFilename` is not a property of the file alone. Windows resolves the version resource through a sibling `en-US\<image>.mui` when one is present, and through the binary itself when it is not. A copy of an inbox binary therefore reports a different `original_filename` from the same binary in place:
+
+| File | `OriginalFilename` |
+|---|---|
+| inbox `notepad.exe` | `NOTEPAD.EXE.MUI` |
+| a copy, no adjacent MUI | `NOTEPAD.EXE` |
+| that copy plus a copied `notepad.exe.mui` named after it | `NOTEPAD.EXE.MUI` |
+| inbox `powershell.exe` | `PowerShell.EXE.MUI` |
+| a copy, no adjacent MUI | `PowerShell.EXE` |
+| that copy plus its own MUI | `PowerShell.EXE.MUI` |
+
+The probe reads this value and publishes it (`packages/adapters-desktop/src/probe.ts:226-236`). Policy, the adapter's global bound and the in-script `AppRuleMatches` all compare it as a string (`packages/policy/src/index.ts:194-197`, `packages/adapters-desktop/src/adapter.ts:112-115`, `packages/adapters-desktop/src/probe.ts:273-276`). A signer rule written from the installed binary (`NOTEPAD.EXE.MUI`) does not admit a copy of that binary, and a rule written from a copy (`NOTEPAD.EXE`) does not admit the installed binary. Placing the matching MUI beside the copy flips the value back. A rule for Notepad still does not admit PowerShell — the two MUI names differ — so the collision A9 was written to close stays closed. What fails is the amendment's own claim that this field survives a copy.
+
+The minimum change: stop treating the MUI-resolved string as a stable vendor filename. Read the version resource from the image itself (or pin the rule to a hash or a canonical path) and state in the contract which string a signer rule names. Re-review that natively, on an inbox binary and on a copy with and without an adjacent MUI, before the gate can clear.
+
+Two observations from the interrupted run are settled below and are not findings.
+
+## 0. Native baseline
+
+Recorded on this worktree after `git fetch public`.
+
+1. `npm ci` — exit 0. 23 packages added, 39 audited. `npm audit` reports 1 high: `fast-uri` `GHSA-5jgf-p345-68v8`, transitive through `ajv`. Not introduced by this branch.
+2. Clean build — every `packages/*/dist` and `*.tsbuildinfo` deleted, then `npm run typecheck` (`tsc --build --force`). Exit 0.
+3. `npm test` — exit 0. **736 tests, 57 suites, 724 pass, 0 fail, 0 cancelled, 12 skipped, 0 todo.** Duration 76381 ms.
+   - 11 skips are the native desktop tests, gated on `TOROS_REAL_TESTS=1`: 10 in `packages/adapters-desktop/dist/test/native-fixture.test.js`, 1 in `packages/node-core/dist/test/desktop-native-core.test.js`.
+   - 1 skip is `machine.inventory — production drive reader` (`requires TOROS_REAL_TESTS=1 on win32`).
+   - 2 suite skips are the authenticated CLI suites (`gemini adapter against Antigravity CLI`, `grok adapter against Grok Build`), also gated on `TOROS_REAL_TESTS=1`. They are not in the 12.
+4. `TOROS_REAL_TESTS=1 node --test packages/adapters-desktop/dist/test/native-fixture.test.js packages/node-core/dist/test/desktop-native-core.test.js` — exit 0. **12 tests, 2 suites, 12 pass, 0 fail, 0 skipped.** Duration 60138 ms. Input desktop stayed `Default`.
+5. `TOROS_REAL_TESTS=1 node --test packages/adapters-machine/dist/test/*.test.js` — exit 0. **30 tests, 7 suites, 30 pass, 0 fail, 0 skipped.** Duration 416 ms.
+
+## 1. The eighteen findings
+
+| Finding | Status | Closed by | Evidence |
+|---|---|---|---|
+| AR-01 | **Closed** | F2 | Through a real Core, `desktop.state` and `desktop.inspect` of the canary returned no `name` and no `value`. The three canaries were absent from both action outputs, from the two closed receipts, and from the eight events. Controls were `ControlType.Pane` plus a numeric `automation_id`. |
+| AR-02 | **Closed** | F3a, F3b, R1 | `forbidden: ["Microsoft Windows"]` denied the canary window: `desktop.state` returned `windows: []` because the signer matched. `forbidden: ["desktop.inspect"]` is checked by `decide` before any window resolve, so a following `desktop.inspect` is `E_FORBIDDEN`. A term matches the capability, the arguments, and the image path, product and signer. It does not match a title or an automation id; that exclusion is the operator's decision and is still in force. |
+| AR-03 | **Closed** | F1, R4 | `start()` throws when `operator_token === token` (`packages/node-core/src/core.ts:193-200`). With distinct tokens, the run bearer received HTTP 401 from `/operator/jobs` and the operator bearer received HTTP 200. `tools/orient.mjs` now checks printable ASCII, length and distinctness. |
+| AR-04 | **Closed** | F3b, R3 | `session_scope` accepts only `interactive`. The script requires `WTSActive` and an input desktop named `Default` before it enumerates (`probe.ts:166-169`). Both native runs observed `Default`. The locked and disconnected branches were not exercised live; the desktop stayed unlocked, as the brief requires. |
+| AR-05 | **Closed** | F3b, R4 | On one Core, a replay of the freshness pair, a foreign job, an empty token, a replayed continuation, a foreign job's continuation, and a continuation presented with a different `window_id` each returned `refresh_required`. A second `model` label, which Core records as the actor (`action-pipeline.ts:311-315`), also returned `refresh_required`. |
+| AR-06 | **Closed** | F4, R3 | The canary job's receipts closed `succeeded`, none left `running`. A seeded denied `codex.send` stayed `denied` with zero `action.finished` across two Core starts. A seeded running `codex.send` that had `action.started` was closed `terminated` with exactly one `action.finished`; the second start did not add another. |
+| AR-07 | **Closed** | F2, F4 | Core arms one deadline before resolve and shares it with invoke (`action-pipeline.ts:576-598`). `runPowerShell` rejects an already-aborted signal before `mkdtemp` (`probe.ts:525-527`) and awaits temp removal. Output is stat-bounded at 4 MiB before read. |
+| AR-08 | **Closed** | F5 | `isLocalFixedPath` rejects anything that is not `<letter>:\` on a drive the reader reported Fixed (`packages/adapters-machine/src/adapter.ts:166-178`). The native inventory suite includes the UNC, device, relative and drive-relative cases. A job allowed only `machine.inventory` reported `path_entries_skipped: 0` and no entries. |
+| AR-09 | **Closed** | F5, R4 | That same job received `entries: []`. A job allowed `machine.inventory` and `codex.start` with `forbidden: ["codex"]` also received `entries: []`: the forbidden capability was denied, and unregistered-for-this-job adapters were omitted rather than reduced to an `unauthorized` stub. |
+| AR-10 | **Closed** | F3b, R2 | Bare basename rules are rejected at seal. A copied `powershell.exe` was admitted by its own image path and reported `original_filename: PowerShell.EXE`. A signer rule naming `NOTEPAD.EXE` does not admit it. The native suite's basename-spoof test passed. FR-01 is a different defect: the field A9 added is not stable across a copy. |
+| AR-11 | **Closed** | F3b, F5 | Desktop declares `process.spawn`, `app.automation`, `fs.read`, `fs.write` (`adapter.ts:253`). Machine declares `process.spawn`, `fs.read`. |
+| RR-01 | **Closed** | R1 | `isForbidden` tokenises both sides and matches a contiguous run (`packages/envelope/src/envelope.ts:507-551`). Live: `powershell.exe`, `desktop.inspect` and `Microsoft Windows` all match. A zero-word term is refused at seal. |
+| RR-02 | **Closed** | R2 | The canary, started from PowerShell 7 with `PSModulePath` removed from the child, reported `signature: valid`, `signer: Microsoft Windows`. A parent env polluted with a nonexistent module path did not change a direct `Get-AuthenticodeSignature` under PowerShell 5.1 or PowerShell 7. A byte-flipped copy of `powershell.exe` that still launched reported `signature: unsigned`, `signer: null`, so a signer rule cannot admit it. Inbox binaries still share signer and product; A9's third field separates Notepad from PowerShell. |
+| RR-03 | **Closed** | R1, R4 | `decideTarget` denies a forbidden capability (`policy/src/index.ts:319-324`). Inventory computes the allowed set before any probe (`adapters-machine/src/adapter.ts:534-554`) and omits everything else. The live inventory calls above returned no out-of-job entry. |
+| RR-04 | **Closed** | R3 | See AR-06. `reconcileCliSettlements` skips `outcome === 'denied'` and any receipt with no `action.started` (`action-pipeline.ts:913-916`). |
+| RR-05 | **Closed** | R3 | `resolveNodeSessionId` accepts only `^\s*([0-9]{1,10})\s*$` inside uint32 (`desktop-config.ts:220-223`). Live: `""`, `"   "`, `"0x10"`, `"1e2"`, `"-1"`, `"99999999999"` and `"2.5"` returned null; `"0"` returned 0; `"2\n"` returned 2. |
+| RR-06 | **Closed** | R4 | Page 1 with `page_size: 1` minted a continuation and page 2 returned `status: ok` with one control. Replay of that token returned `refresh_required`. The native suite's automation-id filter test passed. |
+| RR-07 | **Closed** | R4 | The script evaluates `authorized_apps` before `WindowText` and before the cap (`probe.ts:330-337`). `inspect_window` checks pid, creation time and hash before the subtree walk (`probe.ts:374-392`). A second fixture, out of the first probe's bound, contributed neither its title nor a `max_windows` slot. `tools/orient.mjs` validates `operator_token` and `authorized_apps`. |
+
+`forbidden: ["powershell.exe"]` does **not** deny the canary. Demonstrated: `desktop.state` returned the fixture window. The canary is a renamed copy, so its image path, product and signer tokenise to `microsoft`, `windows`, `operating`, `system` — the word `powershell` is not among them. The term denies a capability or argument that contains that word, and it denies an app whose path, product or signer contains it. That is what R1 specified. `forbidden: ["desktop.inspect"]` denies the capability. `forbidden: ["Microsoft Windows"]` denies the window.
+
+## 2. The new surface
+
+### A9 and FR-01
+
+**FR-01 [Medium] (`AS-inherited`, `demonstrated`).** `OriginalFilename` follows the MUI, so a signer rule written against the installed binary does not match a copy of that binary, and the reverse.
+
+- **Location:** `packages/adapters-desktop/src/probe.ts:226-236` (the read); compared at `packages/policy/src/index.ts:194-197`, `packages/adapters-desktop/src/adapter.ts:112-115`, `packages/adapters-desktop/src/probe.ts:273-276`.
+- **Exploit:** copy `C:\Windows\System32\notepad.exe` to a temp directory. `FileVersionInfo.OriginalFilename` on the inbox file is `NOTEPAD.EXE.MUI`; on the copy it is `NOTEPAD.EXE`. Copy `System32\en-US\notepad.exe.mui` to `<temp>\en-US\<copyname>.exe.mui` and the copy reports `NOTEPAD.EXE.MUI` again. The same flip happens for `powershell.exe` (`PowerShell.EXE.MUI` beside its own MUI, `PowerShell.EXE` without it). Seal `allowed_apps: [{ signer: "Microsoft Windows", product_name: "Microsoft® Windows® Operating System", original_filename: "NOTEPAD.EXE.MUI" }]`. The installed Notepad matches. A copy with no adjacent MUI does not, so a job that named Notepad cannot see a copied Notepad, and an operator who sealed the rule from a copy cannot see the installed one. Place `powershell.exe.mui` beside a renamed PowerShell copy and that copy takes the inbox spelling.
+- **What it does not do:** a Notepad rule still denies a PowerShell copy. Live, a copied `powershell.exe` reported `original_filename: PowerShell.EXE`, and `authorizeTargets` denied it under `original_filename: "NOTEPAD.EXE"`. A byte-flipped copy reported `signature: unsigned`, which fails the signer rule before the filename is consulted. Re-signing was not attempted; the byte flip is the modification this host can demonstrate without a code-signing certificate.
+- **Case:** case-insensitive comparison does not open a collision. `notepad.exe.mui` matches `NOTEPAD.EXE.MUI` and does not match `PowerShell.EXE.MUI`. Signer and product stay case-sensitive (`-ceq` in the script, `===` in policy).
+- **Equivalence:** on the fields the three implementations compare, they agree: hash exact, path case-insensitive after separator normalisation, signer and product exact, original case-insensitive, null original never matches, signature must be `valid`. The divergence is the value Windows returns for that field, which all three then compare faithfully.
+- **AS-inherited.** A click or type authorised by a signer rule inherits whichever file the MUI lookup selected.
+
+### In-script rule evaluation
+
+`authorized_apps` arrive as JSON (`probe.ts:129, 293`). A rule whose `image_path` contained `"; Write-Output HACKED; #` and whose signer was `$(calc.exe)` did not execute: the probe returned `session_state: active` and zero windows. Backslashes in the script template are emitted as single backslashes (`probe.ts:151, 189, 266-267`); the native suite passed, including the test that pins those lines.
+
+### Continuation tokens
+
+- **Entropy.** `randomUUID()` (`adapter.ts:637, 716`).
+- **Binding.** Demonstrated: foreign job, foreign actor (a different `model` label), different `window_id`, empty token, and a replay each return `refresh_required`.
+- **60 s from page 1.** Demonstrated: a continuation presented 62 s after page 1 returned `refresh_required`. The next token keeps the original `issued_at` (`adapter.ts:726-729`).
+- **Memory.** `MAX_LIVE_PAGINATIONS` is 64 (`adapter.ts:195`), evicting the oldest.
+- **Identity change between pages.** Not re-checked. See question 1.
+
+### Forbidden matching
+
+Stricter than the RR-01 baseline: both sides are tokenised, and a zero-word term is refused at seal. Nothing in the new matcher is less strict than the operator's decision.
+
+Live cost: 50 two-word terms against a 200 000 character candidate took 1 ms.
+
+Unicode, beyond the accepted free-text residual: a Cyrillic `р` in `рowershell`, `power\u200bshell`, and fullwidth `ｐｏｗｅｒｓｈｅｌｌ` do not match `powershell`. The zero-width and homoglyph residual in free-text arguments stands as accepted. It now also applies to an image path, a product and a signer, because those go through the same tokeniser. A signer containing a confusable does not match the genuine term. That is the same accepted residual, on a field the operator added. Not raised separately.
+
+### `PSModulePath`
+
+Every Windows PowerShell spawn under `packages/*/src` passes `powershellChildEnvironment`, which deletes every casing of `PSModulePath` (`probe.ts:459-468`, and the same helper in `desktop-config.ts`, `adapters-machine`, `adapters-app`). The standing test greps for a spawn that forgets it. A direct PowerShell 5.1 and PowerShell 7 invocation with a polluted parent `PSModulePath` still reported `STATUS=Valid` for the copied Notepad. The CLI adapters build a minimal environment that never copies `PSModulePath` (`packages/adapters-cli/src/index.ts:386-399`). No production spawn of `powershell.exe` bypasses the rule. A namespace import of `spawn` does not exist in `packages/*/src`.
+
+### Reconciliation
+
+See AR-06 / RR-04. A denied receipt is not given `action.finished`. A running send that actually started is closed once. A second start does not duplicate the event.
+
+### 2a. The two open questions
+
+1. **A page served after the window is gone.** Demonstrated. Page 1 of the canary (`page_size: 2`) returned `status: ok` and a continuation. The fixture process was then killed. The continuation returned `status: ok` with the next slice of the page-1 snapshot. `invokeInspectContinuation` (`adapter.ts:671-744`) never re-reads the window. The snapshot is metadata already returned in part on page 1: control type, automation id, enabled, patterns. No name, no value, no title. It lives at most 60 s, and the token is single-use and bound to job, actor and window. Serving it does not widen what the caller can read. **Not a finding. Not AS-inherited** — a click or type built on this surface must resolve and re-verify its own target; it must not inherit a cached inspect page as authority to act.
+2. **A renamed image passes re-verification.** Demonstrated. After `rename` of the fixture image between resolve and invoke, the live identity kept the same pid, creation time and SHA-256 and changed path. `sameIdentity` (`adapter.ts:161-163`) therefore passed, which is what the interrupted run saw. It does not widen a rule:
+   - an `image_path` rule naming the pre-rename path is **denied** against the new identity;
+   - `forbidden` of the new basename is **denied**;
+   - `forbidden` of the old basename is still **denied**, because the new path (`name.exe.moved.exe`) tokenises to a run that contains the old words.
+   A hash rule keeps admitting the same bytes under the new name. That is what a hash rule is. **Not a finding.**
+
+## 3. Contract integrity
+
+`git diff 2847726 HEAD -- packages/contracts` is three files, 95 insertions.
+
+- `envelope.ts`: `allowed_apps?: readonly AppRule[]`, and `AppRule` as `{ image_sha256 } | { signer, product_name, original_filename } | { image_path }`. Matches A8 and A9.
+- `ports.ts`: `AppIdentity` including `original_filename: string | null`, `ResolvedTarget`, `TargetDecisions`, `TargetResolver`, `AdapterContext.actor`, `AdapterContext.target_decisions`, `Adapter.resolver`. Matches A8 and A9.
+- `index.ts`: exports those types, and `ConversationTurnRole` remains exported. The type itself is unchanged from `2847726` (`'operator' | 'hermes' | 'system' | 'tool'`).
+
+No other contract change. `docs/specs/00-CONTRACTS.md` §10 A8 and A9 describe these types. A9's prose says the field survives a copy. FR-01 shows that, on this Windows 11 build, it does not.
+
+## 4. What must change first
+
+1. Make a signer rule name a filename the copy and the installed binary share, or stop using `OriginalFilename` as that name and pin signer rules to a hash or a canonical path. Say which in `00-CONTRACTS.md` §10 A9.
+2. Re-review that change natively: inbox Notepad, a copy with no MUI, a copy with its MUI planted beside it, and the same three for PowerShell. A Notepad rule must keep denying PowerShell in all three layouts.
+
+Until that lands, the desktop discovery surface stays disabled and spec AS stays blocked.
+
+## 5. Earlier review comments, read after the findings
+
+PR #11 and PR #12 have two orchestrator-relayed review comments each (agy / Gemini 4 Argon) and no inline review comments. PRs #14–#17 have no review bodies and no inline comments on the public repo. Nothing in the #11 or #12 comments bears on FR-01; those reviews predate A9.
