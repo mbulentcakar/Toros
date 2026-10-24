@@ -364,3 +364,46 @@ Until that lands, the desktop discovery surface stays disabled and spec AS stays
 ## 5. Earlier review comments, read after the findings
 
 PR #11 and PR #12 have two orchestrator-relayed review comments each (agy / Gemini 4 Argon) and no inline review comments. PRs #14–#17 have no review bodies and no inline comments on the public repo. Nothing in the #11 or #12 comments bears on FR-01; those reviews predate A9.
+
+## Gate addendum (2026-10-24, main 23c5efe, Grok)
+
+- **Reviewer:** Grok, `grok-4.7`. This addendum re-checks FR-01 on R5. The eighteen earlier findings are not re-run. `git diff --stat 23c5efe..HEAD -- packages tools` is empty, so the code under test is `23c5efe` (`23c5efe8f1576c2b0f82786784fccab0c14cc56a`).
+- **Host:** native Windows NT 10.0.26300.0, Node.js 24.13.1. The parent shell was PowerShell 7.6.7. The probe, the signature reads, and `TorosNative` ran on Windows PowerShell 5.1 with `PSModulePath` removed. The input desktop was `Default` before the native suite, after it, and during the exploit.
+- **Safety:** copies and processes lived in a fresh temp directory. Targets were `C:\Windows\System32\notepad.exe`, `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`, copies of those two files, `C:\Windows\System32\en-US\notepad.exe.mui` planted beside the copies, and files this addendum created. Every process this addendum started was killed or had already exited. The temp directory was removed afterwards.
+
+### Counts
+
+1. Clean build. `npm run clean` (`tsc --build --clean`) exited 0 and removed every `*.tsbuildinfo`. `npm run typecheck` (`tsc --build --force`) exited 0. Every file under `packages/*/dist` was rewritten by that build.
+2. `npm test` exited 0. **739 tests, 57 suites, 726 pass, 0 fail, 0 cancelled, 13 skipped, 0 todo.** Duration 78446 ms.
+   - The 13 skips are the native desktop tests, gated on `TOROS_REAL_TESTS=1`: 12 in `packages/adapters-desktop/dist/test/native-fixture.test.js` and 1 in `packages/node-core/dist/test/desktop-native-core.test.js`.
+   - The `machine.inventory — production drive reader` suite is skipped (`requires TOROS_REAL_TESTS=1 on win32`). The gemini and grok CLI suites are skipped on the same gate. Those three suite skips are outside the 13.
+3. `TOROS_REAL_TESTS=1 node --test packages/adapters-desktop/dist/test/native-fixture.test.js packages/node-core/dist/test/desktop-native-core.test.js` exited 0. **13 tests, 2 suites, 13 pass, 0 fail, 0 skipped.** Duration 56299 ms. The input desktop stayed `Default`.
+
+### FR-01
+
+The neutral value is `[TorosNative]::NeutralOriginalFilename`, the method the emitted `DESKTOP_UIA_PS1` defines and `ReadIdentity` calls. `legacy` is `FileVersionInfo.OriginalFilename`, the read R5 removed. The copies match the installed files byte for byte. The signer rule is `{ signer: "Microsoft Windows", product_name: "Microsoft® Windows® Operating System", original_filename: "NOTEPAD.EXE" }`. Admission is the emitted `AppRuleMatches` and, separately, `authorizeTargets` with the identity's session id set equal to the policy's desktop session, so the decision is the rule.
+
+| File | Neutral `original_filename` | Legacy `OriginalFilename` | Rule |
+|---|---|---|---|
+| installed `notepad.exe` | `NOTEPAD.EXE` | `NOTEPAD.EXE.MUI` | admits |
+| copy, no adjacent MUI | `NOTEPAD.EXE` | `NOTEPAD.EXE` | admits |
+| that copy plus its own `en-US\<copy>.mui` | `NOTEPAD.EXE` | `NOTEPAD.EXE.MUI` | admits |
+| installed `powershell.exe` | `PowerShell.EXE` | `PowerShell.EXE.MUI` | denies |
+| copy, no adjacent MUI | `PowerShell.EXE` | `PowerShell.EXE` | denies |
+| that copy plus `notepad.exe.mui` planted as `en-US\<copy>.mui` | `PowerShell.EXE` | `PowerShell.EXE` | denies |
+
+`AppRuleMatches` and `authorizeTargets` agreed on every row. Signer, product and signature were `Microsoft Windows`, `Microsoft® Windows® Operating System` and `valid` on all six. Product name, which the probe still reads through `FileVersionInfo`, stayed the same when a MUI was planted.
+
+The full probe, bound with `restrict_to_pid` to processes this addendum started, reported the same PowerShell value. The installed `powershell.exe` and the copy each published one window under an `image_sha256` rule, with `original_filename: PowerShell.EXE`. The signer rule published zero windows for both. After the Notepad MUI was planted beside the running copy, a second probe of that process still reported `PowerShell.EXE`, and the signer rule still published zero windows.
+
+A 256-byte file with no version resource: `NeutralOriginalFilename` returned null and did not throw. Authenticode status was `UnknownError`, which the probe maps to `invalid`. The signer rule denied it. A 4096-byte prefix of `notepad.exe` also returned null (`NotSigned`) and was denied. A compiler-built exe that does contain a version resource reported `original_filename: nover-pe.exe`; it is unsigned and has no product name, so the rule denied it.
+
+The copy of `System32\notepad.exe` exited within two seconds, so the probe was not attached to that image. Launching the installed `System32\notepad.exe` left a different image: basename `Notepad.exe`, 3305272 bytes, signer `Microsoft Corporation`, product `Notepad`. `NeutralOriginalFilename` on that image returned null; `FileVersionInfo.OriginalFilename` returned `Notepad.exe`. The signer rule denied it. The probe, bound to that pid, published no window under the image hash or under the signer rule. **Not a finding.** A null `original_filename` never matches a signer rule, and this image is a different file from the `System32` binary FR-01 measured. On that `System32` file and on its copy, the helper's result is `NOTEPAD.EXE` in every layout above.
+
+### R5 diff
+
+`git show 23c5efe` touches six files. The runtime change is `NeutralOriginalFilename` in `packages/adapters-desktop/src/probe.ts` and the call site that used to read `FileVersionInfo.OriginalFilename`. The helper calls `GetFileVersionInfoSizeEx` / `GetFileVersionInfoEx` with `FILE_VER_GET_NEUTRAL`, then `VerQueryValue`, on the image path `ReadIdentity` already opens. A failed read, a throw, a blank, or a value over 260 characters or containing a path separator becomes null, and a null never matches. The tests pin the emitted helper and the removal of the old read. `docs/specs/00-CONTRACTS.md` §10 A9 now names the field as the language-neutral OriginalFilename. `docs/INSTALL.md` and `docs/AR-T4-install-rollback.md` tell an operator who uses `FileVersionInfo` to read a copy. That procedure matches this run: the copy's legacy value is `NOTEPAD.EXE`, which is what the probe reports for the installed file and for the copy.
+
+No new admission path. The planted MUI left `original_filename` unchanged, and the Notepad rule still denies PowerShell.
+
+**Verdict: clear the AR gate**
