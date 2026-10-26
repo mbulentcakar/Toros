@@ -387,9 +387,9 @@ diff.
 
 | Contract type | Change |
 |---|---|
-| `AppIdentity` (`ports.ts`) | **Structural.** Add three fields, each OS-read by the adapter and `null` when the process has no package identity or the read fails. Never taken from the window, UIA, or the image path text. `package_family_name: string \| null` comes from `GetPackageFamilyName` on the process handle. `package_signature_kind: 'store' \| 'system' \| 'enterprise' \| 'developer' \| 'none' \| null` is `Package.SignatureKind` for the process's `GetPackageFullName`. `package_relative_path: string \| null` is the image path relative to the package's install location as the package API reports it: separator-bounded, no `..`, not absolute, no alternate data stream. |
+| `AppIdentity` (`ports.ts`) | **Structural.** Add four fields, each OS-read by the adapter. Never taken from the window, UIA, or the image path text. `package_family_name: string \| null` comes from `GetPackageFamilyName` on the process handle (the `PROCESS_QUERY_LIMITED_INFORMATION` handle the probe already opens). `package_signature_kind: 'store' \| 'system' \| 'enterprise' \| 'developer' \| 'none' \| null` and `package_version: string \| null` (dotted quad, `Package.Id.Version`) come from the registered package: `GetPackageFullName` on the handle, then `PackageManager.FindPackageForUser(<session user SID>, <full name>)` (WinRT, usable from the unpackaged Windows PowerShell 5.1 probe; `Package.Current` is not, and `GetStagedPackageOrigin` is a different enum). `package_relative_path: string \| null` is the image path relative to that package's `InstalledLocation`: separator-bounded, no `..`, not absolute, no alternate data stream. |
 | `AppRule` (`envelope.ts`) | **Structural.** A fourth shape `{ package_family_name: string, package_relative_path?: string }`. The family name is 1–255 characters, matching `^[A-Za-z0-9.-]+_[a-z0-9]{13}$`. Both fields compare case-insensitively. It matches only when the identity's `package_signature_kind` is `store` or `system`. A `null` identity value never matches. It participates in the digest like the other shapes. |
-| `Policy.authorizeTargets` and the probe's copy of `AppRuleMatches` | **Behavioural, both changed together.** The new shape is evaluated as above. An identity with a non-null `package_family_name` **never** matches an `image_path` rule, wherever the path is: a versioned path is not an identity, and package roots are not only `C:\Program Files\WindowsApps`. If the image path is under any package install root and the family-name read fails, the adapter **drops the target** rather than reporting `null`, so an unreadable packaged process cannot fall through to a path rule. Hash and signer rules are unchanged. |
+| `Policy.authorizeTargets` and the probe's copy of `AppRuleMatches` | **Behavioural, both changed together.** The new shape is evaluated as above. An identity with a non-null `package_family_name` **never** matches an `image_path` rule, wherever the path is: a versioned path is not an identity, and package roots are not only `C:\Program Files\WindowsApps`. The family-name read decides by its return status, not by where the image lies: `ERROR_SUCCESS` publishes the name; `APPMODEL_ERROR_NO_PACKAGE` (15700) publishes `null` (a genuinely unpackaged process); **any other status drops the target**. When the name was published, a failed origin, version or relative-path read also drops the target. So an unreadable packaged process cannot fall through to a path rule, on any install volume. Hash and signer rules are unchanged. |
 
 **What the family name proves, stated plainly.** Its 13-character publisher id is a hash of the
 publisher *subject string*, not of the signing key. A sideloaded or developer package signed by
@@ -402,7 +402,7 @@ with the same family name. The origin check covers the case where it has been re
 - contracts;
 - envelope (validation, digest);
 - policy (`appRuleMatches`);
-- adapters-desktop (the probe reads the three fields, applies the matching rules and the drop rule
+- adapters-desktop (the probe reads the four fields, applies the matching rules and the drop rule
   above, and the resolver publishes the fields);
 - node-core (`desktop.authorized_apps` validation);
 - adapters-uia (AS `packaged` profile form).
@@ -413,4 +413,5 @@ with the same family name. The origin check covers the case where it has been re
 - a renamed or copied classic image never acquires a family name;
 - a developer-signed package carrying a Store family name is not admitted;
 - a packaged process is not admitted by an exact `image_path` rule for its own image;
-- a packaged image whose family-name read fails is dropped.
+- a family-name read that fails with any status other than 15700 drops the target;
+- `package_version` comes from the probe's real read (a fixture asserts it equals `Get-AppxPackage`'s `Version` for the same full name), never from a hand-built identity.

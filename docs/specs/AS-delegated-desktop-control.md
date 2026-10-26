@@ -64,8 +64,11 @@ The rest of this spec keeps that second decision honest, its object exact, and i
 | Approver | **none.** Node Core runs it. | return one verdict, then exit |
 | Hermes coordinator | `token` (existing) | nothing in this spec |
 
-Node Core refuses to start unless `token`, `operator_token`, and every `agents.*.token` are
-pairwise distinct and at least 32 characters (extending `core.ts:137`). Each credential is
+Node Core refuses to start unless every `agents.*.token` passes the same `assertPrintableAscii`
+check as `token` and `operator_token` (ASCII `0x21–0x7E`; the HTTP parser strips surrounding
+whitespace, so `operator_token + " "` would otherwise arrive as `operator_token`), and then
+`token`, `operator_token`, and every `agents.*.token` are pairwise distinct and at least 32
+characters (extending `core.ts:192-200`; spec AT states the same rule). Each credential is
 accepted **only** on its own routes. An agent token on an operator or Hermes route, or the reverse,
 is rejected before routing (M3).
 
@@ -311,7 +314,8 @@ interface PackagedApp {                       // (rev 6, A10) an MSIX/AppX proce
   readonly package_family_name: string;      // e.g. Microsoft.WindowsNotepad_8wekyb3d8bbwe, case-insensitive
   readonly package_relative_path: string;    // A10 AppIdentity.package_relative_path, case-insensitive
   // origin is always required to be 'store' or 'system' (matcher, rev 6); not configurable here
-  readonly package_version: { readonly min: string; readonly max: string };  // inclusive, dotted quad
+  readonly package_version: { readonly min: string; readonly max: string };  // inclusive, dotted quad,
+                                             // compared numerically per component with A10 AppIdentity.package_version
 }
 
 interface SurfaceDef {
@@ -448,7 +452,10 @@ function applies, and the raw values are covered by `state_commitment`.
   without package identity. `CalculatorApp.exe` carries no Authenticode signature at all, so no A9
   rule can name it. `System32\notepad.exe` is a different, separately signed file. Both initial
   profiles therefore use the `packaged` form, pinned to `package_relative_path`
-  `Notepad\Notepad.exe` and `CalculatorApp.exe`; each fixture attaches to the packaged process.
+  `Notepad\Notepad.exe` and `CalculatorApp.exe`, with `package_version` bounds
+  `[11.2607.14.0, 11.65535.65535.65535]` and `[11.2607.0.0, 11.65535.65535.65535]` (the versions
+  observed 2026-10-26, open within major version 11; a new major version needs a re-reviewed
+  profile). Each fixture attaches to the packaged process.
   More profiles are separate reviewed slices, at the operator's request.
 
 **Operator approvals outside profiles.** The operator may still approve any non-absolute action on
@@ -922,6 +929,18 @@ the single mapping. Envelopes, policy, receipts, approval bindings and records a
 | `desktop_select` | `/agent/desktop/select` | `desktop_uia.select` |
 | `desktop_await` | `/agent/desktop/await` | none: a read of request state |
 
+**The mission hook in AT's `/agent/invoke` (rev 6, AS1).** When the granted job has an AS mission,
+`desktop.*` on AT's `/agent/invoke` is decided by the mission as well:
+
+- the mission is not yet enrolled or has ended: `E_CAP_NOT_ALLOWED`;
+- it is held after a denial: `E_APPROVAL_DENIED`;
+- it has expired: `E_EXPIRED`;
+- its budget is exhausted: `E_BUDGET_EXHAUSTED`;
+- while it is live, the call's app scope is the **intersection** of the job's `allowed_apps` and
+  the mission's `app_scope`, so a `listed` mission narrower than the job binds the read too.
+
+`machine.inventory` is not affected. Without a mission, AT's own rules apply unchanged.
+
 **Execution trigger.** Once a request is approved, **Node Core executes it** through the ordinary
 action pipeline, the same mechanism AC uses for replay but without requiring `hermes_start`.
 Execution is not tied to any waiter. `desktop_await` is an idempotent read: calling it twice
@@ -1040,9 +1059,9 @@ operator as far as Node Core can tell.
 For the operator's intent to hold, **the driving session must run with no shell and no file
 access outside its workspace**:
 
-- **Claude Code:** tools limited to `mcp__toros-desktop__*`, with a deny rule for the Toros config
+- **Claude Code:** tools limited to `mcp__toros-discovery__*` (spec AT's server name), with a deny rule for the Toros config
   directory;
-- **Codex:** a read-only sandbox, no network, and `mcp-desktop` as its only tool server.
+- **Codex:** a read-only sandbox, no network, and `mcp-discovery` (spec AT's server) as its only tool server.
 
 `docs/USING.md` gets the exact launch lines. `tools/orient.mjs` **warns** when it can tell a driver
 was launched otherwise. A separate Windows account for Node Core is a Phase 2 candidate; AS does
@@ -1075,11 +1094,11 @@ in 5 are done. `act` needs all five, plus at least one reviewed surface profile 
 | Slice | Content | Allowed paths (finalized at dispatch) |
 |---|---|---|
 | AS0 | contract amendments A7 and A10 (architect only, all consumers in one diff) *(rev 6)* | `packages/contracts/**`, affected consumers, `docs/specs/00-CONTRACTS.md` |
-| AS1 | missions, enrollment, generations, execution lock and go token, budgets, hold, restart reconciliation, job supervisor, identity registry, operator routes, events | `packages/node-core/src/**` + tests |
+| AS1 | missions, enrollment, generations, execution lock and go token, budgets, hold, restart reconciliation, job supervisor, identity registry, operator routes, events, and *(rev 6)* the mission hook in spec AT's `/agent/invoke` (below) | `packages/node-core/src/**` + tests |
 | AS2 | classifier with native evidence, surface-profile matcher, native catalog, per-grant worker, record build, commitment, mission-gate handshake and execution check | `packages/adapters-uia/**` (except `src/profiles/**`) |
 | AS2p | the initial surface profiles `notepad` and `calculator`, each with its native fixture test; later profiles are one reviewed slice each | `packages/adapters-uia/src/profiles/**`, `packages/adapters-uia/test/profiles/**` |
 | AS3 | approver runner and profile; profile finding doc | `packages/adapters-cli/src/approver*.ts` + tests, `docs/finding-approver-profile.md` |
-| AS4 | `packages/mcp-desktop` | `packages/mcp-desktop/**` |
+| AS4 | extend spec AT's `packages/mcp-discovery` with the AS tools *(rev 6)* | `packages/mcp-discovery/**` |
 | AS5 | cockpit Desktop control view | `apps/cockpit/**` |
 | AS6 | driver profile docs, orient warning, STATUS | `docs/**`, `tools/orient.mjs` |
 
