@@ -5,9 +5,10 @@
 contract amendment, **A11** (round 3, below): a new code `E_GRANT_INVALID`, and a documentation
 note on `E_MODE_DENIED`. A11 is made by the architect in AT1, with every consumer in the same diff.
 
-**Status: proposed (2026-10-26), round 3. Not accepted.** Round 2 answered the independent review
+**Status: proposed (2026-10-26), round 4. Not accepted.** Round 2 answered the independent review
 of round 1 (Grok, 2026-10-26, findings 1–8); round 3 answers its round-2 re-review (error-code
-meanings and A11, mission scoping, the MCP deadline, test 6a). Drafted by Claude as the first, small step toward
+meanings and A11, mission scoping, the MCP deadline, test 6a); round 4 answers its round-3
+re-review (the mission rule stated once, in AS; the MCP deadline's behaviour). Drafted by Claude as the first, small step toward
 spec AS. AS (PR mbulentcakar/Toros#1) lets an agent *act* on the desktop under missions and
 cross-agent approval. Its dependency chain is long: A7, A10, AG, the approver profile, the
 classifier, and an MCP review. AT ships the read half now, on what is already merged and natively
@@ -137,9 +138,9 @@ All are `POST` with a JSON body, loopback-only, and carry the agent bearer.
   fail-closed like `coordinator_enabled`). When it is not set, the route answers
   `E_MODE_DENIED` with `reason: "ar_gate"`. AS uses the same flag, which AT introduces.
 - **Mission hook (owned by AS1).** When the granted job has an AS mission, AS decides `desktop.*`
-  here as well: it applies the mission's codes, and while the mission is live the app scope is
-  the intersection of the job's `allowed_apps` and the mission's `app_scope` (spec AS revision 6,
-  "The mission hook"). AT1 leaves a single hook point; AS1 fills it. Without AS, the hook allows.
+  here as well. The rule, its ordered codes, and its window predicate are stated **once**, in
+  spec AS revision 6 ("The mission hook in AT's `/agent/invoke`"). AT1 leaves a single hook
+  point that AS1 fills. Without AS, the hook allows.
 - One action at a time per agent (`E_PARALLEL_ACTION`, 409), as on the tools surface.
 - **Error bodies** on `/agent/*` are `{ error, message, reason? }`. The existing tools error writer
   copies only `approval_id` (`http.ts:257-264`), so the agent routes use their own writer that
@@ -162,8 +163,10 @@ All are `POST` with a JSON body, loopback-only, and carry the agent bearer.
   - at most 4 JSON-RPC ids may be outstanding;
   - each tool call has a 45 s deadline, set **above** Node Core's 30 s action ceiling for the
     desktop and machine adapters (`main.ts:200`, `:280`). Core's own timeout therefore always
-    closes the receipt first (`terminated`, `E_TIMEOUT`); the MCP deadline guards only a hung
-    connection, and AT adds no request-abort hook to the pipeline;
+    closes the receipt first (`terminated`, `E_TIMEOUT`). The MCP deadline guards a hung
+    connection or a wait before the action timer is armed (the per-agent lock, a store wait):
+    when it fires, the server returns a JSON-RPC error for that id and destroys that request's
+    socket. AT adds no request-abort hook to the pipeline;
   - a result is at most 1 MiB, refused rather than truncated.
 - **Holds no policy.** Each tool maps to one route in a constant table. Node Core enforces
   everything even when the server is bypassed and the routes are called directly. The acceptance
@@ -252,8 +255,11 @@ implementer's. Native tests run on a real, unlocked Windows desktop, and skip co
    - the receipt's `job_id` is the granted job and its actor is `agent:<name>`;
    - its `arguments_digest` equals the digest of exactly the schema keys with
      `session_scope: "interactive"`, and nothing else.
-6b. Once AS ships, the mission hook: a held mission → `E_APPROVAL_DENIED`; a `listed` mission
-   narrower than the job's `allowed_apps` → windows outside the mission scope are not returned.
+6b. Once AS ships, the mission hook, with two fixture windows that both match the job's
+   `allowed_apps`:
+   - a held mission → `E_APPROVAL_DENIED`;
+   - a live `listed` mission naming only the first → the first is returned **and** the second
+     is not (an empty list fails the test).
 7. Through the real pipeline on a native desktop, with a fixture window the job allows:
    - `desktop.state` returns it and nothing else;
    - `desktop.inspect` returns structure without names;
@@ -269,6 +275,8 @@ implementer's. Native tests run on a real, unlocked Windows desktop, and skip co
    - any extra argv refuses to start;
    - an action that hangs past Core's 30 s ceiling returns `E_TIMEOUT` through MCP, before the
      45 s MCP deadline, and its receipt is `terminated`;
+   - a Node Core stand-in that accepts the request and never responds gives a JSON-RPC error at
+     45 s, and the request socket is closed;
    - `desktop_inspect` with a `continuation_token` reaches page 2;
    - stdout carries only frames.
 10. The server reads no URL, path or credential from any tool argument (schema-level
@@ -287,7 +295,5 @@ implementer's. Native tests run on a real, unlocked Windows desktop, and skip co
 - **AS adds only** `/agent/mission/*` and `/agent/desktop/*`. AS4 **extends**
   `packages/mcp-discovery` with its tools; it does not add a second server. AS's `desktop_state`
   tool is AT's.
-- **Missions take precedence.** While a job has an AS mission that is held, ended, or not yet
-  enrolled, `/agent/invoke` of `desktop.*` on that job returns the mission's code: a mission hold
-  stops AT reads too. `machine.inventory` is unaffected. The AS spec (revision 6 on PR
-  mbulentcakar/Toros#1) states the same split.
+- **Missions take precedence**, through the mission hook (see "Agent routes"). Its rule is
+  stated once, in spec AS revision 6 (PR mbulentcakar/Toros#1).
