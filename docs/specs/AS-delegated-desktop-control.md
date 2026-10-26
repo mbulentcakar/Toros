@@ -171,9 +171,11 @@ just a signed application on a known framework (operator choice (a), 2026-10-13)
   `InternalName`, `ProductName`), which survives renames and copies; token integrity level and
   elevation; session id; desktop. This is A8's `AppIdentity`; `OriginalFilename` is read
   language-neutrally (A9, R5). *(rev 6)* For a packaged process, also (A10): its **package family
-  name** (`GetPackageFamilyName` on the process handle), the package's **signature origin**
-  (`Package.SignatureKind`: store, system, enterprise, developer or none, for the process's
-  `GetPackageFullName`), and its **package-relative image path**. The family name alone is not a
+  name** (`GetPackageFamilyName` on the process handle); and, from the registered package found
+  by `GetPackageFullName` on the handle and then `PackageManager.FindPackageForUser`, its
+  **signature origin** (`SignatureKind`: store, system, enterprise, developer or none), its
+  **package version** (`Id.Version`), and its **package-relative image path**. These are A10's
+  four fields. The family name alone is not a
   signature binding: its publisher id is a hash of the publisher *subject string*, so a sideloaded
   or developer package signed by any trusted certificate with that subject gets the same family
   name. A10 therefore always pairs it with the origin.
@@ -876,8 +878,8 @@ A local stdio MCP server with zero runtime dependencies. *(rev 6)* It is spec AT
 `packages/mcp-discovery` (PR mbulentcakar/Toros#20), extended by AS4 with the tools below.
 It is not a second server. AT owns the agent bearers, the reserved `agent:` actor prefix,
 `/agent/status`, `/agent/invoke`, `desktop_control.ar_gate_cleared` and the `desktop_state` tool.
-AS adds only `/agent/mission/*` and `/agent/desktop/*`. While a job's mission is held, ended or
-not yet enrolled, AT's `/agent/invoke` of `desktop.*` on that job returns the mission's code.
+AS adds only `/agent/mission/*` and `/agent/desktop/*`. How a mission affects AT's
+`/agent/invoke` is stated once, in "The mission hook" below.
 
 - **Protocol:** MCP revision **2025-06-18**
   ([lifecycle](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle),
@@ -930,14 +932,17 @@ the single mapping. Envelopes, policy, receipts, approval bindings and records a
 | `desktop_await` | `/agent/desktop/await` | none: a read of request state |
 
 **The mission hook in AT's `/agent/invoke` (rev 6, AS1).** When the granted job has an AS mission,
-`desktop.*` on AT's `/agent/invoke` is decided by the mission as well:
+`desktop.*` on AT's `/agent/invoke` is decided by the mission as well. This paragraph is the only
+statement of that rule; AT points here. The checks apply in this order:
 
-- the mission is not yet enrolled or has ended: `E_CAP_NOT_ALLOWED`;
-- it is held after a denial: `E_APPROVAL_DENIED`;
-- it has expired: `E_EXPIRED`;
-- its budget is exhausted: `E_BUDGET_EXHAUSTED`;
-- while it is live, the call's app scope is the **intersection** of the job's `allowed_apps` and
-  the mission's `app_scope`, so a `listed` mission narrower than the job binds the read too.
+1. the mission is held after a denial: `E_APPROVAL_DENIED`;
+2. it has ended with reason `expired`: `E_EXPIRED`;
+3. it has ended with reason `budget`: `E_BUDGET_EXHAUSTED`;
+4. it has ended for any other reason, or is not yet enrolled: `E_CAP_NOT_ALLOWED`;
+5. it is live: the call runs, and a window is returned only if it matches the job's
+   `allowed_apps` (as today) **and**, when the mission's `app_scope` is `listed`, one listed
+   image (canonical path and SHA-256) or one listed package rule (A10). `any_not_denied` adds no
+   further filter on this read; the classifier still applies to AS's own routes.
 
 `machine.inventory` is not affected. Without a mission, AT's own rules apply unchanged.
 
@@ -1061,7 +1066,7 @@ access outside its workspace**:
 
 - **Claude Code:** tools limited to `mcp__toros-discovery__*` (spec AT's server name), with a deny rule for the Toros config
   directory;
-- **Codex:** a read-only sandbox, no network, and `mcp-discovery` (spec AT's server) as its only tool server.
+- **Codex:** a read-only sandbox, no network, and `toros-discovery` (spec AT's server, `packages/mcp-discovery`) as its only tool server.
 
 `docs/USING.md` gets the exact launch lines. `tools/orient.mjs` **warns** when it can tell a driver
 was launched otherwise. A separate Windows account for Node Core is a Phase 2 candidate; AS does
