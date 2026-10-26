@@ -298,7 +298,8 @@ someone other than a human. The independent review (AS-B7) inventoried the follo
 | `ApprovalBinding` (`ports.ts`) | **No change.** AS's server-prepared approval record is the canonical argument object, so `arguments_digest` covers it. |
 | `Receipt.actor` (`receipt.ts`) | **Documentation.** May be `agent:claude` / `agent:codex` for driver actions. `adapter_fields` already fits. |
 | `EventRow`, `AppendEventInput`, `Store` | No change: `payload: JsonValue` fits; `kind` follows the amended union. |
-| `JobEnvelope`, `AdapterManifest`, `AdapterContext`, `ActionResult`, `Adapter`, `SessionAdapter`, `SessionRecord`, `Permission`, `PolicyDecision`, `CapabilityId` | No change. Mission and grant state stay in Node Core; the OS desktop session is not a CLI `SessionRecord`. |
+| `JobEnvelope`, `AdapterContext`, `Adapter`, `TargetResolver`, `AppIdentity` | **No change beyond A8/A10** *(rev 6)*. A mission's job lists admitted apps in A8's `allowed_apps`; the `desktop_uia` adapter implements A8's `resolver` for app admission and element targets, so policy, not the adapter, decides each one; `ctx.actor` carries `agent:claude` / `agent:codex`; `target_decisions` carries Core's verdicts. Packaged apps use A10. |
+| `AdapterManifest`, `ActionResult`, `SessionAdapter`, `SessionRecord`, `Permission`, `PolicyDecision`, `CapabilityId` | No change. Mission and grant state stay in Node Core; the OS desktop session is not a CLI `SessionRecord`. |
 
 Outside `packages/contracts`, and owned by their AS slices: `NodeCoreOptions` (agent tokens),
 the approval registry's deny path and replay trigger, the approver runner options, and the AS
@@ -365,3 +366,30 @@ OriginalFilename — the value the version resource carries independent of any a
 `en-US\<image>.mui` — for example `NOTEPAD.EXE`, never `NOTEPAD.EXE.MUI`. This is a clarification
 of what the value means, not a type change: the field remains `string | null` and A9's
 case-insensitive comparison is unchanged.
+
+### A10 — packaged-app identity (spec AS revision 6) — PROPOSED
+
+**Status: proposed with spec AS revision 6 (2026-10-26). Not in effect.** Made by the architect in
+slice AS0 together with A7, every consumer in the same diff.
+
+**Gap.** A8/A9 identify an application by image hash, image path, or signer + product +
+`OriginalFilename`. A packaged (MSIX/AppX) application fits none of them durably: its image lives
+under a versioned `WindowsApps` path, its hash changes on every Store update, and its image may
+carry no Authenticode signature of its own (`CalculatorApp.exe` reports `NotSigned`; the package,
+not the file, is signed). On current Windows 11 the apps AS's first profiles target, Notepad and
+Calculator, are packaged, so no A8/A9 rule can name them across an update.
+
+**Change.**
+
+| Contract type | Change |
+|---|---|
+| `AppIdentity` (`ports.ts`) | **Structural.** Add `package_family_name: string \| null`, read by the adapter from `GetPackageFamilyName` on the process handle; `null` for a process without package identity or when the read fails. Never taken from the window, UIA, or the image path. |
+| `AppRule` (`envelope.ts`) | **Structural.** A fourth shape `{ package_family_name: string }`, 1–255 characters, matching `^[A-Za-z0-9.-]+_[a-z0-9]{13}$`. Compared case-insensitively; a `null` identity value never matches. Participates in the digest like the other shapes. |
+| `Policy.authorizeTargets` | **Behavioural.** Evaluates the new shape. A process with package identity is **not** admitted by an `image_path` rule pointing into a `WindowsApps` root (a versioned path is not an identity). |
+
+**Consumers:** contracts, envelope (validation, digest), policy (`appRuleMatches`), adapters-desktop
+(probe reads the family name; resolver publishes it), node-core (`desktop.authorized_apps`
+validation), adapters-uia (AS `packaged` profile form). Tests: a rule for one family name never
+admits another; the hash of an updated package does not matter; a renamed classic image cannot
+acquire a family name.
+

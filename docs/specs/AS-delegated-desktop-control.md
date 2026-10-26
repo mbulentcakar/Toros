@@ -2,7 +2,13 @@
 
 **Read `00-CONTRACTS.md` first.** It is short and it is binding.
 
-**Status: proposed, revision 5 (2026-10-14). Not accepted.** Revision 5 answers the re-review of
+**Status: proposed, revision 6 (2026-10-26). Not accepted.** Revision 6 rebases AS on what the AR
+remediation actually shipped: contract amendments **A8** (two-phase resolve) and **A9** (signer
+rules need `OriginalFilename`), token-sequence `forbidden` matching (RR-01), and the cleared AR gate
+(PR mbulentcakar/Toros#18, 2026-10-24). It also closes a gap the AR native runs exposed: the two
+initial profiles, Notepad and Calculator, are **packaged (MSIX) apps** on current Windows 11, and a
+signer rule cannot identify them, so revision 6 proposes amendment **A10** (packaged-app identity).
+Each changed section is marked *(rev 6)*. Revision 5 answered the re-review of
 revision 4: R4-B4 (an outcome is decided by proof, never by silence), R4-N1 (A7's event list
 matches the lifecycle) and R4-N2 (a normative profile schema and deterministic matcher). Revision
 4: Revision 4 answers the re-review of
@@ -108,7 +114,9 @@ Hosted cockpit content is closed separately, by the absolute tier (B1).
 - **Scope intersection** (M2). A request must pass all of: mission scope, the envelope's
   `allowed_capabilities` (which must list the `desktop_uia.*` ids used, see "Capability ids"),
   the envelope's `forbidden`
-  terms (applied to selector names, typed values and window names), and the classifier (B1).
+  terms (applied to selector names, typed values and window names, with the token-sequence
+  semantics of RR-01: lower-case `[a-z0-9]+` words, consecutive; a zero-word term is refused at
+  seal time) *(rev 6)*, and the classifier (B1).
   `any_not_denied` still requires a positive app admission per process. It is never the default
   for a surface the classifier cannot place.
 - **Listed images** are canonicalized: final path from the process handle, case-folded, no
@@ -152,7 +160,10 @@ just a signed application on a known framework (operator choice (a), 2026-10-13)
 - **Process identity:** pid plus creation time (pid-reuse guard); canonical image path; image
   SHA-256; Authenticode status and signer; the signed version resource (`OriginalFilename`,
   `InternalName`, `ProductName`), which survives renames and copies; token integrity level and
-  elevation; session id; desktop.
+  elevation; session id; desktop. This is A8's `AppIdentity`; `OriginalFilename` is read
+  language-neutrally (A9, R5). *(rev 6)* For a packaged process, also its **package family name**
+  from `GetPackageFamilyName` on the process handle (A10): Windows binds it to the package's
+  signature at install, so it survives updates that change the image path and hash.
 - **Ancestry:** parent chain with each parent's creation time verified, so a recycled pid does not
   inherit an identity.
 - **Element (UIA):** the element's **own** owning process id (UIA `ProcessId`), `FrameworkId`,
@@ -240,8 +251,9 @@ Toros process that started before registration.
   ancestry contains a Chromium, WebView2, MSHTML (`Internet Explorer_Server`) or CEF host class,
   whatever app hosts it (R2-b).
 - **Credential and security surfaces:** `CredentialUIBroker`, `LogonUI`, Windows Security, the
-  Settings app's account pages, and password-manager images listed in config (by image hash or
-  signer plus product name).
+  Settings app's account pages, and password-manager images listed in config (by any A8/A9/A10
+  rule: image hash, signer plus product name plus `OriginalFilename`, path, or package family
+  name) *(rev 6)*.
 - **Any read that would return an element positively identified as a password** (by UIA, native
   style, or password character): its **existence** only. Its name and value are **never** released,
   not even to an operator-approved read (R3-N1).
@@ -271,14 +283,24 @@ interface SelectorStep { readonly control_type: string; readonly automation_id: 
 interface SurfaceProfile {
   readonly profile_id: string;               // ^[a-z][a-z0-9_]{1,40}$
   readonly version: number;                  // integer ≥ 1; bumped on any change
-  readonly app: {
-    readonly signer: string;                 // Authenticode subject CN, exact
-    readonly product: string;                // version-resource ProductName, exact
-    readonly original_filename: string;      // version-resource OriginalFilename, case-insensitive
-    readonly file_version: { readonly min: string; readonly max: string };  // inclusive, dotted quad
-  };
+  readonly app: SignedApp | PackagedApp;     // (rev 6) exactly one form
   readonly surfaces: readonly SurfaceDef[];
   readonly review: { readonly reviewed_in: string; readonly fixture_test: string };  // PR ref, test path
+}
+
+interface SignedApp {                         // a classic, Authenticode-signed image
+  readonly kind: 'signed';
+  readonly signer: string;                   // Authenticode subject CN, exact
+  readonly product: string;                  // version-resource ProductName, exact
+  readonly original_filename: string;        // language-neutral OriginalFilename (A9), case-insensitive
+  readonly file_version: { readonly min: string; readonly max: string };  // inclusive, dotted quad
+}
+
+interface PackagedApp {                       // (rev 6, A10) an MSIX/AppX process
+  readonly kind: 'packaged';
+  readonly package_family_name: string;      // e.g. Microsoft.WindowsNotepad_8wekyb3d8bbwe, case-insensitive
+  readonly image_relative_path: string;      // image path relative to the package install root, case-insensitive
+  readonly package_version: { readonly min: string; readonly max: string };  // inclusive, dotted quad
 }
 
 interface SurfaceDef {
@@ -346,11 +368,14 @@ automatic semantic check.
 Evaluated by Node Core. Any step that cannot be read, or resolves ambiguously, is **no match**,
 and the request falls to the operator tier.
 
-1. **App:**
-   - signer equal;
-   - product equal;
-   - `OriginalFilename` equal (case-insensitive);
-   - file version within `[min, max]`.
+1. **App** *(rev 6)*, by the profile's form:
+   - `signed`: signer equal; product equal; language-neutral `OriginalFilename` equal
+     (case-insensitive); file version within `[min, max]`. A process with package identity never
+     matches a `signed` profile;
+   - `packaged`: the process's package family name (A10, OS-read) equal (case-insensitive); its
+     image path, relative to that package's install root as Windows reports it, equal
+     (case-insensitive); package version within `[min, max]`. A process without package identity
+     never matches a `packaged` profile.
 2. **Surface root:**
    - the top-level window's native class equal;
    - its UIA control type equal;
@@ -398,8 +423,13 @@ function applies, and the raw values are covered by `state_commitment`.
   and a profile cannot override them.
 - **Every profile ships with a native fixture test.** It launches the real app, matches every
   surface and control, and proves that a non-matching look-alike surface is **not** matched. The
-  initial profiles are `notepad` and `calculator`, which the acceptance tests use. More profiles
-  are separate reviewed slices, at the operator's request.
+  initial profiles are `notepad` and `calculator`, which the acceptance tests use. *(rev 6)* On
+  current Windows 11 both are packaged apps (`Microsoft.WindowsNotepad_8wekyb3d8bbwe`,
+  `Microsoft.WindowsCalculator_8wekyb3d8bbwe`); `CalculatorApp.exe` carries no Authenticode
+  signature at all, and launching `System32
+otepad.exe` starts the packaged Notepad. Both
+  initial profiles therefore use the `packaged` form. More profiles are separate reviewed slices,
+  at the operator's request.
 
 **Operator approvals outside profiles.** The operator may still approve any non-absolute action on
 an unprofiled surface (decision 6). The approval card states plainly that **for unprofiled
@@ -993,7 +1023,7 @@ not claim it.
 
 ## Prerequisites before `act` is enabled
 
-1. Spec AR's adversarial security review (PR mbulentcakar/Toros#3, verdict *do not enable*) is
+1. *(rev 6: met 2026-10-24.)* Spec AR's adversarial security review (PR mbulentcakar/Toros#3, verdict *do not enable*) is
    remediated. Slices **F1–F4** of `docs/reviews/AR-remediation-plan.md` are merged, and a native
    re-review of the AR surface has cleared them. AS's classification and read rules assume F2 (no
    generic UIA names from discovery) and F3 (resolved identity visible to policy, OS session
@@ -1007,7 +1037,8 @@ not claim it.
 
 Prerequisite 1 gates **every** mode (R3-N3). `look` missions use AR's `desktop.state` and the
 same read path, so neither `look` nor `act` routes are mounted until the AR gate clears. A Node
-Core configuration flag (`desktop_control.ar_gate_cleared`), set by the operator only after the
+Core configuration flag (`desktop_control.ar_gate_cleared`; *(rev 6)* introduced by AS1 and absent
+from Node Core today, default unset), set by the operator only after the
 native re-review, controls mounting. `look` may then ship once 2–4 and the code and MCP reviews
 in 5 are done. `act` needs all five, plus at least one reviewed surface profile for delegation.
 
@@ -1015,7 +1046,7 @@ in 5 are done. `act` needs all five, plus at least one reviewed surface profile 
 
 | Slice | Content | Allowed paths (finalized at dispatch) |
 |---|---|---|
-| AS0 | contract amendment A7 (architect only, all consumers in one diff) | `packages/contracts/**`, affected consumers, `docs/specs/00-CONTRACTS.md` |
+| AS0 | contract amendments A7 and A10 (architect only, all consumers in one diff) *(rev 6)* | `packages/contracts/**`, affected consumers, `docs/specs/00-CONTRACTS.md` |
 | AS1 | missions, enrollment, generations, execution lock and go token, budgets, hold, restart reconciliation, job supervisor, identity registry, operator routes, events | `packages/node-core/src/**` + tests |
 | AS2 | classifier with native evidence, surface-profile matcher, native catalog, per-grant worker, record build, commitment, mission-gate handshake and execution check | `packages/adapters-uia/**` (except `src/profiles/**`) |
 | AS2p | the initial surface profiles `notepad` and `calculator`, each with its native fixture test; later profiles are one reviewed slice each | `packages/adapters-uia/src/profiles/**`, `packages/adapters-uia/test/profiles/**` |
