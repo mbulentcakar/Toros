@@ -298,7 +298,7 @@ someone other than a human. The independent review (AS-B7) inventoried the follo
 | `ApprovalBinding` (`ports.ts`) | **No change.** AS's server-prepared approval record is the canonical argument object, so `arguments_digest` covers it. |
 | `Receipt.actor` (`receipt.ts`) | **Documentation.** May be `agent:claude` / `agent:codex` for driver actions. `adapter_fields` already fits. |
 | `EventRow`, `AppendEventInput`, `Store` | No change: `payload: JsonValue` fits; `kind` follows the amended union. |
-| `JobEnvelope`, `AdapterContext`, `Adapter`, `TargetResolver`, `AppIdentity` | **No change beyond A8/A10** *(rev 6)*. A mission's job lists admitted apps in A8's `allowed_apps`; the `desktop_uia` adapter implements A8's `resolver` for app admission and element targets, so policy, not the adapter, decides each one; `ctx.actor` carries `agent:claude` / `agent:codex`; `target_decisions` carries Core's verdicts. Packaged apps use A10. |
+| `JobEnvelope`, `AdapterContext`, `Adapter`, `TargetResolver`, `AppIdentity` | **No further change beyond A8, A9 and A10** *(rev 6)*. A mission's job lists admitted apps in A8's `allowed_apps`; the `desktop_uia` adapter implements A8's `resolver` for app admission and element targets, so policy, not the adapter, decides each one; `ctx.actor` carries `agent:claude` / `agent:codex`; `target_decisions` carries Core's verdicts. Packaged apps use A10. |
 | `AdapterManifest`, `ActionResult`, `SessionAdapter`, `SessionRecord`, `Permission`, `PolicyDecision`, `CapabilityId` | No change. Mission and grant state stay in Node Core; the OS desktop session is not a CLI `SessionRecord`. |
 
 Outside `packages/contracts`, and owned by their AS slices: `NodeCoreOptions` (agent tokens),
@@ -321,7 +321,8 @@ session), `ResolvedTarget` (an `app` or `capability` keyed by an adapter-opaque
 string), `TargetDecisions` (Core's `allowed`/`denied` verdict per key), and the
 `TargetResolver` port — plus `Adapter.resolver?: TargetResolver` and
 `AdapterContext.actor` / `AdapterContext.target_decisions?`. `JobEnvelope` gains
-an optional `allowed_apps: readonly AppRule[]` (hash, signer+product, or path),
+an optional `allowed_apps: readonly AppRule[]` (hash, signer+product — A9 adds
+`original_filename` — or path; A10 proposes a package shape),
 participating in the digest only when present. Policy gains a deterministic
 `authorizeTargets` and the `desktop_session_id` option. Node Core performs the
 resolve under the same timeout/abort as invoke, validates the output, passes the
@@ -369,27 +370,47 @@ case-insensitive comparison is unchanged.
 
 ### A10 — packaged-app identity (spec AS revision 6) — PROPOSED
 
-**Status: proposed with spec AS revision 6 (2026-10-26). Not in effect.** Made by the architect in
-slice AS0 together with A7, every consumer in the same diff.
+**Status: proposed with spec AS revision 6 (2026-10-26; round 2 after the independent review).
+Not in effect.** Made by the architect in slice AS0 together with A7, every consumer in the same
+diff.
 
 **Gap.** A8/A9 identify an application by image hash, image path, or signer + product +
-`OriginalFilename`. A packaged (MSIX/AppX) application fits none of them durably: its image lives
-under a versioned `WindowsApps` path, its hash changes on every Store update, and its image may
-carry no Authenticode signature of its own (`CalculatorApp.exe` reports `NotSigned`; the package,
-not the file, is signed). On current Windows 11 the apps AS's first profiles target, Notepad and
-Calculator, are packaged, so no A8/A9 rule can name them across an update.
+`OriginalFilename`. A packaged (MSIX/AppX) application is poorly served by all three:
+
+- its image lives under a versioned install path, and its hash changes on every Store update;
+- its image may carry no Authenticode signature of its own (`CalculatorApp.exe` reports
+  `NotSigned`; the package is signed, not the file), so no A9 rule can name it;
+- where the image *is* signed (packaged `Notepad.exe`), an A9 rule names it, but it also matches a
+  copy of the same file run without package identity.
 
 **Change.**
 
 | Contract type | Change |
 |---|---|
-| `AppIdentity` (`ports.ts`) | **Structural.** Add `package_family_name: string \| null`, read by the adapter from `GetPackageFamilyName` on the process handle; `null` for a process without package identity or when the read fails. Never taken from the window, UIA, or the image path. |
-| `AppRule` (`envelope.ts`) | **Structural.** A fourth shape `{ package_family_name: string }`, 1–255 characters, matching `^[A-Za-z0-9.-]+_[a-z0-9]{13}$`. Compared case-insensitively; a `null` identity value never matches. Participates in the digest like the other shapes. |
-| `Policy.authorizeTargets` | **Behavioural.** Evaluates the new shape. A process with package identity is **not** admitted by an `image_path` rule pointing into a `WindowsApps` root (a versioned path is not an identity). |
+| `AppIdentity` (`ports.ts`) | **Structural.** Add three fields, each OS-read by the adapter and `null` when the process has no package identity or the read fails. Never taken from the window, UIA, or the image path text. `package_family_name: string \| null` comes from `GetPackageFamilyName` on the process handle. `package_signature_kind: 'store' \| 'system' \| 'enterprise' \| 'developer' \| 'none' \| null` is `Package.SignatureKind` for the process's `GetPackageFullName`. `package_relative_path: string \| null` is the image path relative to the package's install location as the package API reports it: separator-bounded, no `..`, not absolute, no alternate data stream. |
+| `AppRule` (`envelope.ts`) | **Structural.** A fourth shape `{ package_family_name: string, package_relative_path?: string }`. The family name is 1–255 characters, matching `^[A-Za-z0-9.-]+_[a-z0-9]{13}$`. Both fields compare case-insensitively. It matches only when the identity's `package_signature_kind` is `store` or `system`. A `null` identity value never matches. It participates in the digest like the other shapes. |
+| `Policy.authorizeTargets` and the probe's copy of `AppRuleMatches` | **Behavioural, both changed together.** The new shape is evaluated as above. An identity with a non-null `package_family_name` **never** matches an `image_path` rule, wherever the path is: a versioned path is not an identity, and package roots are not only `C:\Program Files\WindowsApps`. If the image path is under any package install root and the family-name read fails, the adapter **drops the target** rather than reporting `null`, so an unreadable packaged process cannot fall through to a path rule. Hash and signer rules are unchanged. |
 
-**Consumers:** contracts, envelope (validation, digest), policy (`appRuleMatches`), adapters-desktop
-(probe reads the family name; resolver publishes it), node-core (`desktop.authorized_apps`
-validation), adapters-uia (AS `packaged` profile form). Tests: a rule for one family name never
-admits another; the hash of an updated package does not matter; a renamed classic image cannot
-acquire a family name.
+**What the family name proves, stated plainly.** Its 13-character publisher id is a hash of the
+publisher *subject string*, not of the signing key. A sideloaded or developer package signed by
+any certificate the machine trusts with the same subject gets the same family name. That is why
+every A10 match also requires origin `store` or `system`: Windows checks those signatures against
+the Store or the OS image. While the Store package is installed, Windows refuses a second package
+with the same family name. The origin check covers the case where it has been removed.
 
+**Consumers:**
+- contracts;
+- envelope (validation, digest);
+- policy (`appRuleMatches`);
+- adapters-desktop (the probe reads the three fields, applies the matching rules and the drop rule
+  above, and the resolver publishes the fields);
+- node-core (`desktop.authorized_apps` validation);
+- adapters-uia (AS `packaged` profile form).
+
+**Tests:**
+- a rule for one family name never admits another;
+- an updated package's new hash and path do not matter;
+- a renamed or copied classic image never acquires a family name;
+- a developer-signed package carrying a Store family name is not admitted;
+- a packaged process is not admitted by an exact `image_path` rule for its own image;
+- a packaged image whose family-name read fails is dropped.

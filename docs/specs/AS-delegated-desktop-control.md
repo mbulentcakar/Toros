@@ -6,8 +6,11 @@
 remediation actually shipped: contract amendments **A8** (two-phase resolve) and **A9** (signer
 rules need `OriginalFilename`), token-sequence `forbidden` matching (RR-01), and the cleared AR gate
 (PR mbulentcakar/Toros#18, 2026-10-24). It also closes a gap the AR native runs exposed: the two
-initial profiles, Notepad and Calculator, are **packaged (MSIX) apps** on current Windows 11, and a
-signer rule cannot identify them, so revision 6 proposes amendment **A10** (packaged-app identity).
+initial profiles, Notepad and Calculator, are **packaged (MSIX) apps** on current Windows 11. An A9
+signer rule cannot name Calculator (its image is unsigned) and cannot tell packaged Notepad from a
+copy of its image run outside the package, so revision 6 proposes amendment **A10** (packaged-app
+identity: family name, origin and package-relative path, all OS-read). Revision 6 round 2 answers
+the independent review of revision 6 (Grok, 2026-10-26, findings 9–16).
 Each changed section is marked *(rev 6)*. Revision 5 answered the re-review of
 revision 4: R4-B4 (an outcome is decided by proof, never by silence), R4-N1 (A7's event list
 matches the lifecycle) and R4-N2 (a normative profile schema and deterministic matcher). Revision
@@ -95,7 +98,8 @@ Hosted cockpit content is closed separately, by the absolute tier (B1).
   "driver": "claude" | "codex",   // approver is the other, derived
   "approver_profile": { "cli": "codex", "cli_version": "x.y.z", "model": "id" },  // pinned (B6)
   "desktop_key": { "session_id": 1, "desktop": "WinSta0\\Default" },             // M2
-  "app_scope": { "kind": "any_not_denied" } | { "kind": "listed", "images": ["<canonical path>"] },
+  "app_scope": { "kind": "any_not_denied" } | { "kind": "listed", "images": ["<canonical path>"],
+                 "packages": [{ "package_family_name": "…", "package_relative_path": "…" }] },  // rev 6
   "mode": "look" | "act",
   "budget": { "max_requests": 200, "max_approver_calls": 200 },                   // M1
   "state": "live" | "held" | "ended",
@@ -121,7 +125,9 @@ Hosted cockpit content is closed separately, by the absolute tier (B1).
   for a surface the classifier cannot place.
 - **Listed images** are canonicalized: final path from the process handle, case-folded, no
   `\\?\` prefix variance. They are revalidated (path **and** SHA-256) at admission and at every
-  execution against the live process image.
+  execution against the live process image. A listed path or hash pins **one build**. *(rev 6)* A
+  `listed` scope may instead name an A10 package rule (family name, plus origin and an optional
+  `package_relative_path`), which survives Store updates.
 - `mode: "look"` admits the three read actions; `act` also admits the mutation request path.
 - Missions are created, extended, held, resumed and revoked only on the operator surface.
 
@@ -161,9 +167,13 @@ just a signed application on a known framework (operator choice (a), 2026-10-13)
   SHA-256; Authenticode status and signer; the signed version resource (`OriginalFilename`,
   `InternalName`, `ProductName`), which survives renames and copies; token integrity level and
   elevation; session id; desktop. This is A8's `AppIdentity`; `OriginalFilename` is read
-  language-neutrally (A9, R5). *(rev 6)* For a packaged process, also its **package family name**
-  from `GetPackageFamilyName` on the process handle (A10): Windows binds it to the package's
-  signature at install, so it survives updates that change the image path and hash.
+  language-neutrally (A9, R5). *(rev 6)* For a packaged process, also (A10): its **package family
+  name** (`GetPackageFamilyName` on the process handle), the package's **signature origin**
+  (`Package.SignatureKind`: store, system, enterprise, developer or none, for the process's
+  `GetPackageFullName`), and its **package-relative image path**. The family name alone is not a
+  signature binding: its publisher id is a hash of the publisher *subject string*, so a sideloaded
+  or developer package signed by any trusted certificate with that subject gets the same family
+  name. A10 therefore always pairs it with the origin.
 - **Ancestry:** parent chain with each parent's creation time verified, so a recycled pid does not
   inherit an identity.
 - **Element (UIA):** the element's **own** owning process id (UIA `ProcessId`), `FrameworkId`,
@@ -299,7 +309,8 @@ interface SignedApp {                         // a classic, Authenticode-signed 
 interface PackagedApp {                       // (rev 6, A10) an MSIX/AppX process
   readonly kind: 'packaged';
   readonly package_family_name: string;      // e.g. Microsoft.WindowsNotepad_8wekyb3d8bbwe, case-insensitive
-  readonly image_relative_path: string;      // image path relative to the package install root, case-insensitive
+  readonly package_relative_path: string;    // A10 AppIdentity.package_relative_path, case-insensitive
+  // origin is always required to be 'store' or 'system' (matcher, rev 6); not configurable here
   readonly package_version: { readonly min: string; readonly max: string };  // inclusive, dotted quad
 }
 
@@ -373,9 +384,16 @@ and the request falls to the operator tier.
      (case-insensitive); file version within `[min, max]`. A process with package identity never
      matches a `signed` profile;
    - `packaged`: the process's package family name (A10, OS-read) equal (case-insensitive); its
-     image path, relative to that package's install root as Windows reports it, equal
-     (case-insensitive); package version within `[min, max]`. A process without package identity
-     never matches a `packaged` profile.
+     package signature origin `store` or `system`; its `package_relative_path` equal
+     (case-insensitive); package version within `[min, max]`. A process without package identity,
+     or with any other origin (`developer`, `enterprise`, `none`, or an unreadable one), never
+     matches a `packaged` profile.
+   - **Signature (rev 6, clarifies R2-b).** A process matched by a `packaged` profile counts as
+     *signed by its package*: its origin is `store` or `system`, so Windows verified the package
+     signature at install. R2-b's "unsigned apps go to the operator" still holds for every
+     unpackaged unsigned image and for every packaged process that matches no profile.
+     **Operator confirmation needed:** this reading of R2-b is what lets the Calculator profile
+     reach the approver.
 2. **Surface root:**
    - the top-level window's native class equal;
    - its UIA control type equal;
@@ -425,11 +443,13 @@ function applies, and the raw values are covered by `state_commitment`.
   surface and control, and proves that a non-matching look-alike surface is **not** matched. The
   initial profiles are `notepad` and `calculator`, which the acceptance tests use. *(rev 6)* On
   current Windows 11 both are packaged apps (`Microsoft.WindowsNotepad_8wekyb3d8bbwe`,
-  `Microsoft.WindowsCalculator_8wekyb3d8bbwe`); `CalculatorApp.exe` carries no Authenticode
-  signature at all, and launching `System32
-otepad.exe` starts the packaged Notepad. Both
-  initial profiles therefore use the `packaged` form. More profiles are separate reviewed slices,
-  at the operator's request.
+  `Microsoft.WindowsCalculator_8wekyb3d8bbwe`). Packaged `Notepad.exe` is Authenticode-signed and
+  an A9 signer rule can name it, but the same rule also matches a copy of `Notepad.exe` run
+  without package identity. `CalculatorApp.exe` carries no Authenticode signature at all, so no A9
+  rule can name it. `System32\notepad.exe` is a different, separately signed file. Both initial
+  profiles therefore use the `packaged` form, pinned to `package_relative_path`
+  `Notepad\Notepad.exe` and `CalculatorApp.exe`; each fixture attaches to the packaged process.
+  More profiles are separate reviewed slices, at the operator's request.
 
 **Operator approvals outside profiles.** The operator may still approve any non-absolute action on
 an unprofiled surface (decision 6). The approval card states plainly that **for unprofiled
@@ -501,6 +521,8 @@ assembled from driver input. The record is a **discriminated union** on `kind` (
 // kind = "admission": no grant exists yet, so none is referenced
 { "candidate": { "pid": 4242, "created_at": "…", "image_path": "…", "image_sha256": "…",
                  "signer": "…", "product": "…", "integrity": "medium",
+                 "package_family_name": "…" | null, "package_signature_kind": "store" | … | null,
+                 "package_relative_path": "…" | null,
                  "windows": [ { "native_class": "…", "name": "…" } ] } }
 
 // kind = "read": the complete normalized input and its effective bounds
@@ -843,7 +865,12 @@ It contains no driver conversation (decision 3). Verdict schema:
 
 ## MCP surface (M3)
 
-A local stdio MCP server, `packages/mcp-desktop`, with zero runtime dependencies.
+A local stdio MCP server with zero runtime dependencies. *(rev 6)* It is spec AT's
+`packages/mcp-discovery` (PR mbulentcakar/Toros#20), extended by AS4 with the tools below.
+It is not a second server. AT owns the agent bearers, the reserved `agent:` actor prefix,
+`/agent/status`, `/agent/invoke`, `desktop_control.ar_gate_cleared` and the `desktop_state` tool.
+AS adds only `/agent/mission/*` and `/agent/desktop/*`. While a job's mission is held, ended or
+not yet enrolled, AT's `/agent/invoke` of `desktop.*` on that job returns the mission's code.
 
 - **Protocol:** MCP revision **2025-06-18**
   ([lifecycle](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle),
@@ -885,7 +912,7 @@ the single mapping. Envelopes, policy, receipts, approval bindings and records a
 | MCP tool | Node route | Registered capability id |
 |---|---|---|
 | `mission_enroll`, `mission_status` | `/agent/mission/enroll`, `/agent/mission/status` | none: mission routes, not capabilities |
-| `desktop_state` | `/agent/desktop/state` | `desktop.state` (spec AR) |
+| `desktop_state` | `/agent/invoke` (spec AT) | `desktop.state` (spec AR) |
 | `desktop_request_app` | `/agent/desktop/request_app` | `desktop_uia.admit_app` |
 | `desktop_list_windows` | `/agent/desktop/list_windows` | `desktop_uia.list_windows` |
 | `desktop_find` | `/agent/desktop/find` | `desktop_uia.find` |
@@ -1025,7 +1052,8 @@ not claim it.
 
 1. *(rev 6: met 2026-10-24.)* Spec AR's adversarial security review (PR mbulentcakar/Toros#3, verdict *do not enable*) is
    remediated. Slices **F1–F4** of `docs/reviews/AR-remediation-plan.md` are merged, and a native
-   re-review of the AR surface has cleared them. AS's classification and read rules assume F2 (no
+   re-review of the AR surface has cleared them. *(rev 6)* Met: F1–F5, RR R1–R4 and R5 (FR-01) are
+   merged, and the gate addendum of PR mbulentcakar/Toros#18 cleared the AR gate on 2026-10-24. AS's classification and read rules assume F2 (no
    generic UIA names from discovery) and F3 (resolved identity visible to policy, OS session
    verified, handles bound to job and caller).
 2. Spec AG is accepted, with a versioned pattern set.
@@ -1037,7 +1065,7 @@ not claim it.
 
 Prerequisite 1 gates **every** mode (R3-N3). `look` missions use AR's `desktop.state` and the
 same read path, so neither `look` nor `act` routes are mounted until the AR gate clears. A Node
-Core configuration flag (`desktop_control.ar_gate_cleared`; *(rev 6)* introduced by AS1 and absent
+Core configuration flag (`desktop_control.ar_gate_cleared`; *(rev 6)* introduced by spec AT, or by AS1 if AT has not shipped, and absent
 from Node Core today, default unset), set by the operator only after the
 native re-review, controls mounting. `look` may then ship once 2–4 and the code and MCP reviews
 in 5 are done. `act` needs all five, plus at least one reviewed surface profile for delegation.
@@ -1085,7 +1113,10 @@ verdicts. Real Notepad and Calculator are used for smoke tests under a real miss
 11. A process at higher integrity → refused and recorded; Node Core elevated → AS disabled.
 12. An element whose own process differs from its window's process is classified by its own
     process.
-13. Unsigned image → operator-only.
+13. *(rev 6)* An unsigned image without package identity → operator-only; a packaged process whose
+    family name matches no profile, or whose origin is `developer`, `enterprise` or `none` →
+    operator-only; packaged Calculator (origin `store`) matched by the `calculator` profile →
+    delegate; a developer-signed package carrying Calculator's family name → operator-only.
 14. Unknown `FrameworkId` → operator-only.
 15. Unreadable evidence → refused.
 16. A fixture field that lies `IsPassword=false` but is named "Password" → `set_value` refused.
