@@ -40,6 +40,7 @@ function context(sessionId: string | null, correlationId: string): AdapterContex
     correlation_id: correlationId,
     workspace,
     signal: new AbortController().signal,
+    actor: 'coordinator',
   } as AdapterContext;
 }
 

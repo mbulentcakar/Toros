@@ -29,7 +29,7 @@ async function setup(id: string, options: Partial<{
   });
   await adapter.init();
   const controller = new AbortController();
-  const ctx: AdapterContext = { job_id: 'job', session_id: id, workspace: { id: 'ws', root }, correlation_id: id, signal: controller.signal };
+  const ctx: AdapterContext = { job_id: 'job', session_id: id, workspace: { id: 'ws', root }, correlation_id: id, signal: controller.signal, actor: 'coordinator' };
   return { root, executable, adapter, ctx, controller };
 }
 
@@ -42,7 +42,7 @@ async function setupProtocol(id: string, protocol: 'gemini' | 'grok') {
     args: [], timeout_ms: 5_000, read_poll_ms: 100, output_limit_bytes: 1_000_000,
   });
   await adapter.init();
-  const ctx: AdapterContext = { job_id: 'job', session_id: id, workspace: { id: 'ws', root }, correlation_id: id, signal: new AbortController().signal };
+  const ctx: AdapterContext = { job_id: 'job', session_id: id, workspace: { id: 'ws', root }, correlation_id: id, signal: new AbortController().signal, actor: 'coordinator' };
   return { root, adapter, ctx };
 }
 
@@ -223,7 +223,7 @@ test('grok read-only launches without the shell tool; workspace mode keeps it', 
       args: [], sandbox, timeout_ms: 5_000, read_poll_ms: 100, output_limit_bytes: 1_000_000,
     });
     await adapter.init();
-    const ctx: AdapterContext = { job_id: 'job', session_id: `grok-shell-${sandbox}`, workspace: { id: 'ws', root }, correlation_id: sandbox, signal: new AbortController().signal };
+    const ctx: AdapterContext = { job_id: 'job', session_id: `grok-shell-${sandbox}`, workspace: { id: 'ws', root }, correlation_id: sandbox, signal: new AbortController().signal, actor: 'coordinator' };
     try {
       await adapter.start(ctx);
       const argv = await output(adapter, ctx, 'argv');

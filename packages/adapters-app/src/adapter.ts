@@ -284,6 +284,22 @@ export function powershellPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
 
+/**
+ * The child environment for a Windows PowerShell 5.1 spawn: a copy of
+ * `process.env` with `PSModulePath` removed, so 5.1 rebuilds its own default
+ * module path instead of inheriting a possibly-polluted one. Windows env names
+ * are case-insensitive, so every key whose lower-case form is `psmodulepath` is
+ * deleted — never just two hard-coded spellings. The copy is deliberate —
+ * `process.env` is never mutated.
+ */
+export function powershellChildEnvironment(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'psmodulepath') delete env[key];
+  }
+  return env;
+}
+
 /** Best-effort message from an `unknown` spawn error, without `instanceof`
  *  (which TS forbids on `unknown` left-hand sides). */
 function describeError(e: unknown): string {
@@ -323,7 +339,7 @@ async function runScript(
     const child: ChildProcess = spawn(
       powershellPath(),
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
-      { shell: false, windowsHide: true },
+      { shell: false, windowsHide: true, env: powershellChildEnvironment() },
     );
 
     let stdout = '';

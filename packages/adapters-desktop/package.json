@@ -11,6 +11,10 @@
     ".": {
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
+    },
+    "./testing": {
+      "types": "./dist/test/native-utils.d.ts",
+      "default": "./dist/test/native-utils.js"
     }
   },
   "files": ["dist"],
@@ -20,5 +24,8 @@
   },
   "dependencies": {
     "@toros/contracts": "*"
+  },
+  "devDependencies": {
+    "@toros/registry": "*"
   }
 }

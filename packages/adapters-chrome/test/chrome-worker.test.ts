@@ -25,6 +25,7 @@ async function fixture() {
     job_id: 'job-1', session_id: null,
     workspace: { id: 'sandbox', root },
     correlation_id: 'receipt-1', signal: controller.signal,
+    actor: 'coordinator',
   };
   adapter.poll({ extension_version: '0.1.0', tab: { id: 7, url: 'https://www.example.org/US/en', title: 'Example' } });
 return { root, adapter, token: paired.token, ctx, controller };

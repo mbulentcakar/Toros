@@ -62,6 +62,32 @@ the `adapters` block with the executables orientation reported, `coordinator_ena
 for now. Restrict the file to your account (`icacls ... /inheritance:r /grant:r "%USERNAME%:RW"`).
 `orient` validates the result. Field reference: [DEPLOY.md §2](DEPLOY.md).
 
+**Desktop allowlist migration (amendment A8, F3b; A9).** `adapters.desktop.authorized_apps` is now a
+list of application rules, not basename strings. Each rule is exactly one of
+`{ "image_sha256": "<64 hex>" }`, `{ "signer": "<CN>", "product_name": "<name>", "original_filename": "<file>" }`, or
+`{ "image_path": "C:\\...\\app.exe" }`. A bare string entry (the old basename form) makes Node
+Core **refuse to start**, naming the new format. Convert any existing basename entries to the
+matching rule shape before restarting. See [AR-T4-install-rollback.md](AR-T4-install-rollback.md)
+for the full migration. Example values only — never a real machine path, hash, or name.
+
+**`original_filename` is the language-neutral OriginalFilename.** The version resource's
+`OriginalFilename` field can be shadowed by a language-specific MUI: with an adjacent
+`en-US\<image>.mui` present, `FileVersionInfo.OriginalFilename` reports `NOTEPAD.EXE.MUI` for the
+installed binary while a copy in a plain folder reports `NOTEPAD.EXE`. A signer rule must name
+the **language-neutral** value (for example `NOTEPAD.EXE`, never `NOTEPAD.EXE.MUI`), which is what
+the desktop adapter reads. To determine it, copy the executable to a folder with no `en-US`
+subfolder, then read `FileVersionInfo.OriginalFilename` on the copy — for example
+`(Get-Item -LiteralPath .\copy.exe).VersionInfo.OriginalFilename`.
+
+If you set `operator_token`, it must be at least 32 characters and different from `token`, and both
+`token` and `operator_token` must contain only printable ASCII (`0x21`–`0x7E`) — no spaces, tabs,
+line breaks or other whitespace, and no leading or trailing whitespace. Node Core refuses to start
+otherwise even when no capability is gated, naming the rule at start-up (`… must contain only
+printable ASCII characters (0x21–0x7E) …` / `operator_token must be at least 32 characters…` /
+`operator_token must differ from token…`). The shape rule is checked first because HTTP strips
+surrounding whitespace from a bearer header, so a token that differed from another only by
+whitespace would be indistinguishable on the wire.
+
 TODO: a complete minimal `config.json` for a tool node, with every field explained in one line.
 
 **If you deploy from inside a sandboxed agent session**, verify the file exists from an

@@ -50,6 +50,7 @@ function makeCtx(): AdapterContext {
     workspace: { id: 'test-ws', root: os.tmpdir() },
     correlation_id: 'test-corr',
     signal: ctrl.signal,
+    actor: 'coordinator',
   };
 }
 

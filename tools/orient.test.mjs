@@ -211,6 +211,76 @@ describe('node configuration validation (criterion 7)', () => {
   });
 });
 
+describe('node configuration validation — F1 tokens and desktop authorized_apps (RR-07)', () => {
+  const exists = () => true;
+
+  it('rejects a token with non-printable ASCII (whitespace cannot survive the wire)', () => {
+    const config = { ...goodConfig(scratch()), token: 'A'.repeat(31) + ' ' };
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /printable ASCII/);
+  });
+
+  it('rejects a token with a tab or a line break', () => {
+    for (const suffix of ['\t', '\n', '\r']) {
+      const config = { ...goodConfig(scratch()), token: 'A'.repeat(32) + suffix };
+      assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /printable ASCII/);
+    }
+  });
+
+  it('rejects an operator_token with non-printable ASCII', () => {
+    const config = { ...goodConfig(scratch()), operator_token: 'B'.repeat(32) + ' ' };
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /`operator_token` must contain only printable ASCII/);
+  });
+
+  it('accepts valid desktop.authorized_apps rule shapes', () => {
+    const config = {
+      ...goodConfig(scratch()),
+      adapters: {
+        desktop: {
+          authorized_apps: [
+            { image_sha256: 'a'.repeat(64) },
+            { signer: 'Microsoft Corporation', product_name: 'Notepad', original_filename: 'NOTEPAD.EXE' },
+            { image_path: 'C:\\Windows\\System32\\notepad.exe' },
+          ],
+        },
+      },
+    };
+    assert.deepEqual(blockers(validateNodeConfig(config, { exists })), []);
+  });
+
+  it('rejects a bare-string authorized_apps rule (the old basename form)', () => {
+    const config = { ...goodConfig(scratch()), adapters: { desktop: { authorized_apps: ['notepad.exe'] } } };
+    const blocker = blockers(validateNodeConfig(config, { exists }))[0];
+    assert.match(blocker.title, /bare string/);
+    assert.match(blocker.fix, /image_sha256/);
+  });
+
+  it('rejects an authorized_apps rule with an unknown property', () => {
+    const config = { ...goodConfig(scratch()), adapters: { desktop: { authorized_apps: [{ image_sha256: 'a'.repeat(64), wat: 1 }] } } };
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /unknown property/);
+  });
+
+  it('rejects a signer rule missing original_filename (amendment A9)', () => {
+    const config = {
+      ...goodConfig(scratch()),
+      adapters: { desktop: { authorized_apps: [{ signer: 'Microsoft Corporation', product_name: 'Notepad' }] } },
+    };
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /appear together/);
+  });
+
+  it('rejects a signer rule whose original_filename carries a path separator (amendment A9)', () => {
+    const config = {
+      ...goodConfig(scratch()),
+      adapters: { desktop: { authorized_apps: [{ signer: 'Microsoft Corporation', product_name: 'Notepad', original_filename: 'dir\\notepad.exe' }] } },
+    };
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /no path separators/);
+  });
+
+  it('rejects a non-64-hex image_sha256 rule', () => {
+    const config = { ...goodConfig(scratch()), adapters: { desktop: { authorized_apps: [{ image_sha256: 'zzz' }] } } };
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /64 lower-case hex/);
+  });
+});
+
 describe('credential handling (criterion 3)', () => {
   it('throws rather than printing a credential value', () => {
     const secret = 'd'.repeat(64);

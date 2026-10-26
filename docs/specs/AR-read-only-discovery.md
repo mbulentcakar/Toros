@@ -75,22 +75,32 @@ to be false the correct response is to stop and say so (00-CONTRACTS §1), not t
   adapter `machine` → `machine.inventory`; adapter `desktop` → `desktop.state`,
   `desktop.inspect`. (The plan's `window.inspect` is renamed `desktop.inspect` to avoid a
   `window` pseudo-adapter.)
+- **Two-phase target resolution is amendment A8.** The desktop actions are the one place a
+  policy decision has to be made *per OS target* rather than per action, which is exactly the gap
+  A8 closes. `resolver.resolve` enumerates the windows, Core decides each resolved `app` target
+  against `allowed_apps`, and `invoke` publishes only the keys Core allowed, re-verifying the
+  identity at execution. Nothing here decides application scope inside the adapter — the decision
+  stays in policy (00-CONTRACTS §10 A8).
 - **Read-only ⇒ no approval gate, by construction.** Each `ActionSchema` sets `mutates: false`,
   `always_requires_approval: false`, `path_fields: []`. Read-only actions are already exempt from
   the approval gate; nothing special is needed.
 - **Permissions reuse the existing enum.** `machine.inventory`:
-  `['process.spawn', 'fs.read']`. `desktop.*`: `['process.spawn', 'app.automation']` (same as
-  Spec V). No new `Permission` value, so `packages/contracts` stays frozen.
+  `['process.spawn', 'fs.read']`. `desktop.*`: `['process.spawn', 'app.automation', 'fs.read',
+  'fs.write']` — `fs.read`/`fs.write` are declared (AR-11) because the probe reads and writes only
+  its own `mkdtemp` directory. No new `Permission` value, so `packages/contracts` stays frozen.
 - **The envelope already carries the scope this slice needs.** `allowed_capabilities`,
   `allowed_workspaces`, `forbidden`, `max_actions`, `max_retries`, `expires_at`
-  (`packages/contracts/src/envelope.ts`). Caller identity is an auth-layer concern, deliberately
-  *not* in the envelope. **Session / window targeting and freshness are runtime handles, not
-  authorization scope** — they live in action input/output JSON and a per-call handle check inside
-  the adapter, never as new envelope fields. This is the same decision Spec V took, for the same
-  reason.
+  (`packages/contracts/src/envelope.ts`), and — added by A8 — the optional `allowed_apps` for the
+  application scope the desktop actions consult. Caller identity is an auth-layer concern,
+  deliberately *not* in the envelope: it reaches every adapter call as `ctx.actor`. **Session /
+  window targeting and freshness are runtime handles, not authorization scope** — they live in
+  action input/output JSON and a per-call handle check inside the adapter, never as new envelope
+  fields. This is the same decision Spec V took, for the same reason.
 - **Receipts** use the §8.3 minimum (`packages/contracts/src/receipt.ts`). Each adapter declares
   its extra audit keys in the manifest's `receipt_fields` (e.g. `window_count`, `truncated`,
-  `probe_ms`) — never raw inspected content. Node Core already rejects undeclared receipt keys.
+  `probe_ms`) — never raw inspected content. Node Core already rejects undeclared receipt keys,
+  and A8 adds two **Core-reserved** receipt keys, `targets_allowed` and `targets_denied`, that no
+  adapter may declare: Core records the two-phase resolve as counts, never identities.
 
 ---
 
@@ -141,8 +151,10 @@ action's `input_schema`; the output shapes are the adapter's contract with its c
 - **Output:** for each known adapter/tool on this node — `id`, `platform`, `observed_at`,
   `registered_actions[]`, and a **readiness** verdict from a fixed taxonomy:
   `registered` (manifest loaded) · `usable` (probe succeeded) · `missing_adapter` ·
-  `unsupported_platform` · `missing_prerequisite` (with `reason`) · `unauthorized` (caller lacks
-  the capability). "Installed" is never conflated with "usable": a probe that finds an executable
+  `unsupported_platform` · `missing_prerequisite` (with `reason`). A job-scoped filter (AR-09)
+  omits an entry whose adapter has **no** admitted capability **entirely**: there is no
+  `unauthorized` stub and no count, and its filesystem probe and drive read never run (RR-03).
+  "Installed" is never conflated with "usable": a probe that finds an executable
   but no registered manifest reports `missing_adapter`, not `usable`.
 - **Bounds:** probes a fixed, declared list of locations only. **No filesystem-wide scan, no
   secret or account enumeration, no registry-wide sweep.**
@@ -150,31 +162,56 @@ action's `input_schema`; the output shapes are the adapter's contract with its c
 
 ### `desktop.state`  (package `@toros/adapters-desktop`)
 
-- **Input:** `{ session_scope: string }` — the authorized interactive session identifier. Loopback
-  presence is **not** authentication (invariant 1).
-- **Output:** `{ freshness_token, windows: [{ window_id (opaque), z_order, foreground: bool,
-  app_in_scope: bool, title? }], session_state: 'active'|'locked'|'disconnected' }`. `title` is
-  present only where `app_in_scope` is true. `freshness_token` is a per-enumeration nonce the
-  adapter mints and later validates.
-- **Bounds:** bounded window count; a locked or disconnected session returns `session_state` and
-  **no window list** — it is `unavailable`, not an empty success.
-- **Permissions:** `['process.spawn', 'app.automation']`. **Receipt fields:** `window_count`,
-  `session_state`, `truncated`.
+- **Input:** `{ session_scope: 'interactive' }` — the enum value `"interactive"` (amendment A8,
+  F3b). Any other value is schema-rejected (`E_SCHEMA`).
+- **Output (active):** `{ session: 'active', freshness_token, windows: [{ window_id (opaque),
+  z_order, foreground: bool, title? }], changed? }`. Settlement is now two-phase (A8): only
+  windows Core allowed against the envelope's `allowed_apps` are published, and only those whose
+  OS identity re-verifies (pid, creation time, SHA-256) at execute time. A window that changed
+  is dropped and counted in `changed`.
+- **Output (unavailable):** `{ session: 'unavailable', reason: 'locked' | 'disconnected', windows: [] }`
+  — a locked or disconnected session returns this shape and **no window list**.
+- **Identity (AR-10):** the owning application is identified as the OS observes it — pid, creation
+  time, canonical long image path (`QueryFullProcessImageName`), image SHA-256, Authenticode
+  signature + subject CN, version-resource ProductName, and session id — never by a spoofable
+  process basename.
+- **Bounds:** bounded window count; a window whose identity cannot be read is dropped (not
+  basename-fell-back).
+- **Permissions:** `['process.spawn', 'app.automation', 'fs.read', 'fs.write']`. **Receipt fields:**
+  `window_count`, `session`, `reason`, `truncated`, `changed`.
 
 ### `desktop.inspect`  (package `@toros/adapters-desktop`)
 
-- **Input:** `{ window_id, freshness_token, depth?, control_filter?, page?, page_size? }`.
-- **Output:** `{ controls: [{ control_id (opaque), type, name?, enabled, patterns[] }],
-  truncated: bool, next_page? }`. `name` follows the same in-scope rule as `desktop.state.title`.
-  Control **values are never returned** (that would be a read of content; a future typed read is a
-  separate action). `patterns[]` reports supported UIA patterns so a future Spec V `invoke` can be
-  planned without this action performing one.
-- **Failure modes, each explicit and tested:** `window_id` unknown → `E_STALE_HANDLE`;
-  `freshness_token` stale or reused → `refresh_required` (return this, do **not** guess another
-  window — invariant 4); window's app not in authorized scope → `denied`; window closed since
-  enumeration → `unavailable`.
-- **Permissions:** `['process.spawn', 'app.automation']`. **Receipt fields:** `control_count`,
-  `truncated`, `depth`.
+- **Input (page 1):** `{ session_scope: 'interactive', window_id, freshness_token, depth?,
+  control_filter?, page_size? }`. **Page N+1** is driven by the previous page's
+  `continuation_token` alone: `{ session_scope: 'interactive', continuation_token }` (RR-06) —
+  a page is never reopened by re-sending `window_id`/`freshness_token`/`page`.
+- **Output:** `{ controls: [{ control_id (opaque), type, automation_id?, enabled, patterns[] }],
+  truncated: bool, continuation_token? }`. `continuation_token` is present when more pages
+  remain; it is **single-use**, bound to `(job_id, actor, window_id)`, and valid for at most
+  60 s — a reused, foreign, or expired token returns the same `refresh_required` shape
+  (invariant 4). Page 1 walks the accessibility tree once and captures the full filtered
+  control list; later pages slice that capture, so pagination never re-walks the tree. Control
+  output is structure only; UIA `Name` is **never read or emitted** for controls (AR-F2
+  remediation for AR-01). `automation_id` is included only when it is 1–128 printable ASCII
+  characters; on WinForms a control's `automation_id` is the control's HWND string. Control
+  **values are never returned** (that would be a read of content; a future typed read is a
+  separate action). `patterns[]` reports supported UIA patterns so a future Spec V `invoke`
+  can be planned without this action performing one. Window titles in `desktop.state` come
+  from native window text (`GetWindowText` on the top-level handle, capped at 256 characters),
+  not UIA `Name`.
+- **Two-phase (A8):** `desktop.inspect` resolves its single window from the handle and inspects
+  only on an `allowed` decision; a denied decision returns `denied`. At execute time it re-verifies
+  pid, creation time and SHA-256 against the resolved identity **before** walking the accessibility
+  tree (RR-07) — a mismatch is `unavailable`, never the new owner's tree.
+- **Failure modes, each explicit and tested:** `window_id` unknown, `freshness_token` stale,
+  reused, expired, or from a foreign job/actor → `refresh_required` (the **same shape** for all of
+  them, so a caller cannot probe which case it hit — invariant 4); a continuation token reused,
+  expired, unknown, or from a foreign job/actor → the same `refresh_required`; window's app not
+  allowed → `denied`; window closed since enumeration, or its identity changed → `unavailable`.
+  Handles are per `(job_id, actor)`, **single-use**, valid for at most 60 s.
+- **Permissions:** `['process.spawn', 'app.automation', 'fs.read', 'fs.write']`. **Receipt
+  fields:** `status`, `control_count`, `truncated`, `depth`.
 
 **Automation mechanism (both `desktop.*` actions), per Spec V's established discipline:** drive
 `System.Windows.Automation` from PowerShell — parameters written to a JSON file in the session
@@ -252,7 +289,8 @@ tests for self-approval / envelope tampering / policy bypass are green.
 - New package `@toros/adapters-machine` (allowed paths below).
 - Bounded probes → readiness taxonomy through registry/policy.
 - Tests distinguish `registered` vs `usable` vs `unsupported_platform` vs `missing_prerequisite`
-  vs `missing_adapter` vs `unauthorized`.
+  vs `missing_adapter`; an out-of-job adapter is omitted entirely (RR-03), never emitted as
+  `unauthorized`.
 - Run real inventory on **Oruc** and on **YOGA** if available.
 - **No filesystem-wide scan, no secret/account enumeration.**
 

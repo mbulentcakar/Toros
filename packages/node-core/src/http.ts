@@ -222,6 +222,17 @@ export function createHttpTransport(deps: {
         send(response, 401, { error: 'Unauthorized' });
         return;
       }
+      // Defence in depth. Start-up (core.ts) refuses `operator_token === token`,
+      // but that check and this mount read the configuration at different times.
+      // If a future path ever skips the start-up validation and mounts the
+      // operator surface with a shared bearer, the ordinary node bearer must
+      // still be refused here — not admitted because it happens to equal the
+      // operator bearer. Timing-safe, like the authenticateAgainst check below.
+      const bearer = request.headers.authorization;
+      if (typeof bearer === 'string' && bearer.startsWith('Bearer ') && equalTokens(bearer.slice(7), deps.token)) {
+        send(response, 401, { error: 'Unauthorized' });
+        return;
+      }
       if (!authenticateAgainst(request, response, operatorToken)) return;
       await deps.operator.handle(parts[1], request, response);
       return;

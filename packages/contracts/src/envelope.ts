@@ -40,7 +40,24 @@ export type JobEnvelope = {
   readonly max_retries: number;
   /** RFC 3339 timestamp. Past it, every action is denied. */
   readonly expires_at: string;
+  /**
+   * Optional application allowlist consulted by the two-phase resolver
+   * (amendment A8). Absent means a job names no applications, so every
+   * `app` target is denied — fail closed. Present and non-empty, a resolved
+   * app target is allowed only when at least one rule matches and nothing
+   * forbids it.
+   */
+  readonly allowed_apps?: readonly AppRule[];
 }
+
+/**
+ * One application an envelope may authorise (amendment A8). Exactly one of the
+ * three shapes; the envelope unit rejects a rule that carries more or less.
+ */
+export type AppRule =
+  | { readonly image_sha256: string }
+  | { readonly signer: string; readonly product_name: string; readonly original_filename: string }
+  | { readonly image_path: string };
 
 /** A validated envelope paired with the digest that binds it (SPEC §5). */
 export interface SealedEnvelope {

@@ -303,3 +303,65 @@ someone other than a human. The independent review (AS-B7) inventoried the follo
 Outside `packages/contracts`, and owned by their AS slices: `NodeCoreOptions` (agent tokens),
 the approval registry's deny path and replay trigger, the approver runner options, and the AS
 adapter API. Binding comments in specs D, T, E and V are updated where behaviour differs.
+
+### A8 — Two-phase target resolution (2026-10-20)
+
+**Gap.** The envelope could bound capabilities, workspaces and forbidden terms,
+but not *which applications* a job may touch on the desktop. `desktop.state` and
+`desktop.inspect` enumerate and inspect OS windows, and the adapter would have
+had to decide for itself whether a window's owning application was in scope —
+which makes the adapter part of the policy boundary, against §7 and the
+`Adapter` contract's own comment. There was also no field recording Core's
+decision per target, and no way for an adapter to bind a handle to its caller.
+
+**Change.** Four types in `ports.ts` — `AppIdentity` (OS-observed process
+identity: pid, creation time, image path and hash, signature, signer, product,
+session), `ResolvedTarget` (an `app` or `capability` keyed by an adapter-opaque
+string), `TargetDecisions` (Core's `allowed`/`denied` verdict per key), and the
+`TargetResolver` port — plus `Adapter.resolver?: TargetResolver` and
+`AdapterContext.actor` / `AdapterContext.target_decisions?`. `JobEnvelope` gains
+an optional `allowed_apps: readonly AppRule[]` (hash, signer+product, or path),
+participating in the digest only when present. Policy gains a deterministic
+`authorizeTargets` and the `desktop_session_id` option. Node Core performs the
+resolve under the same timeout/abort as invoke, validates the output, passes the
+decisions to the adapter, and records only the counts `targets_allowed` /
+`targets_denied` as **Core-reserved receipt keys** — a manifest that declares
+either is refused at registration. Consumers: envelope (validation + digest),
+policy (target decisions), node-core (resolve step, registration, plumbing),
+adapters-desktop (implements the port, in F3b), and the F5 inventory filter. The
+caller identity is carried to every adapter call as `ctx.actor`, never placed in
+the envelope.
+
+`AppIdentity.image_path` must be the canonical long path, exactly as
+`QueryFullProcessImageName` returns it: an absolute drive path (`C:\…`) with
+backslash separators, no namespace prefix (`\?\`, `\.\`), no UNC root, no 8.3
+short-name segments, and no segment ending in `.` or a space. Node Core (F3a)
+refuses any other spelling as `E_ADAPTER_FAILURE` before policy sees the target;
+the desktop adapter (F3b) must guarantee it, never fall back to a basename.
+
+### A9 — signer rules require `original_filename` (2026-10-20)
+
+**Gap.** The A8 signer rule bound an application by `signer` + `product_name`
+only. Both come from the version resource, but neither survives a rename or a
+copy: a file renamed to `powershell.exe` keeps its vendor's signer and product
+name, so a Notepad rule (`Microsoft Corporation` + `Microsoft® Windows®
+Operating System`) also covered a renamed PowerShell or cmd image. The version
+resource's `OriginalFilename` is the field that does survive renames and copies,
+and the signer rule did not carry it.
+
+**Change.** Two type changes, nothing else. `AppIdentity` gains
+`readonly original_filename: string | null` (the version resource
+OriginalFilename, or null when absent). The signer variant of `AppRule` becomes
+`{ signer, product_name, original_filename }` — all three required, so the old
+two-field signer rule is refused at validation with a message naming the new
+field. Policy matches `original_filename` case-insensitively (the version
+resource varies in case: `PowerShell.EXE`, `NOTEPAD.EXE`), while `signer` and
+`product_name` stay exact. Consumers: envelope (validation), policy (matching),
+node-core (identity validation, desktop-config validation), adapters-desktop
+(the probe reads and parses it).
+
+**Clarification (R5, 2026-10-22):** `original_filename` is the **language-neutral**
+OriginalFilename — the value the version resource carries independent of any adjacent
+`en-US\<image>.mui` — for example `NOTEPAD.EXE`, never `NOTEPAD.EXE.MUI`. This is a clarification
+of what the value means, not a type change: the field remains `string | null` and A9's
+case-insensitive comparison is unchanged.
