@@ -935,14 +935,19 @@ the single mapping. Envelopes, policy, receipts, approval bindings and records a
 `desktop.*` on AT's `/agent/invoke` is decided by the mission as well. This paragraph is the only
 statement of that rule; AT points here. The checks apply in this order:
 
-1. the mission is held after a denial: `E_APPROVAL_DENIED`;
-2. it has ended with reason `expired`: `E_EXPIRED`;
+1. the mission is `held`, for any reason (after a denial, an operator Hold, `outcome_uncertain`,
+   `outcome_unknown`): `E_APPROVAL_DENIED`;
+2. its `expires_at` has passed, or it has ended with reason `expired`: `E_EXPIRED`. A mission
+   still `live` past its expiry is ended here with reason `expired`, in the same transaction;
 3. it has ended with reason `budget`: `E_BUDGET_EXHAUSTED`;
 4. it has ended for any other reason, or is not yet enrolled: `E_CAP_NOT_ALLOWED`;
-5. it is live: the call runs, and a window is returned only if it matches the job's
-   `allowed_apps` (as today) **and**, when the mission's `app_scope` is `listed`, one listed
-   image (canonical path and SHA-256) or one listed package rule (A10). `any_not_denied` adds no
-   further filter on this read; the classifier still applies to AS's own routes.
+5. it is live: the call runs, and the mission scope is applied **inside `authorizeTargets`**, for
+   both tools. An app target is allowed only if it matches the job's `allowed_apps` (as today)
+   **and**, when the mission's `app_scope` is `listed`, one listed image (canonical path and
+   SHA-256) or one listed package rule (A10). So `desktop.state` omits an out-of-scope window, and
+   `desktop.inspect` of one is `denied` without walking its tree, exactly as spec AR treats any
+   denied target. `any_not_denied` adds no further filter on this read; the classifier still
+   applies to AS's own routes.
 
 `machine.inventory` is not affected. Without a mission, AT's own rules apply unchanged.
 
