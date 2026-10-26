@@ -260,6 +260,8 @@ implementer's. Native tests run on a real, unlocked Windows desktop, and skip co
    - a held mission → `E_APPROVAL_DENIED`;
    - a live `listed` mission naming only the first → the first is returned **and** the second
      is not (an empty list fails the test).
+   - with that mission, `desktop.inspect` of the second window is `denied` and its tree is not
+     walked (the probe records no inspect for it).
 7. Through the real pipeline on a native desktop, with a fixture window the job allows:
    - `desktop.state` returns it and nothing else;
    - `desktop.inspect` returns structure without names;
