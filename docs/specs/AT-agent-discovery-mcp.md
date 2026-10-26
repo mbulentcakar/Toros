@@ -1,10 +1,13 @@
 # Spec AT — agent discovery over MCP: read-only desktop and machine discovery for Claude and Codex
 
-**Read `00-CONTRACTS.md` first.** It is short and it is binding. AT needs **no contract
-amendment**: it uses A8's `ctx.actor`, A8/A9's `allowed_apps`, and the existing error codes.
+**Read `00-CONTRACTS.md` first.** It is short and it is binding. AT uses A8's `ctx.actor`, A8/A9's
+`allowed_apps`, and existing error codes with their existing meanings. It needs one small
+contract amendment, **A11** (round 3, below): a new code `E_GRANT_INVALID`, and a documentation
+note on `E_MODE_DENIED`. A11 is made by the architect in AT1, with every consumer in the same diff.
 
-**Status: proposed (2026-10-26), round 2. Not accepted.** Round 2 answers the independent review
-of round 1 (Grok, 2026-10-26, findings 1–8). Drafted by Claude as the first, small step toward
+**Status: proposed (2026-10-26), round 3. Not accepted.** Round 2 answered the independent review
+of round 1 (Grok, 2026-10-26, findings 1–8); round 3 answers its round-2 re-review (error-code
+meanings and A11, mission scoping, the MCP deadline, test 6a). Drafted by Claude as the first, small step toward
 spec AS. AS (PR mbulentcakar/Toros#1) lets an agent *act* on the desktop under missions and
 cross-agent approval. Its dependency chain is long: A7, A10, AG, the approver profile, the
 classifier, and an MCP review. AT ships the read half now, on what is already merged and natively
@@ -76,17 +79,26 @@ revoked_at }`.
   lost race fail, never produce two live grants.
 - **Refused grants:**
   - unless the job's `allowed_capabilities` lists at least one of the three AT capabilities
-    (`E_CAP_NOT_ALLOWED`);
-  - unless the job's `allowed_workspaces` has **exactly one** entry (`E_WORKSPACE_DENIED`), so the
-    workspace is never a choice;
+    (`E_GRANT_INVALID`, reason `"no_discovery_capability"`);
+  - unless the job's `allowed_workspaces` has **exactly one** entry (`E_GRANT_INVALID`, reason
+    `"workspace_count"`), so the workspace is never a choice;
   - for a terminal job (`E_JOB_TERMINAL`).
 - The job's envelope still bounds everything else: `allowed_apps`, `forbidden`, `max_actions`,
   expiry.
-- **Error codes on agent calls**, all existing and each with its existing meaning:
-  - no live grant, or a revoked one: `E_CAP_NOT_ALLOWED`, `detail.reason` `"no_grant"` or
-    `"revoked"`;
+- **Error codes on agent calls:**
+  - no live grant, or a revoked one: `E_GRANT_INVALID` (A11), reason `"no_grant"` or `"revoked"`;
   - the grant's or the envelope's `expires_at` has passed: `E_EXPIRED`;
   - the job is terminal: `E_JOB_TERMINAL`.
+
+### A11 — `E_GRANT_INVALID`; `E_MODE_DENIED` on the agent surface (spec AT) — PROPOSED
+
+| Contract type | Change |
+|---|---|
+| `ErrorCode` (`errors.ts`) | **Structural.** Add `E_GRANT_INVALID`: an agent call has no live grant, its grant was revoked, or a grant cannot be issued for this job (no discovery capability, or not exactly one workspace). Distinct from `E_RUN_INVALID` (a coordinator run credential) and from `E_CAP_NOT_ALLOWED` (the capability is not in `allowed_capabilities`). |
+| `ErrorCode.E_MODE_DENIED` | **Documentation.** Besides an advisory run, the agent surface is a mode too: it permits only `desktop.state`, `desktop.inspect` and `machine.inventory`, and `desktop.*` only while `desktop_control.ar_gate_cleared` is set. A call outside that is `E_MODE_DENIED`. |
+
+Consumers: contracts (`errors.ts`), node-core (agent routes), the cockpit's error rendering, and
+`docs/specs/00-CONTRACTS.md` §10 (A11 is added there in AT1).
 - **Concurrency.** Each agent call takes a **per-agent lock** before it re-reads its grant row, and
   holds it until the pipeline returns. It re-reads the row **after the request body is read**, as
   the run-credential path does (`http.ts:247-254`). So a revoke or replacement takes effect for
@@ -104,9 +116,9 @@ All are `POST` with a JSON body, loopback-only, and carry the agent bearer.
 
 `/agent/invoke`:
 
-- `capability` must be one of `desktop.state`, `desktop.inspect` or `machine.inventory`, **and**
-  listed in the granted job's envelope. Anything else is `E_CAP_NOT_ALLOWED`, recorded as a
-  denied receipt.
+- `capability` must be one of `desktop.state`, `desktop.inspect` or `machine.inventory` (else
+  `E_MODE_DENIED`), **and** listed in the granted job's envelope (else `E_CAP_NOT_ALLOWED`). Both
+  refusals are recorded as denied receipts.
 - **The route builds the call itself.** It constructs `{ job_id, workspace_id, app_id, action_id,
   parameters }` from the grant (job), the envelope's single `allowed_workspaces` entry, and the
   capability. From the body it takes only `capability` and `parameters`, and from `parameters`
@@ -123,7 +135,11 @@ All are `POST` with a JSON body, loopback-only, and carry the agent bearer.
   difference is `actor = agent:<name>`.
 - `desktop.*` additionally needs the node flag `desktop_control.ar_gate_cleared === true` (strict,
   fail-closed like `coordinator_enabled`). When it is not set, the route answers
-  `E_CAP_NOT_ALLOWED` with `reason: "ar_gate"`. AS uses the same flag, which AT introduces.
+  `E_MODE_DENIED` with `reason: "ar_gate"`. AS uses the same flag, which AT introduces.
+- **Mission hook (owned by AS1).** When the granted job has an AS mission, AS decides `desktop.*`
+  here as well: it applies the mission's codes, and while the mission is live the app scope is
+  the intersection of the job's `allowed_apps` and the mission's `app_scope` (spec AS revision 6,
+  "The mission hook"). AT1 leaves a single hook point; AS1 fills it. Without AS, the hook allows.
 - One action at a time per agent (`E_PARALLEL_ACTION`, 409), as on the tools surface.
 - **Error bodies** on `/agent/*` are `{ error, message, reason? }`. The existing tools error writer
   copies only `approval_id` (`http.ts:257-264`), so the agent routes use their own writer that
@@ -144,8 +160,10 @@ All are `POST` with a JSON body, loopback-only, and carry the agent bearer.
 - **Bounds:**
   - a frame is at most 1 MiB;
   - at most 4 JSON-RPC ids may be outstanding;
-  - each tool call has a 60 s deadline, and when it fires the server **aborts the HTTP request
-    to Node Core**, which aborts the action;
+  - each tool call has a 45 s deadline, set **above** Node Core's 30 s action ceiling for the
+    desktop and machine adapters (`main.ts:200`, `:280`). Core's own timeout therefore always
+    closes the receipt first (`terminated`, `E_TIMEOUT`); the MCP deadline guards only a hung
+    connection, and AT adds no request-abort hook to the pipeline;
   - a result is at most 1 MiB, refused rather than truncated.
 - **Holds no policy.** Each tool maps to one route in a constant table. Node Core enforces
   everything even when the server is bypassed and the routes are called directly. The acceptance
@@ -194,7 +212,7 @@ warns when an agent token is configured and this requirement cannot be confirmed
 
 | Slice | Content | Allowed paths |
 |---|---|---|
-| AT1 | `agents.*` config and start-up checks, reserved `agent:` prefix, grants migration and operator routes, agent routes, `desktop_control.ar_gate_cleared`, receipts | `packages/node-core/src/**`, `packages/store/src/**` (grants migration only) + tests |
+| AT1 | amendment A11 (architect), `agents.*` config and start-up checks, reserved `agent:` prefix, grants migration and operator routes, agent routes with the AS mission hook point, `desktop_control.ar_gate_cleared`, receipts | `packages/contracts/src/errors.ts` + its consumers (A11 only), `docs/specs/00-CONTRACTS.md`, `packages/node-core/src/**`, `packages/store/src/**` (grants migration only) + tests |
 | AT2 | `packages/mcp-discovery` | `packages/mcp-discovery/**`, root `package.json` workspace entry |
 | AT3 | `docs/USING.md` agent section, `tools/orient.mjs` (agent tokens present/distinct, flag state), STATUS | `docs/**`, `tools/orient.mjs` |
 
@@ -214,23 +232,28 @@ implementer's. Native tests run on a real, unlocked Windows desktop, and skip co
    both over HTTP `/tools/*` and through in-process `tools.dispatch`. Its handle is refused
    (`refresh_required`) when the agent presents it, and the reverse.
 4. Grant lifecycle, each case asserting its own code:
-   - no grant → `E_CAP_NOT_ALLOWED` (`no_grant`);
-   - revoked → `E_CAP_NOT_ALLOWED` (`revoked`);
+   - no grant → `E_GRANT_INVALID` (`no_grant`);
+   - revoked → `E_GRANT_INVALID` (`revoked`);
    - grant or envelope past `expires_at` → `E_EXPIRED`;
    - terminal job → `E_JOB_TERMINAL`;
    - two **overlapping** `agent_grant_create` calls for one agent leave exactly one live grant;
    - a revoke landing while a call's body is being read, followed by a grant on a second job,
      lets no further call run under the old grant;
-   - a job with zero or two `allowed_workspaces` cannot be granted (`E_WORKSPACE_DENIED`).
-5. A capability outside the three, even one the job lists (e.g. `excel.read_range`), is refused
-   with a denied receipt. One of the three that the job does not list is refused too.
-6. `desktop.*` with the flag unset, `false`, or `"true"` (a string) → `E_CAP_NOT_ALLOWED` with
+   - a job with zero or two `allowed_workspaces` cannot be granted (`E_GRANT_INVALID`,
+     `workspace_count`).
+5. A capability outside the three, even one the job lists (e.g. `excel.read_range`), is
+   `E_MODE_DENIED` with a denied receipt. One of the three that the job does not list is
+   `E_CAP_NOT_ALLOWED`, also with a denied receipt.
+6. `desktop.*` with the flag unset, `false`, or `"true"` (a string) → `E_MODE_DENIED` with
    `reason === "ar_gate"` in the response body; `machine.inventory` still works.
-6a. Direct `POST /agent/invoke` with smuggled `job_id`, `workspace_id`, `model`, `actor`, and
-   `parameters.job_id` / `parameters.session_scope: "any"`: the receipt shows the granted job, the
-   single workspace, actor `agent:<name>`, and `session_scope: "interactive"`.
-6b. With an AS mission on the granted job held (once AS ships), `desktop.*` on `/agent/invoke`
-   returns the mission's code.
+6a. Direct `POST /agent/invoke` with smuggled `job_id`, `workspace_id` (a foreign one), `model`,
+   `actor`, `parameters.job_id` and `parameters.session_scope: "any"`:
+   - the call succeeds (the smuggled workspace is ignored, not refused);
+   - the receipt's `job_id` is the granted job and its actor is `agent:<name>`;
+   - its `arguments_digest` equals the digest of exactly the schema keys with
+     `session_scope: "interactive"`, and nothing else.
+6b. Once AS ships, the mission hook: a held mission → `E_APPROVAL_DENIED`; a `listed` mission
+   narrower than the job's `allowed_apps` → windows outside the mission scope are not returned.
 7. Through the real pipeline on a native desktop, with a fixture window the job allows:
    - `desktop.state` returns it and nothing else;
    - `desktop.inspect` returns structure without names;
@@ -244,8 +267,8 @@ implementer's. Native tests run on a real, unlocked Windows desktop, and skip co
    - oversized frames, more than 4 outstanding ids, non-object frames, and unknown tools are
      JSON-RPC errors;
    - any extra argv refuses to start;
-   - a call past its 60 s deadline aborts the Node Core request (the receipt is closed as
-     cancelled);
+   - an action that hangs past Core's 30 s ceiling returns `E_TIMEOUT` through MCP, before the
+     45 s MCP deadline, and its receipt is `terminated`;
    - `desktop_inspect` with a `continuation_token` reaches page 2;
    - stdout carries only frames.
 10. The server reads no URL, path or credential from any tool argument (schema-level
