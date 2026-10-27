@@ -62,6 +62,21 @@ export interface NodeCoreOptions {
    * itself is worse.
    */
   readonly operator_token?: string;
+  /**
+   * Agent discovery bearers (spec AT): per-agent tokens for the `/agent/*`
+   * surface, which an operator-granted Claude or Codex session presents to read
+   * `desktop.state`, `desktop.inspect` and `machine.inventory`. Each configured
+   * token is held to the same shape/strength/distinctness rules as
+   * `token`/`operator_token`, and is accepted only on its own routes.
+   */
+  readonly agent_tokens?: { readonly claude?: string; readonly codex?: string };
+  /**
+   * Whether the desktop AR gate is cleared (spec AT). Strict `=== true`,
+   * fail-closed like `coordinator_enabled`: `desktop.*` on the agent surface is
+   * `E_MODE_DENIED` (reason `ar_gate`) unless this is exactly the boolean true.
+   * AS reuses the same flag.
+   */
+  readonly desktop_ar_gate_cleared?: boolean;
   /** Operator-started one-job coordinator processes. Absent in isolated tests. */
   readonly coordinator?: CoordinatorControl;
 }
