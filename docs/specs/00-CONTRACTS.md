@@ -340,3 +340,18 @@ OriginalFilename — the value the version resource carries independent of any a
 `en-US\<image>.mui` — for example `NOTEPAD.EXE`, never `NOTEPAD.EXE.MUI`. This is a clarification
 of what the value means, not a type change: the field remains `string | null` and A9's
 case-insensitive comparison is unchanged.
+
+### A11 — `E_GRANT_INVALID`; `E_MODE_DENIED` on the agent surface (spec AT) (2026-10-27)
+
+**Gap.** Spec AT adds an agent surface whose calls are bound to an operator-issued *grant*.
+No existing code describes "this agent has no live grant, its grant was revoked, or no grant can
+be issued for this job" without repurposing a code (`E_RUN_INVALID` is a coordinator run
+credential; `E_CAP_NOT_ALLOWED` means the capability is not in `allowed_capabilities`).
+
+| Contract type | Change |
+|---|---|
+| `ErrorCode` (`errors.ts`) | **Structural.** Add `E_GRANT_INVALID`: an agent call has no live grant, its grant was revoked, or a grant cannot be issued for this job (no discovery capability, or not exactly one workspace). |
+| `ErrorCode.E_MODE_DENIED` | **Documentation.** Besides an advisory run, the agent surface is a mode: it permits only `desktop.state`, `desktop.inspect` and `machine.inventory`, and `desktop.*` only while `desktop_control.ar_gate_cleared` is set. A call outside that is `E_MODE_DENIED`. |
+
+Consumers: contracts (`errors.ts`, test), node-core (the AT agent routes, AT1). Nothing else
+enumerates the codes; the cockpit renders `error` strings as received.

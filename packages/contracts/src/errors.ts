@@ -71,8 +71,23 @@ export const ErrorCode = {
    * The refusal is Node Core's, not the prompt's. A system prompt that says
    * "you may only propose" is a request; this is the answer to a coordinator
    * that asked anyway.
+   *
+   * Amendment A11 (spec AT): the agent surface is a mode too. It permits only
+   * `desktop.state`, `desktop.inspect` and `machine.inventory`, and `desktop.*`
+   * only while `desktop_control.ar_gate_cleared` is set; anything else is
+   * refused with this code.
    */
   E_MODE_DENIED: 'E_MODE_DENIED',
+  /**
+   * Amendment A11 (spec AT): an agent call has no live grant, its grant was
+   * revoked, or a grant cannot be issued for this job (no discovery capability,
+   * or not exactly one workspace).
+   *
+   * Distinct from `E_RUN_INVALID`, which is a coordinator run credential, and
+   * from `E_CAP_NOT_ALLOWED`, which means the capability is not in the
+   * envelope's `allowed_capabilities`.
+   */
+  E_GRANT_INVALID: 'E_GRANT_INVALID',
   /** The coordinator emitted more than one action in a turn (SPEC §5). */
   E_PARALLEL_ACTION: 'E_PARALLEL_ACTION',
   /** An action arrived for a job in a terminal state (SPEC §3.7, "stop means stop"). */
