@@ -5,7 +5,7 @@
 contract amendment, **A11** (round 3, below): a new code `E_GRANT_INVALID`, and a documentation
 note on `E_MODE_DENIED`. A11 is made by the architect in AT1, with every consumer in the same diff.
 
-**Status: proposed (2026-10-26), round 4. Not accepted.** Round 2 answered the independent review
+**Status: accepted by the operator, 2026-10-27 (round 4 text, head 994fe2c).** Round 2 answered the independent review
 of round 1 (Grok, 2026-10-26, findings 1–8); round 3 answers its round-2 re-review (error-code
 meanings and A11, mission scoping, the MCP deadline, test 6a); round 4 answers its round-3
 re-review (the mission rule stated once, in AS; the MCP deadline's behaviour). Drafted by Claude as the first, small step toward
