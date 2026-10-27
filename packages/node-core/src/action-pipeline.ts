@@ -544,7 +544,13 @@ export function createActionPipeline(deps: {
           }
           throw new TorosError(decision.code, decision.reason, { approval_id: pending.approval_id, expires_at: pending.expires_at });
         }
-        throw toros(decision.code, decision.reason);
+        // The modeRefusal (`preDecision`) path is a caller-visible refusal, so
+        // its reason travels on the error detail — the agent route's error
+        // writer echoes `e.detail.reason` back (e.g. reason "ar_gate") exactly
+        // like the grant refusals do, rather than burying it in `message`.
+        throw preDecision !== undefined
+          ? new TorosError(decision.code, decision.reason, { reason: decision.reason })
+          : toros(decision.code, decision.reason);
       }
       // Policy has allowed, so the capability is registered and resolution
       // cannot fail. Resolving here rather than before the decision is what

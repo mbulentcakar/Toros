@@ -151,9 +151,10 @@ export function createAgentRoutes(deps: AgentRouteDeps): RouteSurface {
     const actor = `agent:${agent}`;
 
     // Mode: exactly the three discovery capabilities, and desktop.* only while
-    // the AR gate is cleared. The capability-outside-the-three refusal is
-    // recorded as a denied receipt through the pipeline; the ar_gate refusal is
-    // answered here with its reason.
+    // the AR gate is cleared. The capability-outside-the-three refusal and the
+    // ar_gate refusal are both recorded as denied receipts through the
+    // pipeline, so each is audited exactly like a policy denial; the adapter
+    // is never reached and the refusal's reason travels in the response detail.
     if (!isDiscoveryCapability(capability)) {
       const result = await deps.actionPipeline.executeAgent({
         job_id: job.job_id,
@@ -161,13 +162,22 @@ export function createAgentRoutes(deps: AgentRouteDeps): RouteSurface {
         capability,
         parameters,
         actor,
-        modeRefusal: { code: ErrorCode.E_MODE_DENIED },
+        modeRefusal: { code: ErrorCode.E_MODE_DENIED, reason: 'not_discovery_capability' },
       });
       send(response, 200, result);
       return;
     }
     if (capability.startsWith('desktop.') && !deps.desktopArGateCleared) {
-      throw new TorosError(ErrorCode.E_MODE_DENIED, 'The desktop AR gate is not cleared for this node', { reason: 'ar_gate' });
+      const result = await deps.actionPipeline.executeAgent({
+        job_id: job.job_id,
+        workspace_id: workspaceId,
+        capability,
+        parameters,
+        actor,
+        modeRefusal: { code: ErrorCode.E_MODE_DENIED, reason: 'ar_gate' },
+      });
+      send(response, 200, result);
+      return;
     }
 
     // Mission hook (owned by AS1; without AS it allows everything).
@@ -193,6 +203,11 @@ export function createAgentRoutes(deps: AgentRouteDeps): RouteSurface {
         return;
       }
       if (operation === 'status') {
+        // Read and validate the body exactly like invoke: enforce the size cap
+        // and the object shape, and drain the keep-alive socket, before
+        // answering. An unread body would leave bytes on the connection for the
+        // next request to trip over.
+        asRecord(await readBody(request));
         await handleStatus(agent, deps.agentGrants().live(agent), response);
         return;
       }
@@ -212,7 +227,12 @@ export function createAgentRoutes(deps: AgentRouteDeps): RouteSurface {
         // body read (grant_id changed) is its own refusal.
         const latest = latestGrant(agent);
         let outcome: GrantOutcome;
-        if (after === null) {
+        if (before === null && after !== null) {
+          // A grant appeared while the body was still arriving. The request
+          // began with no grant, so it must refuse rather than upgrade to a
+          // grant the caller did not hold when it started.
+          outcome = { kind: 'denied', reason: 'no_grant' };
+        } else if (after === null) {
           outcome = { kind: 'denied', reason: latest !== null && latest.revoked_at !== null ? 'revoked' : 'no_grant' };
         } else if (before !== null && before.grant_id !== after.grant_id) {
           outcome = { kind: 'denied', reason: 'revoked' };

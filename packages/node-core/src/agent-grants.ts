@@ -95,7 +95,7 @@ export function openAgentGrants(dbPath: string): AgentGrants {
   const selectLive = db.prepare(
     'SELECT * FROM agent_grants WHERE agent = ? AND revoked_at IS NULL',
   );
-  const selectAll = db.prepare('SELECT * FROM agent_grants ORDER BY created_at, grant_id');
+  const selectAll = db.prepare('SELECT * FROM agent_grants ORDER BY created_at, rowid');
 
   let closed = false;
 

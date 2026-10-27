@@ -242,6 +242,25 @@ async function post(port: number, path: string, body: Record<string, unknown>, a
   });
 }
 
+/** POST a raw string body (for non-object / oversized bodies `post` cannot express). */
+async function postRaw(port: number, path: string, body: string, auth: string, extraHeaders: Record<string, string> = {}): Promise<{ status: number; body: Record<string, unknown> }> {
+  return new Promise((resolve, reject) => {
+    const req = request({
+      host: '127.0.0.1', port, path, method: 'POST', agent: false,
+      headers: { authorization: `Bearer ${auth}`, 'content-type': 'application/json', ...extraHeaders },
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        resolve({ status: res.statusCode ?? 0, body: text.length === 0 ? {} : JSON.parse(text) as Record<string, unknown> });
+      });
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
 function grant(f: Fixture, agent: string, extra: Record<string, unknown> = {}): Promise<{ status: number; body: Record<string, unknown> }> {
   return post(f.port, '/operator/agent_grant_create', { job_id: f.jobId, agent, ...extra }, operatorToken);
 }
@@ -587,6 +606,46 @@ test('two overlapping grant_create calls leave exactly one live grant', async (t
   assert.equal(rows.length, 1, 'exactly one live grant');
 });
 
+test('list() orders same-millisecond grants by insertion order (rowid), not grant_id', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'toros-agent-list-order-'));
+  const dbPath = join(dir, 'node.sqlite');
+  const store = await openStore({ path: dbPath, nodeId: 'node' });
+  const jobId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  await store.createJob(sealEnvelope({
+    job_id: jobId, objective: 'list order', allowed_capabilities: ['machine.inventory'],
+    allowed_workspaces: ['work'], acceptance: ['done'], forbidden: [],
+    max_actions: 10, max_retries: 0, expires_at: '2999-01-01T00:00:00Z',
+  }));
+  await store.close();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+
+  const { openAgentGrants } = await import('../src/agent-grants.js');
+  const grants = openAgentGrants(dbPath);
+  const { DatabaseSync } = await import('node:sqlite');
+  const raw = new DatabaseSync(dbPath);
+
+  // Two rows share one created_at. Insert 'b…' FIRST and 'a…' SECOND, so the
+  // grant_id sort ('a…' < 'b…') would flip them while the insertion order
+  // (implicit rowid) keeps 'b…' first. The fix (ORDER BY created_at, rowid)
+  // returns insertion order; (created_at, grant_id) returns random-UUID order,
+  // which here deterministically disagrees with the insertion order.
+  const created = '2026-01-01T00:00:00.000Z';
+  const expires = '2999-01-01T00:00:00Z';
+  const first = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const second = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const insert = raw.prepare(
+    'INSERT INTO agent_grants (grant_id, agent, job_id, created_at, expires_at, revoked_at) VALUES (?,?,?,?,?,?)',
+  );
+  // Both revoked so the partial unique index (one live grant) is not tripped.
+  insert.run(first, 'claude', jobId, created, expires, created);
+  insert.run(second, 'claude', jobId, created, expires, created);
+  raw.close();
+
+  const order = grants.list().map((grant) => grant.grant_id);
+  assert.deepEqual(order, [first, second], 'same-created_at grants must keep insertion order');
+  grants.close();
+});
+
 test('a revoke landing while the body is being read refuses the call and leaves no receipt', async (t) => {
   const f = await makeFixture({ operatorToken, agentTokens: { claude: claudeToken } });
   t.after(() => finish(f));
@@ -643,6 +702,41 @@ test('a revoke landing while the body is being read refuses the call and leaves 
   const secondReceipts = await receiptsFor(f, secondJobId);
   assert.equal(firstReceipts.length, 0, 'no receipt was created under the old grant');
   assert.equal(secondReceipts.length, 0, 'no receipt was created on the second job under the old grant');
+});
+
+test('a grant created while the body is read does not upgrade a no-grant invoke', async (t) => {
+  const f = await makeFixture({ operatorToken, agentTokens: { claude: claudeToken } });
+  t.after(() => finish(f));
+
+  // The agent has NO live grant at request start. The call body is written
+  // slowly, and a grant is created while the first half is still arriving. The
+  // re-read after `readBody` must refuse with "no_grant" rather than run the
+  // call against the grant that appeared mid-flight.
+  const full = JSON.stringify({ capability: 'machine.inventory', parameters: {} });
+  const responsePromise = new Promise<{ status: number; body: Record<string, unknown> }>((resolve, reject) => {
+    const req = request({
+      host: '127.0.0.1', port: f.port, path: '/agent/invoke', method: 'POST', agent: false,
+      headers: { authorization: `Bearer ${claudeToken}`, 'content-type': 'application/json', 'content-length': Buffer.byteLength(full) },
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown> }));
+    });
+    req.on('error', reject);
+    req.write(full.slice(0, 20));
+    // Let the server receive the first chunk and begin awaiting the rest.
+    setTimeout(() => {
+      void (async () => {
+        await grant(f, 'claude');
+        req.end(full.slice(20));
+      })().catch(reject);
+    }, 50);
+  });
+
+  const response = await responsePromise;
+  assert.equal(response.body.error, ErrorCode.E_GRANT_INVALID, `expected denial, got ${JSON.stringify(response.body)}`);
+  assert.equal(response.body.reason, 'no_grant');
+  assert.equal(f.calls.length, 0, 'the adapter must never be called for an upgraded no-grant invoke');
 });
 
 test('a job with zero or two workspaces cannot be granted (workspace_count)', async (t) => {
@@ -716,6 +810,34 @@ test('desktop.* is E_MODE_DENIED (ar_gate) unless the flag is exactly true', asy
     assert.equal(inventory.body.error, undefined, `machine.inventory must work with the gate closed: ${JSON.stringify(inventory.body)}`);
     await finish(f);
   }
+});
+
+test('the ar_gate refusal is audited: one denied receipt, no adapter call, budget unchanged, reason "ar_gate"', async (t) => {
+  const f = await makeFixture({ operatorToken, agentTokens: { claude: claudeToken } });
+  t.after(() => finish(f));
+  const created = await grant(f, 'claude');
+  assert.equal(created.body.error, undefined, JSON.stringify(created.body));
+
+  // The AR gate is not cleared (default), so desktop.state is refused — but
+  // now through the pipeline, so the refusal leaves an audited denied receipt
+  // exactly like the capability-outside-the-three E_MODE_DENIED path.
+  const denied = await post(f.port, '/agent/invoke', { capability: 'desktop.state', parameters: {} }, claudeToken);
+  assert.equal(denied.body.error, ErrorCode.E_MODE_DENIED, JSON.stringify(denied.body));
+  assert.equal(denied.body.reason, 'ar_gate');
+
+  // The adapter is never reached.
+  assert.equal(f.calls.filter((call) => call.capability === 'desktop.state').length, 0, 'the adapter must not be called');
+
+  // Exactly one denied receipt with E_MODE_DENIED.
+  const receipts = await receiptsFor(f, f.jobId);
+  const deniedReceipts = receipts.filter((r) => r.outcome === 'denied' && r.decision.allow === false && r.decision.code === ErrorCode.E_MODE_DENIED);
+  assert.equal(deniedReceipts.length, 1, 'exactly one denied receipt with E_MODE_DENIED');
+
+  // A refusal before the adapter runs must not spend the budget.
+  const store = await openStore({ path: f.dbPath, nodeId: 'node' });
+  const job = await store.getJob(f.jobId);
+  await store.close();
+  assert.equal(job?.actions_used, 0, 'actions_used must be unchanged by the ar_gate refusal');
 });
 
 // ---------------------------------------------------------------------------
@@ -970,4 +1092,57 @@ test('a start that fails after http.start assigns its server clears it and rebin
   await new Promise<void>((resolve) => blocker.close(() => resolve()));
   const { port } = await core.start();
   assert.ok(port > 0, `the recovery start must bind a real port, got ${port}`);
+});
+
+// ---------------------------------------------------------------------------
+// /agent/status — body validation and the 200 success paths.
+// ---------------------------------------------------------------------------
+
+test('POST /agent/status validates the body exactly like invoke', async (t) => {
+  const f = await makeFixture({ operatorToken, agentTokens: { claude: claudeToken } });
+  t.after(() => finish(f));
+
+  // Oversized body: content-length over the 1 MiB cap is refused before reading.
+  const oversized = await new Promise<number>((resolve, reject) => {
+    const req = request({
+      host: '127.0.0.1', port: f.port, path: '/agent/status', method: 'POST', agent: false,
+      headers: { authorization: `Bearer ${claudeToken}`, 'content-length': 1048577 },
+    }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode ?? 0)); });
+    req.on('error', reject);
+    req.end();
+  });
+  assert.equal(oversized, 413, 'an oversized /agent/status body must be 413');
+
+  // A non-object JSON body gets the same E_SCHEMA refusal invoke would produce.
+  const nonObject = await postRaw(f.port, '/agent/status', '[1,2,3]', claudeToken);
+  assert.equal(nonObject.status, 400);
+  assert.equal(nonObject.body.error, ErrorCode.E_SCHEMA);
+  assert.equal(nonObject.body.message, 'Arguments must be an object');
+});
+
+test('POST /agent/status returns 200 with no grant (nulls) and with a live grant', async (t) => {
+  const f = await makeFixture({ operatorToken, agentTokens: { claude: claudeToken } });
+  t.after(() => finish(f));
+
+  // No grant: everything the agent would otherwise see is null.
+  const noGrant = await post(f.port, '/agent/status', {}, claudeToken);
+  assert.equal(noGrant.status, 200, JSON.stringify(noGrant.body));
+  assert.equal(noGrant.body.agent, 'claude');
+  assert.equal(noGrant.body.grant, null);
+  assert.equal(noGrant.body.objective, null);
+  assert.equal(noGrant.body.allowed_capabilities, null);
+  assert.equal(noGrant.body.desktop_enabled, false);
+
+  // A live grant fills in the binding and the granted job's envelope.
+  const created = await grant(f, 'claude');
+  assert.equal(created.body.error, undefined, JSON.stringify(created.body));
+  const withGrant = await post(f.port, '/agent/status', {}, claudeToken);
+  assert.equal(withGrant.status, 200, JSON.stringify(withGrant.body));
+  const binding = withGrant.body.grant as Record<string, unknown>;
+  assert.equal(binding.grant_id, String(created.body.grant_id));
+  assert.equal(binding.job_id, f.jobId);
+  assert.equal(binding.expires_at, String(created.body.expires_at));
+  assert.equal(withGrant.body.objective, 'agent surface suite');
+  assert.deepEqual(withGrant.body.allowed_capabilities, ['desktop.state', 'desktop.inspect', 'machine.inventory']);
+  assert.equal(withGrant.body.desktop_enabled, false);
 });
