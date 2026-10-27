@@ -371,3 +371,269 @@ test('every write is exactly one line that parses as a JSON-RPC message', () => 
   }
   void rawFrames;
 });
+
+// ---------------------------------------------------------------------------
+// Round 2 — item 1: prototype-chain tool lookup.
+// ---------------------------------------------------------------------------
+
+test('tools/call with a prototype-chain tool name gives -32602 and never invokes call', () => {
+  for (const name of ['toString', 'constructor', '__proto__', 'valueOf']) {
+    const { server, frames, calls } = harness();
+    initialize(server);
+    server.receive(JSON.stringify({ jsonrpc: '2.0', id: 30, method: 'tools/call', params: { name, arguments: {} } }));
+    assert.equal(errorOf(lastFrame(frames)).code, -32602, `for ${name}`);
+    assert.equal(calls.length, 0, `call was invoked for ${name}`);
+    // The next frame still works.
+    server.receive(JSON.stringify({ jsonrpc: '2.0', id: 31, method: 'ping' }));
+    assert.deepEqual(lastFrame(frames)['result'], {}, `ping after ${name}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Round 2 — item 2: missing/non-object arguments.
+// ---------------------------------------------------------------------------
+
+test('desktop_inspect with no arguments gives -32602 and never invokes call', () => {
+  const { server, frames, calls } = harness();
+  initialize(server);
+  server.receive(JSON.stringify({ jsonrpc: '2.0', id: 40, method: 'tools/call', params: { name: 'desktop_inspect' } }));
+  assert.equal(errorOf(lastFrame(frames)).code, -32602);
+  assert.equal(calls.length, 0);
+});
+
+test('a non-object arguments (array, string, null, number) gives -32602', () => {
+  for (const bad of [[], 'str', null, 42]) {
+    const { server, frames, calls } = harness();
+    initialize(server);
+    server.receive(JSON.stringify({ jsonrpc: '2.0', id: 41, method: 'tools/call', params: { name: 'toros_status', arguments: bad } }));
+    assert.equal(errorOf(lastFrame(frames)).code, -32602, `for ${JSON.stringify(bad)}`);
+    assert.equal(calls.length, 0, `for ${JSON.stringify(bad)}`);
+  }
+});
+
+test('a valid tool with an empty arguments object still validates and invokes', async () => {
+  const { server, frames, calls, setBehaviour } = harness();
+  initialize(server);
+  setBehaviour(async () => ({ status: 200, text: '{}', body: {} }));
+  server.receive(JSON.stringify({ jsonrpc: '2.0', id: 42, method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(calls.length, 1);
+  assert.equal((lastFrame(frames)['result'] as Record<string, unknown>)['isError'], false);
+});
+
+// ---------------------------------------------------------------------------
+// Round 2 — item 3: continuation_token must be the sole key.
+// ---------------------------------------------------------------------------
+
+test('desktop_inspect page N+1 with continuation_token plus another key gives -32602', () => {
+  for (const extra of [{ depth: 2 }, { window_id: 'w' }, { freshness_token: 'f' }]) {
+    const { server, frames, calls } = harness();
+    initialize(server);
+    const arguments_ = { continuation_token: 'ct', ...extra };
+    server.receive(JSON.stringify({ jsonrpc: '2.0', id: 50, method: 'tools/call', params: { name: 'desktop_inspect', arguments: arguments_ } }));
+    assert.equal(errorOf(lastFrame(frames)).code, -32602, JSON.stringify(arguments_));
+    assert.equal(calls.length, 0, JSON.stringify(arguments_));
+  }
+});
+
+test('desktop_inspect page N+1 with continuation_token alone is valid', async () => {
+  const { server, frames, calls, setBehaviour } = harness();
+  initialize(server);
+  setBehaviour(async () => ({ status: 200, text: '{}', body: {} }));
+  server.receive(JSON.stringify({ jsonrpc: '2.0', id: 51, method: 'tools/call', params: { name: 'desktop_inspect', arguments: { continuation_token: 'ct' } } }));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(calls.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Round 2 — item 4: connection failure is a tool result, not a JSON-RPC error.
+// ---------------------------------------------------------------------------
+
+test('a connection failure answers a tool result isError true with no error member', async () => {
+  const { server, frames, setBehaviour } = harness();
+  initialize(server);
+  setBehaviour(async () => { throw { code: 'connection_failed' }; });
+  server.receive(JSON.stringify({ jsonrpc: '2.0', id: 60, method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+  await new Promise((r) => setTimeout(r, 20));
+  const frame = lastFrame(frames);
+  assert.equal(frame['error'], undefined, 'connection failure must not be a JSON-RPC error');
+  const result = frame['result'] as Record<string, unknown>;
+  assert.equal(result['isError'], true);
+  const content = result['content'] as Array<{ text: string }>;
+  assert.equal(content[0]!.text, 'Node Core is not reachable');
+});
+
+// ---------------------------------------------------------------------------
+// Round 2 — item 5: structuredContent is never null; present only for object bodies.
+// ---------------------------------------------------------------------------
+
+test('structuredContent is absent on 401, on connection failure, and on a non-object body', async () => {
+  // 401
+  {
+    const { server, frames, setBehaviour } = harness();
+    initialize(server);
+    setBehaviour(async () => ({ status: 401, text: '{}', body: { error: 'Unauthorized' } }));
+    server.receive(JSON.stringify({ jsonrpc: '2.0', id: 70, method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+    await new Promise((r) => setTimeout(r, 20));
+    const result = lastFrame(frames)['result'] as Record<string, unknown>;
+    assert.equal('structuredContent' in result, false, '401 must omit structuredContent');
+    assert.equal(result['isError'], true);
+  }
+  // connection failure
+  {
+    const { server, frames, setBehaviour } = harness();
+    initialize(server);
+    setBehaviour(async () => { throw { code: 'connection_failed' }; });
+    server.receive(JSON.stringify({ jsonrpc: '2.0', id: 71, method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+    await new Promise((r) => setTimeout(r, 20));
+    const result = lastFrame(frames)['result'] as Record<string, unknown>;
+    assert.equal('structuredContent' in result, false, 'connection failure must omit structuredContent');
+  }
+  // body that did not parse to an object (a bare array body, via a 200 with an array body)
+  {
+    const { server, frames, setBehaviour } = harness();
+    initialize(server);
+    setBehaviour(async () => ({ status: 200, text: '[]', body: [] }));
+    server.receive(JSON.stringify({ jsonrpc: '2.0', id: 72, method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+    await new Promise((r) => setTimeout(r, 20));
+    const result = lastFrame(frames)['result'] as Record<string, unknown>;
+    assert.equal('structuredContent' in result, false, 'non-object body must omit structuredContent');
+  }
+});
+
+test('structuredContent is present as an object on 200 and on a 4xx tool error', async () => {
+  {
+    const { server, frames, setBehaviour } = harness();
+    initialize(server);
+    setBehaviour(async () => ({ status: 200, text: '{"a":1}', body: { a: 1 } }));
+    server.receive(JSON.stringify({ jsonrpc: '2.0', id: 73, method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+    await new Promise((r) => setTimeout(r, 20));
+    const result = lastFrame(frames)['result'] as Record<string, unknown>;
+    assert.deepEqual(result['structuredContent'], { a: 1 });
+  }
+  {
+    const { server, frames, setBehaviour } = harness();
+    initialize(server);
+    setBehaviour(async () => ({ status: 400, text: '{"error":"E","message":"m"}', body: { error: 'E', message: 'm' } }));
+    server.receive(JSON.stringify({ jsonrpc: '2.0', id: 74, method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+    await new Promise((r) => setTimeout(r, 20));
+    const result = lastFrame(frames)['result'] as Record<string, unknown>;
+    assert.equal(result['isError'], true);
+    assert.equal((result['structuredContent'] as Record<string, unknown>)['error'], 'E');
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Round 2 — item 7: JSON-RPC envelope validation.
+// ---------------------------------------------------------------------------
+
+test('a frame without jsonrpc "2.0" gives -32600', () => {
+  const { server, frames } = harness();
+  initialize(server);
+  server.receive(JSON.stringify({ id: 80, method: 'ping' }));
+  assert.equal(errorOf(lastFrame(frames)).code, -32600);
+});
+
+test('an id that is present but not a string or finite number gives -32600 with id null', () => {
+  for (const id of [null, {}, [], true]) {
+    const { server, frames } = harness();
+    server.receive(JSON.stringify({ jsonrpc: '2.0', id, method: 'ping' }));
+    const frame = lastFrame(frames);
+    assert.equal(errorOf(frame).code, -32600, `for id ${JSON.stringify(id)}`);
+    assert.equal(frame['id'], null, `for id ${JSON.stringify(id)}`);
+  }
+});
+
+test('a message without an id is a notification and never produces a frame', () => {
+  const { server, frames } = harness();
+  initialize(server);
+  const before = frames.length;
+  server.receive(JSON.stringify({ jsonrpc: '2.0', method: 'ping' }));
+  server.receive(JSON.stringify({ jsonrpc: '2.0', method: 'initialize', params: { protocolVersion: '2025-06-18' } }));
+  server.receive(JSON.stringify({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+  server.receive(JSON.stringify({ jsonrpc: '2.0', method: 'tools/list' }));
+  assert.equal(frames.length, before, 'notifications must produce no frame');
+});
+
+test('a notifications/* method sent with an id gives -32600', () => {
+  const { server, frames } = harness();
+  initialize(server);
+  server.receive(JSON.stringify({ jsonrpc: '2.0', id: 81, method: 'notifications/initialized' }));
+  assert.equal(errorOf(lastFrame(frames)).code, -32600);
+});
+
+test('a ping reusing an in-flight tools/call id gives -32600', () => {
+  const { server, frames, setBehaviour } = harness();
+  initialize(server);
+  const pending: Array<() => void> = [];
+  setBehaviour(() => new Promise((resolve) => { pending.push(() => resolve({ status: 200, text: '{}', body: {} })); }));
+  server.receive(JSON.stringify({ jsonrpc: '2.0', id: 82, method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+  server.receive(JSON.stringify({ jsonrpc: '2.0', id: 82, method: 'ping' }));
+  assert.equal(errorOf(lastFrame(frames)).code, -32600);
+});
+
+// ---------------------------------------------------------------------------
+// Round 2 — item 8: close cleans up in-flight calls.
+// ---------------------------------------------------------------------------
+
+test('close() with an in-flight call aborts its signal and writes no further frame', async () => {
+  const { server, frames, calls, setBehaviour } = harness();
+  initialize(server);
+  const captured: Array<AbortSignal> = [];
+  setBehaviour(async (_route, _body, signal) => {
+    captured.push(signal);
+    return new Promise(() => { /* never resolves */ });
+  });
+  server.receive(JSON.stringify({ jsonrpc: '2.0', id: 90, method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0]!.aborted, false);
+  const before = frames.length;
+  server.close();
+  assert.equal(captured[0]!.aborted, true, 'close() must abort the in-flight signal');
+  // No frame is written for the aborted in-flight call.
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(frames.length, before, 'close() must not write a frame for the aborted call');
+  void calls;
+});
+
+// ---------------------------------------------------------------------------
+// Round 2 — item 9: notifications/cancelled.
+// ---------------------------------------------------------------------------
+
+test('notifications/cancelled aborts an in-flight tools/call and writes no response for that id', async () => {
+  const { server, frames, calls, setBehaviour } = harness();
+  initialize(server);
+
+  const captured: Array<AbortSignal> = [];
+  const resolvers: Array<(v: { status: number; text: string; body: unknown }) => void> = [];
+  setBehaviour((_route, _body, signal) => new Promise((resolve) => { captured.push(signal); resolvers.push(resolve); }));
+
+  server.receive(JSON.stringify({ jsonrpc: '2.0', id: 100, method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+  assert.equal(captured.length, 1);
+  const before = frames.length;
+
+  server.receive(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 100 } }));
+  assert.equal(captured[0]!.aborted, true, 'cancel must abort the in-flight signal');
+  // Even if the call later settles, no response is written for id 100.
+  resolvers[0]?.({ status: 200, text: '{}', body: {} });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(frames.length, before, 'no frame must be written for the cancelled id');
+
+  // A new request is then accepted (the slot was freed).
+  setBehaviour(async () => ({ status: 200, text: '{}', body: {} }));
+  server.receive(JSON.stringify({ jsonrpc: '2.0', id: 101, method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+  await new Promise((r) => setTimeout(r, 20));
+  const last = lastFrame(frames);
+  assert.equal(last['id'], 101);
+  assert.ok(last['result'] !== undefined, 'new request accepted after cancel');
+});
+
+test('notifications/cancelled with an unknown or finished requestId is ignored', () => {
+  const { server, frames, setBehaviour } = harness();
+  initialize(server);
+  const before = frames.length;
+  server.receive(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 999 } }));
+  server.receive(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: {} }));
+  assert.equal(frames.length, before);
+  void setBehaviour;
+});
