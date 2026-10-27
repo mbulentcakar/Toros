@@ -82,17 +82,16 @@ const TOOL_DESCRIPTIONS = {
 } as const;
 
 interface ToolEntry {
-  readonly summary: string;
   readonly description: string;
   readonly route: string;
   readonly body: Record<string, string>;
 }
 
 const TOOLS: Readonly<Record<string, ToolEntry>> = {
-  toros_status: { summary: 'Read the operator grant for this agent', description: TOOL_DESCRIPTIONS.toros_status, route: '/agent/status', body: {} },
-  desktop_state: { summary: 'List top-level desktop windows (metadata only)', description: TOOL_DESCRIPTIONS.desktop_state, route: '/agent/invoke', body: { capability: 'desktop.state' } },
-  desktop_inspect: { summary: 'Inspect one window structure (metadata only)', description: TOOL_DESCRIPTIONS.desktop_inspect, route: '/agent/invoke', body: { capability: 'desktop.inspect' } },
-  machine_inventory: { summary: 'Report node adapter/tool readiness', description: TOOL_DESCRIPTIONS.machine_inventory, route: '/agent/invoke', body: { capability: 'machine.inventory' } },
+  toros_status: { description: TOOL_DESCRIPTIONS.toros_status, route: '/agent/status', body: {} },
+  desktop_state: { description: TOOL_DESCRIPTIONS.desktop_state, route: '/agent/invoke', body: { capability: 'desktop.state' } },
+  desktop_inspect: { description: TOOL_DESCRIPTIONS.desktop_inspect, route: '/agent/invoke', body: { capability: 'desktop.inspect' } },
+  machine_inventory: { description: TOOL_DESCRIPTIONS.machine_inventory, route: '/agent/invoke', body: { capability: 'machine.inventory' } },
 };
 
 // ---------------------------------------------------------------------------
@@ -139,12 +138,12 @@ function validateValue(value: unknown, schema: SchemaNode): boolean {
       if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
       const record = value as Record<string, unknown>;
       for (const key of Object.keys(record)) {
-        const prop = schema.properties?.[key];
-        if (prop === undefined) {
+        const properties = schema.properties ?? {};
+        if (!Object.hasOwn(properties, key)) {
           if (schema.additionalProperties === false) return false;
           continue;
         }
-        if (!validateValue(record[key], prop)) return false;
+        if (!validateValue(record[key], properties[key]!)) return false;
       }
       for (const required of schema.required ?? []) {
         if (!(required in record)) return false;
@@ -160,11 +159,14 @@ function validateArgs(tool: string, args: unknown): boolean {
 
 /** `desktop_inspect` must be exactly one of the two shapes. */
 function desktopInspectShape(args: ToolCallArgs): boolean {
-  const hasWindow = args['window_id'] !== undefined;
-  const hasFreshness = args['freshness_token'] !== undefined;
-  const hasContinuation = args['continuation_token'] !== undefined;
-  if (hasContinuation) return !hasWindow && !hasFreshness;
-  // Page 1: exactly window_id + freshness_token (both present).
+  const hasWindow = Object.hasOwn(args, 'window_id');
+  const hasFreshness = Object.hasOwn(args, 'freshness_token');
+  const hasContinuation = Object.hasOwn(args, 'continuation_token');
+  if (hasContinuation) {
+    // Page N+1: `continuation_token` must be the **sole** key.
+    return !hasWindow && !hasFreshness && !Object.hasOwn(args, 'depth') && Object.keys(args).filter((k) => k !== 'continuation_token').length === 0;
+  }
+  // Page 1: exactly window_id + freshness_token (both present), optionally depth.
   return hasWindow && hasFreshness;
 }
 
@@ -182,6 +184,8 @@ export function createMcpServer(options: McpServerOptions): McpServer {
   let initialized = false;
   let closed = false;
   const outstanding = new Set<unknown>();
+  /** In-flight tool calls keyed by id, so `close()` and `notifications/cancelled` can clean up. */
+  const inflight = new Map<unknown, { timer: NodeJS.Timeout; controller: AbortController }>();
 
   function sendJson(value: unknown): void {
     if (closed) return;
@@ -196,14 +200,34 @@ export function createMcpServer(options: McpServerOptions): McpServer {
     sendJson({ jsonrpc: '2.0', id, error: { code, message } });
   }
 
-  /** Map a Node Core HTTP result to a tool result's content triple. */
-  function mapAnswer(result: CallResult): { text: string; structured: unknown; isError: boolean } {
-    if (result.status === 200) return { text: result.text, structured: result.body, isError: false };
-    if (result.status === 401) return { text: 'Node Core refused the agent token (401)', structured: null, isError: true };
-    if (result.status !== null && result.status >= 400 && result.status !== 401 && result.body !== null && typeof result.body === 'object' && !Array.isArray(result.body)) {
-      return { text: result.text, structured: result.body, isError: true };
+  /**
+   * Map a Node Core HTTP result to a tool result's shape. `structured` is the
+   * Node Core body included as `structuredContent` — but only when it is a
+   * non-null, non-array object (on 200 and on the tool-error 4xx/409/413 path).
+   * It is `null` here and the caller omits the `structuredContent` key entirely
+   * on a 401, on a connection failure, and when the body did not parse to an
+   * object (MCP 2025-06-18: `structuredContent` is an optional object, never
+   * null).
+   */
+  function mapAnswer(result: CallResult): { text: string; structured: Record<string, unknown> | null; isError: boolean } {
+    if (result.status === 200) {
+      return { text: result.text, structured: asObject(result.body), isError: false };
     }
+    if (result.status === 401) {
+      return { text: 'Node Core refused the agent token (401)', structured: null, isError: true };
+    }
+    if (result.status !== null && result.status >= 400 && result.status !== 401) {
+      // Tool errors (4xx/409/413) the agent should read; keep the object body.
+      return { text: result.text, structured: asObject(result.body), isError: true };
+    }
+    // Connection failure: a tool result, never a JSON-RPC error (item 4).
     return { text: 'Node Core is not reachable', structured: null, isError: true };
+  }
+
+  /** The body only when it is a non-null, non-array object; otherwise null. */
+  function asObject(body: unknown): Record<string, unknown> | null {
+    if (typeof body === 'object' && body !== null && !Array.isArray(body)) return body as Record<string, unknown>;
+    return null;
   }
 
   /**
@@ -213,16 +237,18 @@ export function createMcpServer(options: McpServerOptions): McpServer {
    */
   function performToolCall(id: unknown, tool: string, args: ToolCallArgs): void {
     const entry = TOOLS[tool] as ToolEntry;
-    // Build the invocation body: the tool's fixed body plus filtered parameters
-    // for desktop_inspect. Arguments have already passed schema validation, so
-    // parameters are exactly the declared keys.
-    let body: Record<string, unknown> = entry.body as Record<string, unknown>;
+    // Build the invocation body: the tool's fixed body plus parameters. For
+    // desktop_inspect, parameters are exactly the declared schema keys present
+    // in args. For desktop_state and machine_inventory, parameters is {}.
+    let body: Record<string, unknown> = { ...entry.body };
     if (entry.body['capability'] === 'desktop.inspect') {
       const parameters: Record<string, unknown> = {};
       for (const key of Object.keys(DESKTOP_INSPECT_SCHEMA.properties ?? {})) {
         if (args[key] !== undefined) parameters[key] = args[key];
       }
       body = { capability: 'desktop.inspect', parameters };
+    } else if (Object.hasOwn(entry.body, 'capability')) {
+      body = { capability: entry.body['capability'], parameters: {} };
     }
 
     const controller = new AbortController();
@@ -232,6 +258,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
       if (settled) return;
       settled = true;
       outstanding.delete(id);
+      inflight.delete(id);
       fn();
     }
 
@@ -246,16 +273,23 @@ export function createMcpServer(options: McpServerOptions): McpServer {
     }, deadlineMs);
 
     outstanding.add(id);
+    inflight.set(id, { timer: deadline, controller });
+
     void call(entry.route, body, controller.signal)
       .then((result) => {
+        // Deadline or notifications/cancelled already owns this id; a late
+        // answer must not write a second frame.
+        if (controller.signal.aborted) return;
         finish(() => {
           clearTimeout(deadline);
           const { text, structured, isError } = mapAnswer(result);
-          rpc(id, {
+          const value: Record<string, unknown> = {
             content: [{ type: 'text', text }],
-            structuredContent: structured,
             isError,
-          });
+          };
+          // structuredContent only when the body is a non-null, non-array object.
+          if (structured !== null) value['structuredContent'] = structured;
+          rpc(id, value);
         });
       })
       .catch((error: unknown) => {
@@ -263,17 +297,18 @@ export function createMcpServer(options: McpServerOptions): McpServer {
         finish(() => {
           clearTimeout(deadline);
           if (controller.signal.aborted) {
-            // The deadline already answered -32001; a late client abort must
-            // not write a second frame. This branch is unreachable when the
-            // deadline fired first (settled is then true), but guards the case
-            // where the client aborted for another reason without the deadline.
+            // The deadline (or notifications/cancelled) already owns this id; a
+            // late client abort must not write a second frame.
             return;
           }
           if (code === RESULT_EXCEEDS_CAP) {
             rpcError(id, -32603, 'result exceeds 1 MiB');
+          } else if (code === NODE_CORE_DEADLINE) {
+            // Safe-guard: normally owned by the deadline timer above.
+            rpcError(id, -32001, 'Node Core did not answer within 45 s');
           } else {
-            if (code !== null && code !== NODE_CORE_DEADLINE) log(`tools/call ${tool} failed: ${String(code)}`);
-            rpcError(id, -32603, 'Node Core is not reachable');
+            // Connection failure is a tool result, not a JSON-RPC error (item 4).
+            rpc(id, { content: [{ type: 'text', text: 'Node Core is not reachable' }], isError: true });
           }
         });
       });
@@ -303,15 +338,55 @@ export function createMcpServer(options: McpServerOptions): McpServer {
     });
   }
 
+  /** An id is usable when present and a string or a finite number (not null). */
+  function validId(value: unknown): value is string | number {
+    if (typeof value === 'string') return true;
+    if (typeof value === 'number') return Number.isFinite(value);
+    return false;
+  }
+
   function handleRequest(msg: Record<string, unknown>): void {
     const method = msg['method'];
-    const hasId = 'id' in msg;
-    const id = msg['id'];
-    const isNotification = !hasId;
     const params = msg['params'];
 
+    // --- JSON-RPC envelope validation (item 7). -------------------------
+    if (msg['jsonrpc'] !== '2.0') {
+      rpcError(null, -32600, 'Invalid Request');
+      return;
+    }
+    const hasId = Object.hasOwn(msg, 'id');
+    const id = msg['id'];
+    // A present id must be a string or a finite number. `null` is not valid and
+    // is never counted as outstanding.
+    if (hasId && !validId(id)) {
+      rpcError(null, -32600, 'Invalid Request');
+      return;
+    }
+    const isNotification = !hasId;
+
     if (method === undefined || typeof method !== 'string') {
-      rpcError(id ?? null, -32600, 'Invalid Request');
+      rpcError(hasId ? id : null, -32600, 'Invalid Request');
+      return;
+    }
+
+    // A notifications/* method sent **with** an id is -32600.
+    if (method.startsWith('notifications/') && hasId) {
+      rpcError(id, -32600, 'Invalid Request');
+      return;
+    }
+
+    // A message without an id is a notification: it never produces a frame,
+    // whatever its method (except notifications/initialized and
+    // notifications/cancelled, handled where relevant).
+    if (isNotification) {
+      if (method === 'notifications/cancelled') { handleCancelled(params); }
+      return;
+    }
+
+    // Duplicate-id and outstanding-count checks apply to every request with an
+    // id, not only tools/call.
+    if (outstanding.has(id)) {
+      rpcError(id, -32600, 'id already outstanding');
       return;
     }
 
@@ -319,7 +394,6 @@ export function createMcpServer(options: McpServerOptions): McpServer {
       if (method === 'ping') { rpc(id, {}); return; }
       if (method === 'initialize') { handleInitialize(params, id); return; }
       if (method === 'notifications/initialized') return;
-      if (isNotification) return;
       rpcError(id, -32002, 'Server not initialized');
       return;
     }
@@ -346,22 +420,30 @@ export function createMcpServer(options: McpServerOptions): McpServer {
       return;
     }
     if (method === 'tools/call') {
-      if (!hasId) { rpcError(null, -32600, 'tools/call requires an id'); return; }
-      if (outstanding.has(id)) { rpcError(id, -32600, 'id already outstanding'); return; }
       if (outstanding.size >= MAX_OUTSTANDING) { rpcError(id, -32000, 'too many outstanding requests'); return; }
       const record = (typeof params === 'object' && params !== null && !Array.isArray(params)) ? (params as Record<string, unknown>) : {};
       const name = record['name'];
-      if (typeof name !== 'string' || TOOLS[name] === undefined) {
+      if (typeof name !== 'string' || !Object.hasOwn(TOOLS, name)) {
         rpcError(id, -32602, `Unknown tool: ${String(name)}`);
         return;
       }
       const args = record['arguments'];
-      const argsObj = typeof args === 'object' && args !== null && !Array.isArray(args) ? (args as ToolCallArgs) : {};
-      if (args !== undefined && !validateArgs(name, args)) {
+      // A missing `arguments` is treated as {}, and a non-object `arguments`
+      // (array, string, null, number) is -32602. Validation always runs.
+      let argsObj: ToolCallArgs;
+      if (args === undefined) {
+        argsObj = {};
+      } else if (typeof args !== 'object' || args === null || Array.isArray(args)) {
+        rpcError(id, -32602, `Invalid arguments for ${name}`);
+        return;
+      } else {
+        argsObj = args as ToolCallArgs;
+      }
+      if (!validateArgs(name, argsObj)) {
         rpcError(id, -32602, `Invalid arguments for ${name}`);
         return;
       }
-      if (name === 'desktop_inspect' && args !== undefined && !desktopInspectShape(argsObj)) {
+      if (name === 'desktop_inspect' && !desktopInspectShape(argsObj)) {
         rpcError(id, -32602, 'desktop_inspect requires exactly one of the two shapes');
         return;
       }
@@ -369,39 +451,73 @@ export function createMcpServer(options: McpServerOptions): McpServer {
       return;
     }
 
-    // Other methods (and unknown notifications): notifications ignored,
-    // requests answered -32601.
-    if (isNotification) return;
-    if (id === undefined) { rpcError(null, -32600, 'Invalid Request'); return; }
-    if (outstanding.has(id)) { rpcError(id, -32600, 'id already outstanding'); return; }
+    // Other methods: -32601.
     if (outstanding.size >= MAX_OUTSTANDING) { rpcError(id, -32000, 'too many outstanding requests'); return; }
     rpcError(id, -32601, `Method not found: ${method}`);
   }
 
+  /**
+   * `notifications/cancelled`: if `params.requestId` names an in-flight
+   * `tools/call`, clear its timer, abort its controller (destroying that HTTP
+   * request), free its outstanding slot, and write no response for that id,
+   * ever. An unknown or finished `requestId` is ignored. The Node Core action
+   * itself is not aborted: spec AT adds no abort hook.
+   */
+  function handleCancelled(params: unknown): void {
+    const record = (typeof params === 'object' && params !== null && !Array.isArray(params)) ? (params as Record<string, unknown>) : {};
+    const requestId = record['requestId'];
+    if (!validId(requestId)) return;
+    const entry = inflight.get(requestId);
+    if (entry === undefined) return; // unknown or already finished
+    clearTimeout(entry.timer);
+    entry.controller.abort();
+    outstanding.delete(requestId);
+    inflight.delete(requestId);
+  }
+
   function receive(line: string): void {
     if (closed) return;
-    // Frame cap first, in bytes, before parsing: a longer line is -32600 and
-    // must not grow a buffer (the caller's line reader discards the overflow).
-    if (Buffer.byteLength(line, 'utf8') > FRAME_CAP_BYTES) {
-      rpcError(null, -32600, 'Request frame exceeds 1 MiB');
-      return;
+    // Strip one trailing \r (CRLF) and ignore empty lines, matching the stdin
+    // reader, so both paths agree.
+    if (line.length > 0 && line.charCodeAt(line.length - 1) === 0x0d) {
+      line = line.slice(0, -1);
     }
-    let parsed: unknown;
+    if (line.length === 0) return;
+    let parsed: unknown = undefined;
     try {
-      parsed = JSON.parse(line);
+      // Frame cap first, in bytes, before parsing: a longer line is -32600 and
+      // must not grow a buffer (the caller's line reader discards the overflow).
+      if (Buffer.byteLength(line, 'utf8') > FRAME_CAP_BYTES) {
+        rpcError(null, -32600, 'Request frame exceeds 1 MiB');
+        return;
+      }
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        rpcError(null, -32700, 'Parse error');
+        return;
+      }
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        rpcError(null, -32600, 'Invalid Request: not a single JSON object');
+        return;
+      }
+      handleRequest(parsed as Record<string, unknown>);
     } catch {
-      rpcError(null, -32700, 'Parse error');
-      return;
+      // An unexpected throw answers that id with -32603 (no detail), or id: null
+      // when the frame had no usable id. The process stays alive.
+      const record = (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) ? (parsed as Record<string, unknown>) : undefined;
+      const id = record !== undefined && validId(record['id']) ? record['id'] : null;
+      sendJson({ jsonrpc: '2.0', id, error: { code: -32603, message: 'internal error' } });
     }
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      rpcError(null, -32600, 'Invalid Request: not a single JSON object');
-      return;
-    }
-    handleRequest(parsed as Record<string, unknown>);
   }
 
   function close(): void {
     closed = true;
+    for (const [, entry] of inflight) {
+      clearTimeout(entry.timer);
+      entry.controller.abort();
+    }
+    inflight.clear();
     outstanding.clear();
   }
 

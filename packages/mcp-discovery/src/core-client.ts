@@ -41,6 +41,13 @@ export function createCoreClient(options: CoreClientOptions): CoreCall {
     const payload = JSON.stringify(body);
 
     return new Promise<CallResult>((resolve, reject) => {
+      // Check an already-aborted signal before creating the request, so an
+      // aborted `tools/call` never opens a socket.
+      if (signal.aborted) {
+        reject({ code: NODE_CORE_DEADLINE } as never);
+        return;
+      }
+
       const req = request({
         host,
         port,
@@ -76,10 +83,6 @@ export function createCoreClient(options: CoreClientOptions): CoreCall {
         reject(error as never);
       }
 
-      if (signal.aborted) {
-        rejected(NODE_CORE_DEADLINE);
-        return;
-      }
       signal.addEventListener('abort', onAbort);
 
       req.on('error', () => {
@@ -99,8 +102,9 @@ export function createCoreClient(options: CoreClientOptions): CoreCall {
           total += chunk.length;
           if (total > RESULT_CAP_BYTES) {
             tooLarge = true;
-            // Refuse rather than truncate: destroy and report the cap error.
+            // Refuse rather than truncate: destroy the response and the request.
             res.destroy();
+            req.destroy();
             rejected(RESULT_EXCEEDS_CAP);
             return;
           }

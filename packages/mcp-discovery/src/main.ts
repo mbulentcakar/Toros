@@ -52,28 +52,63 @@ async function main(): Promise<void> {
 
   const oversizedError = (): string => JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Request frame exceeds 1 MiB' } });
 
-  let buffer = '';
+  // A buffer-based stdin line reader (O(n), not O(n²)). stdin is read as raw
+  // Buffers (no setEncoding); for the current line we keep a list of chunk
+  // Buffers and a running byte count, find 0x0A with indexOf, and once the count
+  // passes FRAME_CAP_BYTES we drop the retained bytes, set overflow, and skip
+  // until the next 0x0A. A complete line is decoded from UTF-8 exactly once.
+  // One trailing `\r` (CRLF) is stripped before the cap comparison, and empty
+  // lines (after stripping `\r`) produce no frame.
+  const lineChunks: Buffer[] = [];
+  let lineBytes = 0;
   let overflow = false;
-  process.stdin.setEncoding('utf8');
-  process.stdin.on('data', (chunk: string) => {
-    for (const char of chunk) {
-      if (char === '\n') {
-        if (overflow) {
-          overflow = false;
-          buffer = '';
-          process.stdout.write(`${oversizedError()}\n`);
-        } else {
-          server.receive(buffer);
-          buffer = '';
+
+  process.stdin.on('data', (chunk: Buffer) => {
+    let offset = 0;
+    for (;;) {
+      const nl = chunk.indexOf(0x0a, offset);
+      if (nl === -1) {
+        // No newline in the rest of the chunk: retain what remains.
+        if (!overflow) {
+          const rest = chunk.subarray(offset);
+          lineChunks.push(rest);
+          lineBytes += rest.length;
+          if (lineBytes > FRAME_CAP_BYTES) {
+            overflow = true;
+            lineChunks.length = 0;
+            lineBytes = 0;
+          }
         }
+        return;
+      }
+      // A newline at `nl` ends a line of `chunk.subarray(offset, nl)`.
+      const piece = chunk.subarray(offset, nl);
+      offset = nl + 1;
+      if (overflow) {
+        overflow = false;
+        lineChunks.length = 0;
+        lineBytes = 0;
+        // Skip the (already-discarded) remainder of the oversized line and
+        // answer exactly one -32600 for it.
+        process.stdout.write(`${oversizedError()}\n`);
         continue;
       }
-      if (overflow) continue; // discard the rest of an oversized line
-      buffer += char;
-      if (Buffer.byteLength(buffer, 'utf8') > FRAME_CAP_BYTES) {
-        overflow = true;
-        buffer = '';
+      lineChunks.push(piece);
+      lineBytes += piece.length;
+      // Strip one trailing \r (CRLF) before the cap comparison.
+      let complete = Buffer.concat(lineChunks, lineBytes);
+      lineChunks.length = 0;
+      lineBytes = 0;
+      if (complete.length > 0 && complete[complete.length - 1] === 0x0d) {
+        complete = complete.subarray(0, complete.length - 1);
       }
+      if (complete.length === 0) continue; // ignore empty lines
+      if (complete.length > FRAME_CAP_BYTES) {
+        process.stdout.write(`${oversizedError()}\n`);
+        continue;
+      }
+      const line = complete.toString('utf8');
+      server.receive(line);
     }
   });
 
