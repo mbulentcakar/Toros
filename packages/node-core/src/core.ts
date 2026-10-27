@@ -52,6 +52,8 @@ export class Core implements NodeCore {
   private grants: AgentGrants | null = null;
   private registeredCapabilities: readonly string[] = [];
   private observer: SecurityObserver | null = null;
+  /** True once the coordinator's run-ended listener has been registered, so a retry never stacks a second one. */
+  private runEndedListenerRegistered = false;
   /**
    * session_id → job_id for every session this process created. Also the set of
    * correlation ids route 1 can resolve: `start_cli` uses one id for the
@@ -157,8 +159,15 @@ export class Core implements NodeCore {
     const activePort = this.http.port();
     if (activePort !== null) return { port: activePort, registered_capabilities: this.registeredCapabilities };
     // A credential must not outlive the process it was issued to. The
-    // supervisor is the only thing that knows when a child is gone.
-    this.options.coordinator?.onRunEnded((runId) => { this.runCredentials.revoke(runId); });
+    // supervisor is the only thing that knows when a child is gone. Registered
+    // once per Core instance: every failed `start()` already pushed another
+    // listener, so a retry stacked them (`coordinator-supervisor.ts:287` keeps
+    // a plain array). Guarded here so a successful restart does not revoke a
+    // fresh credential through a stale, duplicate listener.
+    if (!this.runEndedListenerRegistered) {
+      this.options.coordinator?.onRunEnded((runId) => { this.runCredentials.revoke(runId); });
+      this.runEndedListenerRegistered = true;
+    }
     const store = await openStore({ path: this.options.db_path, nodeId: this.options.node_id });
     this.store = store;
     const registry = createRegistry({ workspaces: this.options.workspaces });
@@ -332,9 +341,22 @@ export class Core implements NodeCore {
       // A start that fails after the grants connection (or the store) is open
       // must close both, not leave a second handle to the database file that a
       // later start() would orphan and leak.
+      //
+      // It must also stop, in REVERSE order, whatever the try already started,
+      // while the store is still open: `http.stop()` clears the server that
+      // `http.start` assigned before `listen` succeeded; the observer, stage
+      // graphs and browser acquisitions each armed a timer (and the observer
+      // closed over this attempt's store), so a retry would otherwise replace
+      // the references without stopping the first, leaving an interval running
+      // until process exit and a second `start()` returning `{ port: 0 }`.
+      await this.http.stop().catch((cause: unknown) => { console.error('failed to stop HTTP during failed start', cause); });
+      if (this.observer !== null) { await this.observer.stop().catch((cause: unknown) => { console.error('failed to stop observer during failed start', cause); }); this.observer = null; }
+      if (this.browserAcquisitions !== null) { await this.browserAcquisitions.stop().catch((cause: unknown) => { console.error('failed to stop browser acquisitions during failed start', cause); }); this.browserAcquisitions = null; }
+      if (this.stageGraphs !== null) { await this.stageGraphs.stop().catch((cause: unknown) => { console.error('failed to stop stage graphs during failed start', cause); }); this.stageGraphs = null; }
       if (this.grants !== null) { this.grants.close(); this.grants = null; }
       if (this.store !== null) { await this.store.close(); this.store = null; }
       this.relay = null;
+      this.chromeWorker = null;
       throw error;
     }
   }

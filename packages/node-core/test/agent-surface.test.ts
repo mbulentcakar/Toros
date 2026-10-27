@@ -11,9 +11,11 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { request } from 'node:http';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { Worker } from 'node:worker_threads';
 
 import {
   ErrorCode,
@@ -401,6 +403,38 @@ test('a coordinator-minted handle presented through the agent surface is refresh
   assert.equal(inspectBody.status, 'refresh_required');
 });
 
+test('an agent-minted handle presented on the tools surface is refresh_required', async (t) => {
+  // The reverse half of acceptance test 3: a coordinator's handle is refused on
+  // the agent surface (previous test), and an agent's handle is refused on the
+  // tools surface. The agent mints its desktop.state handle with actor
+  // `agent:claude`; the tools surface records `model: "agent:claude"` as actor
+  // `coordinator`, so the fake adapter's (job, actor) binding answers
+  // refresh_required — proving neither party can replay the other's handle.
+  const f = await makeFixture({ operatorToken, agentTokens: { claude: claudeToken }, desktopArGateCleared: true });
+  t.after(() => finish(f));
+  const created = await grant(f, 'claude');
+  assert.equal(created.body.error, undefined, JSON.stringify(created.body));
+
+  // The agent mints its handle through /agent/invoke (actor agent:claude).
+  const stateRes = await post(f.port, '/agent/invoke', {
+    capability: 'desktop.state',
+    parameters: { session_scope: 'interactive' },
+  }, claudeToken);
+  assert.equal(stateRes.body.error, undefined, `state failed: ${JSON.stringify(stateRes.body)}`);
+  const agentHandle = (JSON.parse(String(stateRes.body.output)) as { freshness_token: string }).freshness_token;
+
+  // The same handle presented through the tools surface by a coordinator (actor
+  // coordinator) belongs to a different (job, actor): the fake adapter mirrors
+  // the real adapter's binding and answers refresh_required.
+  const inspectRes = await post(f.port, '/tools/invoke_app_action', {
+    job_id: f.jobId, app_id: 'desktop', action_id: 'inspect', workspace_id: 'work',
+    parameters: { freshness_token: agentHandle, session_scope: 'interactive' }, model: 'agent:claude',
+  }, nodeToken);
+  assert.equal(inspectRes.body.error, undefined, `inspect failed: ${JSON.stringify(inspectRes.body)}`);
+  const inspectBody = JSON.parse(String(inspectRes.body.output)) as { status: string };
+  assert.equal(inspectBody.status, 'refresh_required');
+});
+
 // ---------------------------------------------------------------------------
 // Test 4 — grant lifecycle.
 // ---------------------------------------------------------------------------
@@ -452,6 +486,82 @@ test('a grant create that violates the job foreign key rolls back and surfaces t
   );
   assert.equal(grants.live('claude'), null, 'a failed create must not leave a live grant behind');
   grants.close();
+});
+
+test('retryGrantWrite retries SQLITE_BUSY and gives up only after the deadline', async () => {
+  const { retryGrantWrite } = await import('../src/agent-grants.js');
+
+  // Mirror of `store.test.ts` "retries fast SQLITE_BUSY failures beyond the
+  // former 750ms ceiling": a writer whose `BEGIN IMMEDIATE` surfaces SQLITE_BUSY
+  // must queue and succeed once the contention clears. Without the retry loop
+  // (`retryGrantWrite` reduced to a single `operation()` call) the very first
+  // throw propagates and this assertion fails.
+  let attempts = 0;
+  const grant = await retryGrantWrite(() => {
+    attempts += 1;
+    if (attempts < 5) throw new Error('database is locked (SQLITE_BUSY)');
+    return { grant_id: 'g', agent: 'claude' };
+  });
+  assert.equal(attempts, 5, `expected five attempts before success, saw ${attempts}`);
+  assert.equal(grant.grant_id, 'g');
+
+  // A non-busy error is not retried: it surfaces immediately, in one attempt.
+  let nonBusy = 0;
+  await assert.rejects(
+    retryGrantWrite(() => { nonBusy += 1; throw new Error('FOREIGN KEY constraint failed'); }),
+    /FOREIGN KEY/,
+  );
+  assert.equal(nonBusy, 1, 'a non-busy error must not be retried');
+});
+
+test('a grant create queues behind a competing BEGIN EXCLUSIVE holder and still succeeds', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'toros-agent-busy-'));
+  const dbPath = join(dir, 'node.sqlite');
+  const store = await openStore({ path: dbPath, nodeId: 'node' });
+  await store.createJob(sealEnvelope({
+    job_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    objective: 'sqlite busy queue',
+    allowed_capabilities: ['machine.inventory'],
+    allowed_workspaces: ['work'],
+    acceptance: ['done'],
+    forbidden: [],
+    max_actions: 10,
+    max_retries: 0,
+    expires_at: '2999-01-01T00:00:00Z',
+  }));
+  await store.close();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+
+  // A second connection holds the write lock (`BEGIN EXCLUSIVE`) for a short
+  // delay, the way a store writer would. The grants connection's `busy_timeout`
+  // makes its own `BEGIN IMMEDIATE` wait rather than fail, so `create()` must
+  // queue behind the holder and come back with exactly one live grant — the
+  // "queue rather than fail a second create" guarantee.
+  const source = `
+    import { DatabaseSync } from 'node:sqlite';
+    import { workerData, parentPort } from 'node:worker_threads';
+    const db = new DatabaseSync(workerData.dbPath);
+    db.exec('BEGIN EXCLUSIVE');
+    parentPort.postMessage('locked');
+    setTimeout(() => { db.exec('ROLLBACK'); db.close(); parentPort.postMessage('released'); }, workerData.holdMs);
+  `;
+  const locker = new Worker(source, { eval: true, workerData: { dbPath, holdMs: 600 } });
+  await new Promise<void>((resolve, reject) => {
+    locker.on('message', (m) => m === 'locked' && resolve());
+    locker.once('error', reject);
+  });
+
+  const started = Date.now();
+  const grants = (await import('../src/agent-grants.js')).openAgentGrants(dbPath);
+  await grants.create('claude', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2999-01-01T00:00:00Z');
+  const elapsed = Date.now() - started;
+  assert.equal(grants.live('claude')?.job_id, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  grants.close();
+  await new Promise<void>((resolve, reject) => {
+    locker.on('message', (m) => m === 'released' && resolve());
+    locker.once('error', reject);
+  });
+  assert.ok(elapsed >= 500, `create returned before the lock cleared (${elapsed}ms)`);
 });
 
 test('a terminal job → E_JOB_TERMINAL', async (t) => {
@@ -735,11 +845,13 @@ test('an agent token pasted into a job objective is redacted before it is sealed
 });
 
 // ---------------------------------------------------------------------------
-// Start-up failure — a throw after the grants connection opens must close it
-// (and the store) rather than leak a second handle to the database file.
+// Start-up failure — a throw after the try has started workers must stop them
+// in reverse order (http server, observer, browser acquisitions, stage graphs)
+// and close grants + store, so a retry does not leak a timer, a server, or a
+// database handle, and binds a real port.
 // ---------------------------------------------------------------------------
 
-test('a start that fails after the grants connection opens closes grants and store', async (t) => {
+test('a start that fails after the grants connection opens stops the observer and rebinds a real port', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'toros-agent-start-fail-'));
   const dbPath = join(dir, 'node.sqlite');
   const store = await openStore({ path: dbPath, nodeId: 'node' });
@@ -756,10 +868,13 @@ test('a start that fails after the grants connection opens closes grants and sto
   }));
   await store.close();
 
-  // The observer's start() throws — after openAgentGrants ran but before
-  // http.start(), so the failure happens with both connections open. It throws
-  // only once: the recovery start below must succeed.
+  // The observer's start() throws — after stageGraphs.start() armed its interval
+  // and openAgentGrants ran, but before http.start(). It throws only once: the
+  // recovery start below must succeed. stop() calls and the id are recorded so
+  // the test observes that the catch actually stopped the observer (and does not
+  // merely re-close grants/store).
   let observerStarts = 0;
+  let observerStops = 0;
   const observerFactory = (): import('@toros/contracts').SecurityObserver => ({
     id: 'flaky',
     async start(): Promise<void> {
@@ -768,7 +883,7 @@ test('a start that fails after the grants connection opens closes grants and sto
     },
     onFinding(): void {},
     onRetraction(): void {},
-    async stop(): Promise<void> {},
+    async stop(): Promise<void> { observerStops += 1; },
   });
 
   const core = createNodeCore({
@@ -780,20 +895,79 @@ test('a start that fails after the grants connection opens closes grants and sto
   });
   t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
 
-  // First start fails after the grants connection is opened and the observer
-  // throws; the catch must close both connections before rethrowing.
+  // First start fails after stage graphs started and the grants connection
+  // opened; the catch must stop the observer and close both connections.
   await assert.rejects(core.start(), /observer start boom/);
 
-  // The observable that the failed start released its handles: a subsequent
-  // start on the SAME Core instance succeeds and the grants module works. If
-  // the first start leaked `this.grants` (and `this.store`), the second start
-  // would overwrite the handles and the process would silently hold the first
-  // connection until shutdown; node:sqlite exposes no connection count, so this
-  // recovery start — which re-opens and exercises the same database file — is
-  // the strongest black-box assertion available.
+  // The observer's stop() must have run: if the catch body stopped only grants
+  // and store (finding 4's "partially closed"), this stays zero and fails.
+  assert.equal(observerStops, 1, 'the failed start must stop the observer it started');
+
+  // The observable that the failed start released its handles AND cleared the
+  // half-started HTTP/stage-graph state: a subsequent start on the SAME Core
+  // instance binds a real, non-zero port. If the first start leaked
+  // `this.http.server` (http.start assigns `server` before `listen`), the second
+  // start returns `{ port: 0 }` without reopening the store; and if it leaked
+  // `this.stageGraphs`' interval, a new controller replaces the reference while
+  // the first keeps running. node:sqlite exposes no connection count, so this
+  // recovery start — which reopens and exercises the same database file on a
+  // real port — is the strongest black-box assertion available.
   const { port } = await core.start();
+  assert.ok(port > 0, `the recovery start must bind a real port, got ${port}`);
   const created = await post(port, '/operator/agent_grant_create', { job_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', agent: 'claude' }, operatorToken);
   assert.equal(created.body.error, undefined, `grant failed: ${JSON.stringify(created.body)}`);
   const invoke = await post(port, '/agent/invoke', { capability: 'machine.inventory', parameters: {} }, claudeToken);
   assert.equal(invoke.body.error, undefined, `invoke failed: ${JSON.stringify(invoke.body)}`);
+});
+
+test('a start that fails after http.start assigns its server clears it and rebinds', async (t) => {
+  // A failure AFTER `http.start` has assigned its `server` but before `listen`
+  // resolves: occupy a port, then start Core on that exact port. http.start
+  // assigns `server` and `listen` rejects (EADDRINUSE). The catch must call
+  // http.stop() to clear `server`; otherwise the recovery start returns
+  // `{ port: 0 }` (core.start treats a non-null server as already up).
+  const dir = await mkdtemp(join(tmpdir(), 'toros-agent-start-eaddrinuse-'));
+  const dbPath = join(dir, 'node.sqlite');
+  const store = await openStore({ path: dbPath, nodeId: 'node' });
+  await store.createJob(sealEnvelope({
+    job_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    objective: 'listen-failure cleanup',
+    allowed_capabilities: ['machine.inventory'],
+    allowed_workspaces: ['work'],
+    acceptance: ['done'],
+    forbidden: [],
+    max_actions: 10,
+    max_retries: 0,
+    expires_at: '2999-01-01T00:00:00Z',
+  }));
+  await store.close();
+
+  // Occupy an ephemeral port, then reuse its number for the Core start.
+  const blocker = await new Promise<import('node:net').Server>((resolve) => {
+    const s = createServer();
+    s.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  const address = blocker.address();
+  assert.ok(address !== null && typeof address !== 'string', 'blocker must bind a TCP port');
+  const takenPort = address.port;
+  t.after(async () => { blocker.close(); });
+
+  const core = createNodeCore({
+    node_id: 'node', db_path: dbPath,
+    workspaces: [{ id: 'work', root: dir }], port: takenPort,
+    token: nodeToken, operator_token: operatorToken,
+    adapters: makeAdapters([]), observer: null,
+    approval_required: [], agent_tokens: { claude: claudeToken },
+  });
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+
+  await assert.rejects(core.start());
+
+  // Release the occupied port so the recovery start can bind it. The recovery
+  // start must bind a real port: if the catch body is emptied (finding 4), the
+  // server assigned by the failed http.start survives and http.port() returns 0,
+  // so core.start returns `{ port: 0 }` without reopening the store.
+  await new Promise<void>((resolve) => blocker.close(() => resolve()));
+  const { port } = await core.start();
+  assert.ok(port > 0, `the recovery start must bind a real port, got ${port}`);
 });

@@ -57,9 +57,10 @@ function isSqliteBusy(error: unknown): boolean {
  * `BEGIN IMMEDIATE` writers (`store.ts` `retrySqliteBusy`): `busy_timeout` makes
  * `BEGIN IMMEDIATE` wait synchronously, but SQLite can still return SQLITE_BUSY
  * early (e.g. WAL negotiation), so a contending grant writer must queue rather
- * than fail a second `create` after the first took the write lock.
+ * than fail a second `create` after the first took the write lock. Exported for
+ * tests, the way the store exports `retrySqliteBusy`.
  */
-async function retryGrantWrite<T>(operation: () => T): Promise<T> {
+export async function retryGrantWrite<T>(operation: () => T): Promise<T> {
   const deadline = Date.now() + SQLITE_BUSY_TIMEOUT_MS;
   for (let attempt = 0; ; attempt += 1) {
     try {
