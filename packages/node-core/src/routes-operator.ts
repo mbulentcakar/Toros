@@ -6,12 +6,14 @@ import type { ChromeWorkerAdapter } from '@toros/adapters-chrome';
 
 import type { ApprovalRegistry } from './approvals.js';
 import type { ActionPipeline } from './action-pipeline.js';
+import { isAgentName, type AgentGrants, type AgentName } from './agent-grants.js';
 import type { ConversationGuard } from './conversation-guard.js';
 import { type BrowserAcquisitionController, type BrowserAcquisitionInput } from './browser-acquisition.js';
 import type { CoordinatorControl } from './coordinator-supervisor.js';
 import { MAX_TURN_BYTES, type DraftService } from './draft.js';
 import { asRecord, optionalString, readBody, requiredPositiveInteger, requiredString, send, stringArray, toros, type RouteSurface, type ToolRouteSurface } from './http.js';
 import type { RunCredentials } from './run-credentials.js';
+import { AGENT_DISCOVERY_CAPABILITIES } from './routes-agent.js';
 import { hasModelProfile, MODEL_PROFILES } from './model-profiles.js';
 import { type CreateStageGraphInput, type StageGraphController } from './stage-graph.js';
 
@@ -32,6 +34,8 @@ export function createOperatorRoutes(deps: {
   readonly runCredentials: RunCredentials;
   readonly draft: DraftService;
   readonly tools: ToolRouteSurface;
+  readonly agentGrants: () => AgentGrants;
+  readonly agentTokenConfigured: (agent: AgentName) => boolean;
   readonly conversationFor: (job: JobRecord) => Promise<string>;
   readonly withCoordinatorStartGuard: <T>(jobId: string, work: () => Promise<T>) => Promise<T>;
 }): RouteSurface {
@@ -289,6 +293,47 @@ export function createOperatorRoutes(deps: {
   const findings: OperatorHandler = async (request, response) => {
     const args = asRecord(await readBody(request)); send(response, 200, { findings: await deps.store().listFindings(requiredString(args, 'job_id')) });
   };
+  // ---------------------------------------------------------------------------
+  // Agent grants (spec AT): the operator binds one agent to one job, and only
+  // the operator can create or revoke a grant. Callers cannot name a workspace
+  // on the grant, and the envelope must expose exactly one discovery capability
+  // and exactly one workspace, so the agent surface never makes a choice.
+  // ---------------------------------------------------------------------------
+  const agentGrantCreate: OperatorHandler = async (request, response) => {
+    const args = asRecord(await readBody(request));
+    const current = await job(args);
+    if (isTerminal(current.state)) throw toros(ErrorCode.E_JOB_TERMINAL, `The job is ${current.state}`);
+    const agent = requiredString(args, 'agent');
+    if (!isAgentName(agent)) throw toros(ErrorCode.E_SCHEMA, 'agent must be claude or codex');
+    if (!deps.agentTokenConfigured(agent)) throw toros(ErrorCode.E_SCHEMA, `No bearer token is configured for agent ${agent}`);
+    const hasDiscovery = current.envelope.allowed_capabilities.some((capability) =>
+      (AGENT_DISCOVERY_CAPABILITIES as readonly string[]).includes(capability));
+    if (!hasDiscovery) {
+      throw new TorosError(ErrorCode.E_GRANT_INVALID, 'The job lists no discovery capability', { reason: 'no_discovery_capability' });
+    }
+    if (current.envelope.allowed_workspaces.length !== 1) {
+      throw new TorosError(ErrorCode.E_GRANT_INVALID, 'The job must allow exactly one workspace', { reason: 'workspace_count' });
+    }
+    const rawHours = args['expires_in_hours'];
+    let hours = 8;
+    if (rawHours !== undefined && rawHours !== null) {
+      if (typeof rawHours !== 'number' || !Number.isInteger(rawHours) || rawHours < 1) {
+        throw toros(ErrorCode.E_SCHEMA, 'expires_in_hours must be a positive integer');
+      }
+      hours = rawHours;
+    }
+    const expiresAtMs = Math.min(Date.now() + hours * 60 * 60 * 1000, Date.parse(current.envelope.expires_at));
+    send(response, 200, deps.agentGrants().create(agent, current.job_id, new Date(expiresAtMs).toISOString()));
+  };
+  const agentGrantRevoke: OperatorHandler = async (request, response) => {
+    const args = asRecord(await readBody(request));
+    deps.agentGrants().revoke(requiredString(args, 'grant_id'));
+    send(response, 200, { revoked: true });
+  };
+  const agentGrantsList: OperatorHandler = async (request, response) => {
+    await drain(request);
+    send(response, 200, { grants: deps.agentGrants().list() });
+  };
   const approvals: OperatorHandler = async (request, response) => {
     // Drain the body even though nothing is read from it. An unread request
     // stream keeps a keep-alive socket occupied, so a client that POSTs a
@@ -363,6 +408,9 @@ export function createOperatorRoutes(deps: {
     hermes_stop: hermesStop,
     checkpoint,
     findings,
+    agent_grant_create: agentGrantCreate,
+    agent_grant_revoke: agentGrantRevoke,
+    agent_grants: agentGrantsList,
     approvals,
     approve,
   };
@@ -381,7 +429,8 @@ export function createOperatorRoutes(deps: {
           : error instanceof Error ? toros(ErrorCode.E_ADAPTER_FAILURE, error.message)
             : toros(ErrorCode.E_ADAPTER_FAILURE, String(error));
         const status = e.detail['body_too_large'] === true ? 413 : e.code === ErrorCode.E_PARALLEL_ACTION ? 409 : 400;
-        send(response, status, { error: e.code, message: e.message });
+        const reason = e.detail['reason'];
+        send(response, status, { error: e.code, message: e.message, ...(typeof reason === 'string' ? { reason } : {}) });
       }
     },
   };

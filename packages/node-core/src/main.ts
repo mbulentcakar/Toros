@@ -38,6 +38,7 @@ import { createNodeCore, type ObserverDeps } from './index.js';
 import { createCoordinatorSupervisor } from './coordinator-supervisor.js';
 import { approvalTtlMinutes } from './approvals.js';
 import { validateDesktopAuthorizedApps, resolveNodeSessionId } from './desktop-config.js';
+import { agentTokensFromConfig, desktopArGateCleared } from './agent-config.js';
 
 interface FileConfig {
   readonly node_id: string;
@@ -67,6 +68,21 @@ readonly chrome?: {
    * `token` — Node Core refuses to start otherwise.
    */
   readonly operator_token?: string;
+  /**
+   * Agent discovery bearers (spec AT). Each token is validated at start-up with
+   * the same printable-ASCII/strength/distinctness rules as `token` and
+   * `operator_token`, and is accepted only on the `/agent/*` routes.
+   */
+  readonly agents?: {
+    readonly claude?: { readonly token: string };
+    readonly codex?: { readonly token: string };
+  };
+  /**
+   * The desktop AR gate (spec AT). `ar_gate_cleared` is read strictly as
+   * `=== true`; anything else leaves the gate closed, so `desktop.*` on the
+   * agent surface is refused.
+   */
+  readonly desktop_control?: { readonly ar_gate_cleared?: unknown };
   /**
    * When true, Node Core starts the one-job Hermes coordinator supervisor. When
    * omitted or false (the default), Core serves discovery and typed execution with
@@ -258,6 +274,12 @@ async function main(): Promise<void> {
   // the coordinator OFF. Do not loosen this to a truthiness check.
   const coordinatorEnabled = config.coordinator_enabled === true;
 
+  // Agent discovery bearers and the desktop AR gate (spec AT), both read with
+  // the same fail-closed discipline as coordinator_enabled above: the tokens
+  // are validated at Core start (core.ts), and the gate is exactly `=== true`.
+  const agentTokens = agentTokensFromConfig(config.agents);
+  const desktopArGate = desktopArGateCleared(config.desktop_control);
+
   // The machine adapter reports which adapters are *registered*. Seed that set
   // with the constructed ids, then replace it after start() with the ids that
   // actually registered — an adapter whose init() throws is skipped by the
@@ -302,6 +324,8 @@ async function main(): Promise<void> {
     approval_required: config.approval_required ?? [],
     approval_ttl_minutes: config.approval_ttl_minutes ?? 60,
     ...(config.operator_token === undefined ? {} : { operator_token: config.operator_token }),
+    ...(agentTokens.claude === undefined && agentTokens.codex === undefined ? {} : { agent_tokens: agentTokens }),
+    desktop_ar_gate_cleared: desktopArGate,
     ...(desktopSessionId === null ? {} : { desktop_session_id: desktopSessionId }),
   });
 

@@ -21,6 +21,8 @@ import {
   type SessionSpawn,
 } from '../src/desktop-config.js';
 
+import { agentTokensFromConfig, desktopArGateCleared } from '../src/agent-config.js';
+
 test('accepts a valid AppRule[] (hash, signer+product+original_filename, path)', () => {
   const rules = validateDesktopAuthorizedApps(
     [
@@ -216,4 +218,37 @@ test('defaultNodeSessionIdRunner passes the spawned child an environment with ev
     if (original === undefined) delete process.env['PsModulePath'];
     else process.env['PsModulePath'] = original;
   }
+});
+
+// ---------------------------------------------------------------------------
+// Agent surface config (spec AT): `agents.*.token` extraction and the strict
+// fail-closed `desktop_control.ar_gate_cleared` parse. Process-free, like the
+// desktop config tests above.
+// ---------------------------------------------------------------------------
+
+test('agentTokensFromConfig extracts only configured string tokens', () => {
+  assert.deepEqual(agentTokensFromConfig(undefined), {});
+  assert.deepEqual(agentTokensFromConfig(null), {});
+  assert.deepEqual(agentTokensFromConfig({}), {});
+  assert.deepEqual(
+    agentTokensFromConfig({ claude: { token: 'c'.repeat(40) }, codex: { token: 'd'.repeat(40) } }),
+    { claude: 'c'.repeat(40), codex: 'd'.repeat(40) },
+  );
+});
+
+test('agentTokensFromConfig refuses a non-object, a non-object entry, or a non-string token', () => {
+  assert.throws(() => agentTokensFromConfig('x'), /agents must be an object/);
+  assert.throws(() => agentTokensFromConfig({ claude: 'token' }), /agents\.claude must be an object with a token/);
+  assert.throws(() => agentTokensFromConfig({ claude: { token: 42 } }), /agents\.claude\.token must be a string/);
+  assert.throws(() => agentTokensFromConfig({ codex: { token: true } }), /agents\.codex\.token must be a string/);
+});
+
+test('desktopArGateCleared is strict === true, fail-closed', () => {
+  assert.equal(desktopArGateCleared(undefined), false);
+  assert.equal(desktopArGateCleared(null), false);
+  assert.equal(desktopArGateCleared({}), false);
+  assert.equal(desktopArGateCleared({ ar_gate_cleared: false }), false);
+  assert.equal(desktopArGateCleared({ ar_gate_cleared: 'true' }), false);
+  assert.equal(desktopArGateCleared({ ar_gate_cleared: 1 }), false);
+  assert.equal(desktopArGateCleared({ ar_gate_cleared: true }), true);
 });

@@ -10,6 +10,7 @@ import { openStore } from '@toros/store';
 
 import { createActionPipeline, type SettlementTimingOptions, CORE_RESERVED_RECEIPT_KEYS } from './action-pipeline.js';
 import { approvalTtlMinutes, createApprovalRegistry, type ApprovalRegistry } from './approvals.js';
+import { openAgentGrants, AGENT_NAMES, type AgentGrants, type AgentName } from './agent-grants.js';
 import { BrowserAcquisitionController } from './browser-acquisition.js';
 import { createConversationGuard, type ConversationGuard } from './conversation-guard.js';
 import { createDraftService, type DraftService } from './draft.js';
@@ -17,6 +18,7 @@ import { createHttpTransport, toros, type HttpTransport, type ToolRouteSurface }
 import type { NodeCore, NodeCoreOptions } from './index.js';
 import { createChromeRoutes } from './routes-chrome.js';
 import { createOperatorRoutes } from './routes-operator.js';
+import { createAgentRoutes } from './routes-agent.js';
 import { createToolRoutes } from './routes-tools.js';
 import { createRunCredentials, type RunCredentials } from './run-credentials.js';
 import { StageGraphController } from './stage-graph.js';
@@ -47,6 +49,7 @@ export class Core implements NodeCore {
   private stageGraphs: StageGraphController | null = null;
   private chromeWorker: ChromeWorkerAdapter | null = null;
   private browserAcquisitions: BrowserAcquisitionController | null = null;
+  private grants: AgentGrants | null = null;
   private registeredCapabilities: readonly string[] = [];
   private observer: SecurityObserver | null = null;
   /**
@@ -124,10 +127,21 @@ export class Core implements NodeCore {
       runCredentials: this.runCredentials,
       draft: this.draft,
       tools: this.tools,
+      agentGrants: () => this.getAgentGrants(),
+      agentTokenConfigured: (agent) => this.agentTokenConfigured(agent),
       conversationFor: (job) => this.conversationFor(job),
       withCoordinatorStartGuard: (jobId, work) => this.withCoordinatorStartGuard(jobId, work),
     });
     const chrome = createChromeRoutes({ getChromeWorker: () => this.getChromeWorker() });
+    const agent = createAgentRoutes({
+      store: () => this.getStore(),
+      agentGrants: () => this.getAgentGrants(),
+      agentTokens: options.agent_tokens ?? {},
+      desktopArGateCleared: options.desktop_ar_gate_cleared === true,
+      adapters: options.adapters,
+      actionPipeline,
+      missionHook: () => ({ allow: true }),
+    });
     this.http = createHttpTransport({
       token: options.token,
       ...(options.operator_token === undefined ? {} : { operator_token: options.operator_token }),
@@ -135,6 +149,7 @@ export class Core implements NodeCore {
       tools: this.tools,
       operator,
       chrome,
+      agent,
     });
   }
 
@@ -199,6 +214,33 @@ export class Core implements NodeCore {
         throw new Error('operator_token must differ from token: the coordinator holds token, and it must not be able to approve its own actions');
       }
     }
+    // Agent discovery bearers (spec AT): the same three-pass discipline — shape,
+    // strength, distinctness — applied to a third bearer class. A weak or shared
+    // agent token must refuse to start, never merely fail at the route: the
+    // `/agent/*` surface lets a session read desktop and machine discovery on an
+    // operator-granted job, so its credential is held to the same bar.
+    const agentTokens = this.options.agent_tokens ?? {};
+    for (const name of AGENT_NAMES) {
+      const value = agentTokens[name];
+      if (value !== undefined) assertPrintableAscii(value, `agents.${name}.token`);
+    }
+    for (const name of AGENT_NAMES) {
+      const value = agentTokens[name];
+      if (value !== undefined && value.length < 32) {
+        throw new Error(`agents.${name}.token must be at least 32 characters`);
+      }
+    }
+    for (const name of AGENT_NAMES) {
+      const value = agentTokens[name];
+      if (value === undefined) continue;
+      if (value === this.options.token) throw new Error(`agents.${name}.token must differ from token`);
+      if (operatorToken !== undefined && operatorToken.length > 0 && value === operatorToken) {
+        throw new Error(`agents.${name}.token must differ from operator_token`);
+      }
+    }
+    if (agentTokens.claude !== undefined && agentTokens.codex !== undefined && agentTokens.claude === agentTokens.codex) {
+      throw new Error('agents.claude.token must differ from agents.codex.token');
+    }
     // A gate nobody can open is a broken node that looks like a working one:
     // every gated action would deny E_APPROVAL_REQUIRED forever, and the only
     // symptom would be work quietly not happening. Refuse to start instead, and
@@ -206,6 +248,10 @@ export class Core implements NodeCore {
     if (gated.length > 0 && (operatorToken === undefined || operatorToken.length === 0)) {
       throw new Error(`operator_token of at least 32 characters is required because these capabilities need approval: ${gated.join(', ')}`);
     }
+    // Open the grants connection after `openStore` applied the migrations, and
+    // only after the start-up checks above passed — a refused start must not
+    // leak a second connection to the same database file.
+    this.grants = openAgentGrants(this.options.db_path);
     this.policy = createPolicy({ registry, approval_required: this.options.approval_required, approvals: this.approvals, ...(this.options.desktop_session_id === undefined ? {} : { desktop_session_id: this.options.desktop_session_id }) });
     // The relay resolves selected_files against a workspace root, so it needs
     // one workspace. Phase 1 has exactly one sandbox root (SPEC 12.2).
@@ -292,6 +338,7 @@ export class Core implements NodeCore {
     this.chromeWorker = null;
     this.runCredentials.clear();
     for (const adapter of this.options.adapters) { try { await adapter.dispose(); } catch { /* best effort during shutdown */ } }
+    if (this.grants !== null) { this.grants.close(); this.grants = null; }
     if (this.store !== null) { await this.store.close(); this.store = null; }
     this.relay = null;
     // Both of these are documented as process-scoped and neither was cleared,
@@ -330,6 +377,8 @@ export class Core implements NodeCore {
 
   private jobForSession(sessionId: string): string | null { return this.sessionJobs.get(sessionId) ?? null; }
   private getStore(): Store { if (this.store === null) throw new Error('Node Core is not started'); return this.store; }
+  private getAgentGrants(): AgentGrants { if (this.grants === null) throw new Error('Node Core is not started'); return this.grants; }
+  private agentTokenConfigured(agent: AgentName): boolean { return this.options.agent_tokens?.[agent] !== undefined; }
   private getPolicy(): Policy { if (this.policy === null) throw new Error('Node Core is not started'); return this.policy; }
   private getRelay(): Relay { if (this.relay === null) throw new Error('Node Core is not started'); return this.relay; }
   private getStageGraphs(): StageGraphController { if (this.stageGraphs === null) throw new Error('Node Core is not started'); return this.stageGraphs; }

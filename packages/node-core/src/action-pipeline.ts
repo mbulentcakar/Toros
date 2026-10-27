@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import {
   ErrorCode, TorosError, digest,
   type ActionResult, type ActionSchema, type Adapter, type AdapterContext,
-  type AppIdentity, type CapabilityId, type JsonValue, type Receipt, type ResolvedTarget, type SessionAdapter, type Store, type TargetDecisions, type Workspace,
+  type AppIdentity, type CapabilityId, type JsonValue, type PolicyDecision, type Receipt, type ResolvedTarget, type SessionAdapter, type Store, type TargetDecisions, type Workspace,
 } from '@toros/contracts';
 import type { Policy } from '@toros/policy';
 
@@ -305,13 +305,19 @@ function resolvePathArgs(
  * `operator` means a human acted at the console. Nothing arriving over the HTTP
  * tool surface qualifies, so the value is reserved: a caller that asks for it —
  * in any case, with any surrounding whitespace — is recorded as the coordinator
- * it actually is. Everything else is kept as a model identifier, trimmed and
- * bounded so a receipt cannot be padded out with arbitrary text.
+ * it actually is. Spec AT adds the same reservation for the `agent:` prefix,
+ * which belongs to the `/agent/*` routes alone (they set it from the matched
+ * bearer and never call this function): a coordinator-supplied label starting
+ * with `agent:` is recorded as the coordinator, so a coordinator can never
+ * reuse an agent's handles or continuation tokens. Everything else is kept as a
+ * model identifier, trimmed and bounded so a receipt cannot be padded out with
+ * arbitrary text.
  */
 function coordinatorActor(supplied: string | null): string {
   const label = (supplied ?? '').trim();
   if (label.length === 0) return 'coordinator';
-  if (label.toLowerCase() === 'operator') return 'coordinator';
+  const lower = label.toLowerCase();
+  if (lower === 'operator' || lower.startsWith('agent:')) return 'coordinator';
   return label.slice(0, 128);
 }
 
@@ -326,6 +332,19 @@ export interface ActionPipeline {
   readonly execute: (tool: string, args: Readonly<Record<string, JsonValue>>) => Promise<unknown>;
   readonly replay: (approvalId: string, jobId: string) => Promise<unknown>;
   /**
+   * The node-core-internal entry point for the agent surface (spec AT). Runs a
+   * single `invoke_app_action` built here — never from caller-supplied
+   * `job_id`/`workspace_id`/`model`/`actor` — with the ordinary policy /
+   * forbidden / A8-resolve / budgets / receipts / timeouts path, only with
+   * `actor = agent:<name>`. Does NOT call `coordinatorActor`.
+   *
+   * `modeRefusal` is set when the agent route has already ruled the call
+   * out-of-mode (a capability outside the discovery three): the pipeline then
+   * records a denied receipt and throws the code rather than reaching an
+   * adapter, so the refusal is audited exactly like a policy denial.
+   */
+  readonly executeAgent: (args: AgentExecution) => Promise<unknown>;
+  /**
    * Restart reconciliation for the `send_cli` settlement deadline: settlement
    * timers are in-memory and die with the process, so at Core start any
    * `send_cli` receipt still `running` whose deadline
@@ -333,6 +352,16 @@ export interface ActionPipeline {
    * same way the in-process deadline would have closed it.
    */
   readonly reconcileCliSettlements: () => Promise<void>;
+}
+
+export interface AgentExecution {
+  readonly job_id: string;
+  readonly workspace_id: string;
+  readonly capability: CapabilityId;
+  /** Schema-filtered parameters (the route drops everything the schema does not declare). */
+  readonly parameters: Readonly<Record<string, JsonValue>>;
+  readonly actor: string;
+  readonly modeRefusal?: { readonly code: ErrorCode; readonly reason?: string };
 }
 
 export function createActionPipeline(deps: {
@@ -435,7 +464,7 @@ export function createActionPipeline(deps: {
     };
   }
 
-  async function runPrepared(prepared: ApprovalReplayAction, approvalToken: string | null, mayRequestApproval: boolean): Promise<unknown> {
+  async function runPrepared(prepared: ApprovalReplayAction, approvalToken: string | null, mayRequestApproval: boolean, preDecision?: PolicyDecision): Promise<unknown> {
     const jobId = prepared.job_id;
     if (locks.has(jobId)) throw toros(ErrorCode.E_PARALLEL_ACTION, 'An action for this job is already running');
     locks.add(jobId);
@@ -463,7 +492,7 @@ export function createActionPipeline(deps: {
       // Derived from the receipts rather than a new column, so there is one
       // source of truth and no state to fall out of step with the audit log.
       const retries = await retriesUsed(store, jobId, capability, actionArgs);
-      const decision = deps.policy().decide({ envelope: currentJob.envelope, envelope_digest: currentJob.envelope_digest, state: currentJob.state, actions_used: currentJob.actions_used, retries_used: retries, capability, arguments: actionArgs, workspace_id: sessionWorkspaceId, paths: actionSchema === null ? [] : paths(actionArgs, actionSchema), approval_token: approvalToken, now: new Date() });
+      const decision = preDecision ?? deps.policy().decide({ envelope: currentJob.envelope, envelope_digest: currentJob.envelope_digest, state: currentJob.state, actions_used: currentJob.actions_used, retries_used: retries, capability, arguments: actionArgs, workspace_id: sessionWorkspaceId, paths: actionSchema === null ? [] : paths(actionArgs, actionSchema), approval_token: approvalToken, now: new Date() });
       await store.appendEvent({ node_id: deps.node_id, job_id: jobId, kind: 'action.decided', payload: decision });
       const started = now();
       // The actor is a LABEL supplied by the caller, so it must not be able to
@@ -972,5 +1001,38 @@ export function createActionPipeline(deps: {
     return Math.max(0, failures - 1);
   }
 
-  return { execute, replay, reconcileCliSettlements };
+  /**
+   * Build the prepared `invoke_app_action` for an agent call directly: the
+   * `job_id` is the granted job, `workspace_id` the envelope's single entry,
+   * and `actor` the `agent:<name>` the route derived from the matched bearer.
+   * Nothing the caller smuggled into a body field reaches this. The
+   * `modeRefusal` case substitutes the route's refusal for a policy call so the
+   * denial is recorded as an ordinary denied receipt and never executes.
+   */
+  async function executeAgent(input: AgentExecution): Promise<unknown> {
+    const dot = input.capability.indexOf('.');
+    const actionId = dot === -1 ? input.capability : input.capability.slice(dot + 1);
+    const prepared: ApprovalReplayAction = {
+      tool: 'invoke_app_action',
+      job_id: input.job_id,
+      capability: input.capability,
+      action_id: actionId,
+      arguments: structuredClone(input.parameters),
+      workspace_id: input.workspace_id,
+      session_id: null,
+      session_adapter_id: null,
+      actor: input.actor,
+    };
+    if (input.modeRefusal !== undefined) {
+      const decision: PolicyDecision = {
+        allow: false,
+        code: input.modeRefusal.code,
+        reason: input.modeRefusal.reason ?? 'The action is not permitted on the agent surface',
+      };
+      return runPrepared(prepared, null, false, decision);
+    }
+    return runPrepared(prepared, null, false);
+  }
+
+  return { execute, replay, executeAgent, reconcileCliSettlements };
 }
