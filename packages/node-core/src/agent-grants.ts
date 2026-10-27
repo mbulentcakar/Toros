@@ -33,9 +33,10 @@ export interface AgentGrants {
   /**
    * Replace the agent's live grant, if any, with a new one, in a single
    * `BEGIN IMMEDIATE` transaction. The partial unique index turns a lost race
-   * into a failure rather than a second live grant.
+   * into a failure rather than a second live grant. Retried on SQLITE_BUSY the
+   * way the store retries its own `BEGIN IMMEDIATE` writers.
    */
-  create(agent: AgentName, jobId: string, expiresAt: string): AgentGrant;
+  create(agent: AgentName, jobId: string, expiresAt: string): Promise<AgentGrant>;
   /** Revoke by id; idempotent and a no-op when the id is unknown. */
   revoke(grantId: string): void;
   /** The agent's row with `revoked_at IS NULL`, or null. */
@@ -46,6 +47,32 @@ export interface AgentGrants {
 }
 
 const SQLITE_BUSY_TIMEOUT_MS = 15_000;
+
+function isSqliteBusy(error: unknown): boolean {
+  return error instanceof Error && /SQLITE_BUSY|database is locked/i.test(error.message);
+}
+
+/**
+ * Retry a grant write on SQLITE_BUSY, exactly like the store retries its own
+ * `BEGIN IMMEDIATE` writers (`store.ts` `retrySqliteBusy`): `busy_timeout` makes
+ * `BEGIN IMMEDIATE` wait synchronously, but SQLite can still return SQLITE_BUSY
+ * early (e.g. WAL negotiation), so a contending grant writer must queue rather
+ * than fail a second `create` after the first took the write lock.
+ */
+async function retryGrantWrite<T>(operation: () => T): Promise<T> {
+  const deadline = Date.now() + SQLITE_BUSY_TIMEOUT_MS;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return operation();
+    } catch (error: unknown) {
+      if (!isSqliteBusy(error)) throw error;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw error;
+      const delay = Math.min(50 * 2 ** Math.min(attempt, 5), 1_000, remaining);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
 
 export function openAgentGrants(dbPath: string): AgentGrants {
   const db = new DatabaseSync(dbPath);
@@ -83,20 +110,34 @@ export function openAgentGrants(dbPath: string): AgentGrants {
   }
 
   return {
-    create(agent, jobId, expiresAt): AgentGrant {
+    async create(agent, jobId, expiresAt): Promise<AgentGrant> {
       const grantId = randomUUID();
       const createdAt = new Date().toISOString();
-      db.exec('BEGIN IMMEDIATE');
-      try {
-        // Revoke the live row first so the new grant is the only live one; the
-        // partial unique index backs this up against a lost race.
-        revokeLive.run(createdAt, agent);
-        insert.run(grantId, agent, jobId, createdAt, expiresAt);
-        db.exec('COMMIT');
-      } catch (error) {
-        db.exec('ROLLBACK');
-        throw error;
-      }
+      await retryGrantWrite(() => {
+        // BEGIN IMMEDIATE takes the write lock up front, serialising grant
+        // writers. `busy_timeout` makes it wait, and `retryGrantWrite` re-runs
+        // the whole transaction when SQLite still refuses with SQLITE_BUSY.
+        let began = false;
+        try {
+          db.exec('BEGIN IMMEDIATE');
+          began = true;
+          // Revoke the live row first so the new grant is the only live one; the
+          // partial unique index backs this up against a lost race.
+          revokeLive.run(createdAt, agent);
+          insert.run(grantId, agent, jobId, createdAt, expiresAt);
+          db.exec('COMMIT');
+        } catch (error) {
+          if (began) {
+            // Roll back a half-open transaction, but never let a ROLLBACK
+            // failure mask the original error: `error` is what the caller must
+            // see. No transaction was opened when `BEGIN IMMEDIATE` itself
+            // threw, and a ROLLBACK there would only manufacture a second,
+            // hiding error.
+            try { db.exec('ROLLBACK'); } catch { /* keep the original error */ }
+          }
+          throw error;
+        }
+      });
       return {
         grant_id: grantId,
         agent,

@@ -323,7 +323,7 @@ export function createOperatorRoutes(deps: {
       hours = rawHours;
     }
     const expiresAtMs = Math.min(Date.now() + hours * 60 * 60 * 1000, Date.parse(current.envelope.expires_at));
-    send(response, 200, deps.agentGrants().create(agent, current.job_id, new Date(expiresAtMs).toISOString()));
+    send(response, 200, await deps.agentGrants().create(agent, current.job_id, new Date(expiresAtMs).toISOString()));
   };
   const agentGrantRevoke: OperatorHandler = async (request, response) => {
     const args = asRecord(await readBody(request));

@@ -72,7 +72,7 @@ export class Core implements NodeCore {
   constructor(private readonly options: NodeCoreOptions) {
     this.approvals = createApprovalRegistry(approvalTtlMinutes(options.approval_ttl_minutes) * 60 * 1000);
     this.conversationGuard = createConversationGuard();
-    this.runCredentials = createRunCredentials(options.token, options.operator_token);
+    this.runCredentials = createRunCredentials(options.token, options.operator_token, options.agent_tokens);
     this.draft = createDraftService({
       node_id: options.node_id,
       workspaces: options.workspaces,
@@ -252,81 +252,91 @@ export class Core implements NodeCore {
     // only after the start-up checks above passed — a refused start must not
     // leak a second connection to the same database file.
     this.grants = openAgentGrants(this.options.db_path);
-    this.policy = createPolicy({ registry, approval_required: this.options.approval_required, approvals: this.approvals, ...(this.options.desktop_session_id === undefined ? {} : { desktop_session_id: this.options.desktop_session_id }) });
-    // The relay resolves selected_files against a workspace root, so it needs
-    // one workspace. Phase 1 has exactly one sandbox root (SPEC 12.2).
-    const relayWorkspace = this.options.workspaces[0];
-    if (relayWorkspace !== undefined) {
-      this.relay = createRelay({ store, workspace: relayWorkspace, output_dir: join(relayWorkspace.root, '_relay'), max_capsule_bytes: 256 * 1024 * 1024, node_id: this.options.node_id });
-    }
-    this.stageGraphs = new StageGraphController({
-      db_path: this.options.db_path,
-      node_id: this.options.node_id,
-      workspaces: this.options.workspaces,
-      registered_capabilities: () => this.registeredCapabilities,
-      store: () => this.getStore(),
-      create_job: (args) => this.draft.createJobFromArgs(args),
-      start_job: (job, operatorMessage) => this.startCoordinatorForJob(job, operatorMessage),
-      coordinator_status: (jobId) => this.options.coordinator?.status(jobId) ?? null,
-      coordinator_stop: (jobId) => this.options.coordinator?.stop(jobId) ?? Promise.resolve(null),
-    });
-    await this.stageGraphs.start();
-    if (this.chromeWorker !== null) {
-      this.browserAcquisitions = new BrowserAcquisitionController({
+    try {
+      this.policy = createPolicy({ registry, approval_required: this.options.approval_required, approvals: this.approvals, ...(this.options.desktop_session_id === undefined ? {} : { desktop_session_id: this.options.desktop_session_id }) });
+      // The relay resolves selected_files against a workspace root, so it needs
+      // one workspace. Phase 1 has exactly one sandbox root (SPEC 12.2).
+      const relayWorkspace = this.options.workspaces[0];
+      if (relayWorkspace !== undefined) {
+        this.relay = createRelay({ store, workspace: relayWorkspace, output_dir: join(relayWorkspace.root, '_relay'), max_capsule_bytes: 256 * 1024 * 1024, node_id: this.options.node_id });
+      }
+      this.stageGraphs = new StageGraphController({
         db_path: this.options.db_path,
+        node_id: this.options.node_id,
         workspaces: this.options.workspaces,
-        allowed_domains: () => this.getChromeWorker().status().allowed_domains,
-        worker_status: () => this.getChromeWorker().status(),
+        registered_capabilities: () => this.registeredCapabilities,
         store: () => this.getStore(),
         create_job: (args) => this.draft.createJobFromArgs(args),
-        invoke_action: async (job, workspaceId, actionId, parameters) => {
-          return await this.tools.dispatch('invoke_app_action', {
-            job_id: job.job_id, app_id: 'chrome', action_id: actionId,
-            parameters, workspace_id: workspaceId, model: 'browser-acquisition',
-          }) as { readonly output: string; readonly artifacts: readonly string[] };
-        },
+        start_job: (job, operatorMessage) => this.startCoordinatorForJob(job, operatorMessage),
+        coordinator_status: (jobId) => this.options.coordinator?.status(jobId) ?? null,
+        coordinator_stop: (jobId) => this.options.coordinator?.stop(jobId) ?? Promise.resolve(null),
       });
-      await this.browserAcquisitions.start();
-    }
-    const verification = await store.verifyChain(this.options.node_id);
-    console.info('event chain verification', verification);
-    this.observer = typeof this.options.observer === 'function'
-      ? this.options.observer({ resolveSession: (correlationId) => this.resolveSession(correlationId), jobForSession: (sessionId) => this.jobForSession(sessionId) })
-      : this.options.observer;
-    if (this.observer !== null) {
-      this.observer.onFinding((finding) => {
-        // A rejected write here used to be an unhandled rejection, which on a
-        // service is a crash. The observer is an audit channel, not a control
-        // channel: it must not be able to take the node down.
-        void store.putFinding({ ...finding, finding_id: randomUUID() })
-          .catch((error: unknown) => { console.error('failed to record finding', error); });
-      });
-      // Registering this is what makes the retraction channel exist. The
-      // contract, the correlator emission and the event kind were all in place
-      // and nothing listened, so every route-3 invalidation was built, emitted
-      // and dropped — and the log kept the withdrawn attribution as if it still
-      // stood. Appended, never an edit (SPEC §8.2): the record shows both what
-      // was believed and when it stopped being believed.
-      this.observer.onRetraction((retraction) => {
-        void store.appendEvent({
-          node_id: this.options.node_id,
-          // Null when the withdrawn session is not one of ours — the retraction
-          // is still worth recording, and job_id is nullable for exactly this.
-          job_id: this.jobForSession(retraction.retracted_session_id),
-          kind: 'finding.correlation_retracted',
-          payload: {
-            run_id: retraction.run_id,
-            retracted_session_id: retraction.retracted_session_id,
-            retracted_finding_keys: [...retraction.retracted_finding_keys],
-            observed_at: retraction.observed_at,
-            reason: retraction.reason,
+      await this.stageGraphs.start();
+      if (this.chromeWorker !== null) {
+        this.browserAcquisitions = new BrowserAcquisitionController({
+          db_path: this.options.db_path,
+          workspaces: this.options.workspaces,
+          allowed_domains: () => this.getChromeWorker().status().allowed_domains,
+          worker_status: () => this.getChromeWorker().status(),
+          store: () => this.getStore(),
+          create_job: (args) => this.draft.createJobFromArgs(args),
+          invoke_action: async (job, workspaceId, actionId, parameters) => {
+            return await this.tools.dispatch('invoke_app_action', {
+              job_id: job.job_id, app_id: 'chrome', action_id: actionId,
+              parameters, workspace_id: workspaceId, model: 'browser-acquisition',
+            }) as { readonly output: string; readonly artifacts: readonly string[] };
           },
-        }).catch((error: unknown) => { console.error('failed to record correlation retraction', error); });
-      });
-      await this.observer.start();
+        });
+        await this.browserAcquisitions.start();
+      }
+      const verification = await store.verifyChain(this.options.node_id);
+      console.info('event chain verification', verification);
+      this.observer = typeof this.options.observer === 'function'
+        ? this.options.observer({ resolveSession: (correlationId) => this.resolveSession(correlationId), jobForSession: (sessionId) => this.jobForSession(sessionId) })
+        : this.options.observer;
+      if (this.observer !== null) {
+        this.observer.onFinding((finding) => {
+          // A rejected write here used to be an unhandled rejection, which on a
+          // service is a crash. The observer is an audit channel, not a control
+          // channel: it must not be able to take the node down.
+          void store.putFinding({ ...finding, finding_id: randomUUID() })
+            .catch((error: unknown) => { console.error('failed to record finding', error); });
+        });
+        // Registering this is what makes the retraction channel exist. The
+        // contract, the correlator emission and the event kind were all in place
+        // and nothing listened, so every route-3 invalidation was built, emitted
+        // and dropped — and the log kept the withdrawn attribution as if it still
+        // stood. Appended, never an edit (SPEC §8.2): the record shows both what
+        // was believed and when it stopped being believed.
+        this.observer.onRetraction((retraction) => {
+          void store.appendEvent({
+            node_id: this.options.node_id,
+            // Null when the withdrawn session is not one of ours — the retraction
+            // is still worth recording, and job_id is nullable for exactly this.
+            job_id: this.jobForSession(retraction.retracted_session_id),
+            kind: 'finding.correlation_retracted',
+            payload: {
+              run_id: retraction.run_id,
+              retracted_session_id: retraction.retracted_session_id,
+              retracted_finding_keys: [...retraction.retracted_finding_keys],
+              observed_at: retraction.observed_at,
+              reason: retraction.reason,
+            },
+          }).catch((error: unknown) => { console.error('failed to record correlation retraction', error); });
+        });
+        await this.observer.start();
+      }
+      const started = await this.http.start(this.options.port);
+      return { port: started.port, registered_capabilities: this.registeredCapabilities };
+    } catch (error) {
+      // A start that fails after the grants connection (or the store) is open
+      // must close both, not leave a second handle to the database file that a
+      // later start() would orphan and leak.
+      if (this.grants !== null) { this.grants.close(); this.grants = null; }
+      if (this.store !== null) { await this.store.close(); this.store = null; }
+      this.relay = null;
+      throw error;
     }
-    const started = await this.http.start(this.options.port);
-    return { port: started.port, registered_capabilities: this.registeredCapabilities };
   }
 
   async stop(): Promise<void> {

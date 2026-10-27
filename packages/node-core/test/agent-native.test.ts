@@ -179,9 +179,25 @@ describe('AT1 Native Core Integration (agent surface over a real Core)', () => {
     assert.strictEqual(inspectRes.body.error, undefined);
     const inspectBody = JSON.parse(String(inspectRes.body.output)) as { status: string; controls: Array<Record<string, unknown>> };
     assert.strictEqual(inspectBody.status, 'ok');
+    assert.ok(inspectBody.controls.length > 0, 'must inspect at least one control');
     for (const ctrl of inspectBody.controls) {
       assert.strictEqual(ctrl['name'], undefined, 'No control may possess a "name" property');
       assert.strictEqual(ctrl['value'], undefined, 'No control may possess a "value" property');
+    }
+
+    // The canaries must not leak into anything the agent surfaced or that was
+    // persisted (a receipt or event), matching the sibling assertion in
+    // desktop-native-core.test.ts. The fixture window has all three, so their
+    // absence here proves the redaction travelled end to end.
+    const actionOutputText = JSON.stringify({ state: stateRes.body, inspect: inspectRes.body });
+    const canaryStore = await openStore({ path: dbPath, nodeId: 'node' });
+    const canaryReceipts = await canaryStore.listReceipts(jobId);
+    const canaryEvents = await canaryStore.listEvents(jobId);
+    await canaryStore.close();
+    const persistedText = JSON.stringify({ receipts: canaryReceipts, events: canaryEvents });
+    for (const canary of [fixture.canaryPwd, fixture.canaryTxt, fixture.canaryLbl]) {
+      assert.ok(!actionOutputText.includes(canary), `canary "${canary}" must NOT appear in any action output`);
+      assert.ok(!persistedText.includes(canary), `canary "${canary}" must NOT appear in any persisted receipt or event`);
     }
 
     // 3. a reused handle gives refresh_required.

@@ -8,6 +8,7 @@
  * test. No PowerShell, no Windows, no real desktop.
  */
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -117,12 +118,29 @@ function makeAdapters(calls: FakeCall[], slowMs = 0): Adapter[] {
     if (slowMs > 0) return new Promise((resolve) => setTimeout(() => { void work().then(resolve); }, slowMs));
     return work();
   };
+  // Mirror the real desktop adapter's (job, actor) handle binding: desktop.state
+  // mints a single-use freshness token bound to the caller's (job, actor), and
+  // desktop.inspect spends it exactly once, refusing a token minted for a
+  // different (job, actor) — or a reused one — with refresh_required. This is
+  // the handle half of the agent: prefix reservation the acceptance tests prove.
+  const handles = new Map<string, { job_id: string; actor: string; consumed: boolean }>();
   const desktop: Adapter = {
     manifest: desktopManifest(),
     async init() {},
     async invoke(actionId, args, ctx): Promise<ActionResult> {
-      if (actionId === 'state') return record('desktop.state', args, ctx, JSON.stringify({ session: 'active', freshness_token: 'tok', windows: [] }));
-      return record('desktop.inspect', args, ctx, JSON.stringify({ status: 'ok', controls: [] }));
+      if (actionId === 'state') {
+        const token = randomUUID();
+        handles.set(token, { job_id: ctx.job_id, actor: ctx.actor, consumed: false });
+        return record('desktop.state', args, ctx, JSON.stringify({ session: 'active', freshness_token: token, windows: [] }));
+      }
+      const supplied = typeof args['freshness_token'] === 'string' ? args['freshness_token'] : null;
+      const handle = supplied === null ? undefined : handles.get(supplied);
+      const valid = handle !== undefined && handle.job_id === ctx.job_id && handle.actor === ctx.actor && !handle.consumed;
+      if (!valid) {
+        return record('desktop.inspect', args, ctx, JSON.stringify({ status: 'refresh_required', controls: [] }));
+      }
+      handle.consumed = true;
+      return record('desktop.inspect', args, ctx, JSON.stringify({ status: 'ok', controls: [{ kind: 'text' }] }));
     },
     async dispose() {},
   };
@@ -354,6 +372,35 @@ test('an agent: model label over HTTP and in-process dispatch records actor coor
   for (const receipt of receipts) assert.equal(receipt.actor, 'coordinator');
 });
 
+test('a coordinator-minted handle presented through the agent surface is refresh_required', async (t) => {
+  const f = await makeFixture({ operatorToken, agentTokens: { claude: claudeToken }, desktopArGateCleared: true });
+  t.after(() => finish(f));
+  const created = await grant(f, 'claude');
+  assert.equal(created.body.error, undefined, JSON.stringify(created.body));
+
+  // A coordinator labels its model "agent:claude"; the reservation records the
+  // actor as coordinator, so the handle the coordinator mints is bound to
+  // (job, coordinator).
+  const stateRes = await post(f.port, '/tools/invoke_app_action', {
+    job_id: f.jobId, app_id: 'desktop', action_id: 'state', workspace_id: 'work',
+    parameters: { session_scope: 'interactive' }, model: 'agent:claude',
+  }, nodeToken);
+  assert.equal(stateRes.body.error, undefined, `state failed: ${JSON.stringify(stateRes.body)}`);
+  const coordinatorHandle = (JSON.parse(String(stateRes.body.output)) as { freshness_token: string }).freshness_token;
+
+  // The same handle presented by the agent bearer (actor agent:claude) belongs
+  // to a different (job, actor): the fake adapter mirrors the real adapter's
+  // binding and answers refresh_required, proving an agent cannot replay a
+  // coordinator's handle.
+  const inspectRes = await post(f.port, '/agent/invoke', {
+    capability: 'desktop.inspect',
+    parameters: { freshness_token: coordinatorHandle, session_scope: 'interactive' },
+  }, claudeToken);
+  assert.equal(inspectRes.body.error, undefined, `inspect failed: ${JSON.stringify(inspectRes.body)}`);
+  const inspectBody = JSON.parse(String(inspectRes.body.output)) as { status: string };
+  assert.equal(inspectBody.status, 'refresh_required');
+});
+
 // ---------------------------------------------------------------------------
 // Test 4 — grant lifecycle.
 // ---------------------------------------------------------------------------
@@ -384,10 +431,27 @@ test('a grant whose expires_at has passed → E_EXPIRED', async (t) => {
   const f = await makeFixture({ agentTokens: { claude: claudeToken } });
   t.after(() => finish(f));
   const grants = (await import('../src/agent-grants.js')).openAgentGrants(f.dbPath);
-  grants.create('claude', f.jobId, '2020-01-01T00:00:00Z');
+  await grants.create('claude', f.jobId, '2020-01-01T00:00:00Z');
   grants.close();
   const result = await post(f.port, '/agent/invoke', { capability: 'machine.inventory', parameters: {} }, claudeToken);
   assert.equal(result.body.error, ErrorCode.E_EXPIRED);
+});
+
+test('a grant create that violates the job foreign key rolls back and surfaces the original error', async (t) => {
+  const f = await makeFixture({ operatorToken, agentTokens: { claude: claudeToken } });
+  t.after(() => finish(f));
+  const grants = (await import('../src/agent-grants.js')).openAgentGrants(f.dbPath);
+
+  // `agent_grants.job_id` references `jobs(job_id)` and `foreign_keys` is ON:
+  // the INSERT fails, the half-open transaction must roll back (leaving no live
+  // grant), and the surfaced error is the constraint violation — not a
+  // "ROLLBACK without transaction" masking it.
+  await assert.rejects(
+    grants.create('claude', 'no-such-job-id', '2999-01-01T00:00:00Z'),
+    /FOREIGN KEY|constraint/i,
+  );
+  assert.equal(grants.live('claude'), null, 'a failed create must not leave a live grant behind');
+  grants.close();
 });
 
 test('a terminal job → E_JOB_TERMINAL', async (t) => {
@@ -544,18 +608,6 @@ test('desktop.* is E_MODE_DENIED (ar_gate) unless the flag is exactly true', asy
   }
 });
 
-test('a string "true" flag leaves the gate closed (strict === true)', async (t) => {
-  const f = await makeFixture({ operatorToken, agentTokens: { claude: claudeToken } });
-  // Cast through an unknown-typed option to simulate the hand-edited config.
-  (f.core as unknown as { options: { desktop_ar_gate_cleared: unknown } }).options.desktop_ar_gate_cleared = ('true' as unknown);
-  t.after(() => finish(f));
-  const created = await grant(f, 'claude');
-  assert.equal(created.body.error, undefined);
-  const denied = await post(f.port, '/agent/invoke', { capability: 'desktop.state', parameters: {} }, claudeToken);
-  assert.equal(denied.body.error, ErrorCode.E_MODE_DENIED);
-  assert.equal(denied.body.reason, 'ar_gate');
-});
-
 // ---------------------------------------------------------------------------
 // Test 6a — smuggling.
 // ---------------------------------------------------------------------------
@@ -614,17 +666,134 @@ test('agent calls spend max_actions, then E_BUDGET_EXHAUSTED', async (t) => {
 // ---------------------------------------------------------------------------
 
 test('a second concurrent call for the same agent is 409 E_PARALLEL_ACTION', async (t) => {
-  const f = await makeFixture({ operatorToken, agentTokens: { claude: claudeToken }, desktopArGateCleared: true, slowMs: 300 });
+  const f = await makeFixture({ operatorToken, agentTokens: { claude: claudeToken }, slowMs: 300 });
   t.after(() => finish(f));
   const created = await grant(f, 'claude');
   assert.equal(created.body.error, undefined, JSON.stringify(created.body));
 
-  const [a, b] = await Promise.all([
-    post(f.port, '/agent/invoke', { capability: 'machine.inventory', parameters: {} }, claudeToken),
-    post(f.port, '/agent/invoke', { capability: 'machine.inventory', parameters: {} }, claudeToken),
-  ]);
-  const statuses = [a.status, b.status].sort();
-  assert.deepEqual(statuses, [200, 409], `expected one 200 and one 409, got ${JSON.stringify(statuses)}`);
-  const conflicted = a.status === 409 ? a : b;
-  assert.equal(conflicted.body.error, ErrorCode.E_PARALLEL_ACTION);
+  // A SECOND job, so the second invoke targets a different job than the first:
+  // `runPrepared` keys its lock on `job_id` (action-pipeline.ts:469), so if the
+  // 409 relied on that lock it could not fire here — the two invokes would
+  // carry different job ids. The 409 must therefore come from the per-agent
+  // lock in routes-agent.ts alone.
+  const secondJobId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const store = await openStore({ path: f.dbPath, nodeId: 'node' });
+  await store.createJob(sealEnvelope({
+    job_id: secondJobId,
+    objective: 'second job for the parallel-call test',
+    allowed_capabilities: ['machine.inventory'],
+    allowed_workspaces: ['work'],
+    acceptance: ['done'],
+    forbidden: [],
+    max_actions: 10,
+    max_retries: 0,
+    expires_at: '2999-01-01T00:00:00Z',
+  }));
+  await store.close();
+
+  // Start a slow invoke that holds the per-agent lock, then replace the grant
+  // while it is mid-flight so the next invoke resolves to the second job.
+  const firstPromise = post(f.port, '/agent/invoke', { capability: 'machine.inventory', parameters: {} }, claudeToken);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const revoked = await post(f.port, '/operator/agent_grant_revoke', { grant_id: String(created.body.grant_id) }, operatorToken);
+  assert.equal(revoked.status, 200);
+  const regrant = await post(f.port, '/operator/agent_grant_create', { job_id: secondJobId, agent: 'claude' }, operatorToken);
+  assert.equal(regrant.body.error, undefined, JSON.stringify(regrant.body));
+
+  const second = await post(f.port, '/agent/invoke', { capability: 'machine.inventory', parameters: {} }, claudeToken);
+  assert.equal(second.status, 409, `expected 409, got ${JSON.stringify(second.body)}`);
+  assert.equal(second.body.error, ErrorCode.E_PARALLEL_ACTION);
+
+  const first = await firstPromise;
+  assert.equal(first.body.error, undefined, `first invoke failed: ${JSON.stringify(first.body)}`);
+});
+
+// ---------------------------------------------------------------------------
+// Redaction — an agent bearer pasted into an objective is sealed as [redacted].
+// ---------------------------------------------------------------------------
+
+test('an agent token pasted into a job objective is redacted before it is sealed', async (t) => {
+  const f = await makeFixture({ operatorToken, agentTokens: { claude: claudeToken } });
+  t.after(() => finish(f));
+
+  const created = await post(f.port, '/operator/create_job', {
+    objective: `Build the report with bearer ${claudeToken}`,
+    acceptance: ['done'],
+    forbidden: [],
+    allowed_capabilities: ['machine.inventory'],
+    allowed_workspaces: ['work'],
+    max_actions: 3,
+    max_retries: 1,
+    expires_in_hours: 8,
+  }, operatorToken);
+  assert.equal(created.body.error, undefined, `create_job failed: ${JSON.stringify(created.body)}`);
+
+  const envelope = (created.body as Record<string, unknown>)['envelope'] as Record<string, unknown>;
+  const objective = String(envelope['objective']);
+  assert.equal(objective.includes(claudeToken), false, 'the agent bearer survived into the sealed objective');
+  assert.match(objective, /\[redacted\]/, 'the agent bearer was not replaced with [redacted]');
+});
+
+// ---------------------------------------------------------------------------
+// Start-up failure — a throw after the grants connection opens must close it
+// (and the store) rather than leak a second handle to the database file.
+// ---------------------------------------------------------------------------
+
+test('a start that fails after the grants connection opens closes grants and store', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'toros-agent-start-fail-'));
+  const dbPath = join(dir, 'node.sqlite');
+  const store = await openStore({ path: dbPath, nodeId: 'node' });
+  await store.createJob(sealEnvelope({
+    job_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    objective: 'start-failure cleanup',
+    allowed_capabilities: ['machine.inventory'],
+    allowed_workspaces: ['work'],
+    acceptance: ['done'],
+    forbidden: [],
+    max_actions: 10,
+    max_retries: 0,
+    expires_at: '2999-01-01T00:00:00Z',
+  }));
+  await store.close();
+
+  // The observer's start() throws — after openAgentGrants ran but before
+  // http.start(), so the failure happens with both connections open. It throws
+  // only once: the recovery start below must succeed.
+  let observerStarts = 0;
+  const observerFactory = (): import('@toros/contracts').SecurityObserver => ({
+    id: 'flaky',
+    async start(): Promise<void> {
+      observerStarts += 1;
+      if (observerStarts === 1) throw new Error('observer start boom');
+    },
+    onFinding(): void {},
+    onRetraction(): void {},
+    async stop(): Promise<void> {},
+  });
+
+  const core = createNodeCore({
+    node_id: 'node', db_path: dbPath,
+    workspaces: [{ id: 'work', root: dir }], port: 0,
+    token: nodeToken, operator_token: operatorToken,
+    adapters: makeAdapters([]), observer: observerFactory,
+    approval_required: [], agent_tokens: { claude: claudeToken },
+  });
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+
+  // First start fails after the grants connection is opened and the observer
+  // throws; the catch must close both connections before rethrowing.
+  await assert.rejects(core.start(), /observer start boom/);
+
+  // The observable that the failed start released its handles: a subsequent
+  // start on the SAME Core instance succeeds and the grants module works. If
+  // the first start leaked `this.grants` (and `this.store`), the second start
+  // would overwrite the handles and the process would silently hold the first
+  // connection until shutdown; node:sqlite exposes no connection count, so this
+  // recovery start — which re-opens and exercises the same database file — is
+  // the strongest black-box assertion available.
+  const { port } = await core.start();
+  const created = await post(port, '/operator/agent_grant_create', { job_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', agent: 'claude' }, operatorToken);
+  assert.equal(created.body.error, undefined, `grant failed: ${JSON.stringify(created.body)}`);
+  const invoke = await post(port, '/agent/invoke', { capability: 'machine.inventory', parameters: {} }, claudeToken);
+  assert.equal(invoke.body.error, undefined, `invoke failed: ${JSON.stringify(invoke.body)}`);
 });
