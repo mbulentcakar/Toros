@@ -31,7 +31,15 @@ Codex, in `~/.codex/config.toml`:
 [mcp_servers.toros-discovery]
 command = "node"
 args = ["<path>/packages/mcp-discovery/dist/src/main.js", "--agent", "codex"]
+# Only for non-interactive `codex exec` with approval_policy "never": without
+# it, Codex refuses every MCP tool call ("requires approval"). Interactive
+# sessions can leave it out and approve each call.
+default_tools_approval_mode = "approve"
 ```
+
+Tested (spec AT acceptance 11, 2026-10-27, against a throwaway native node):
+Claude Code 2.1.310 and codex-cli 0.160.1 each connected, listed the tools, and
+completed `toros_status` and `desktop_state`.
 
 Neither writes a credential into the client's config.
 
