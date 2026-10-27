@@ -267,6 +267,24 @@ test('desktop_inspect with a valid page 1 shape invokes Node Core', async () => 
 });
 
 // ---------------------------------------------------------------------------
+// Round 3 — tighten: desktop_state and machine_inventory POST { capability, parameters: {} }.
+// ---------------------------------------------------------------------------
+
+test('desktop_state and machine_inventory post { capability, parameters: {} }', async () => {
+  for (const name of ['desktop_state', 'machine_inventory'] as const) {
+    const { server, calls, setBehaviour } = harness();
+    initialize(server);
+    setBehaviour(async () => ({ status: 200, text: '{}', body: {} }));
+    server.receive(JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name, arguments: {} } }));
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(calls.length, 1, `for ${name}`);
+    assert.equal(calls[0]!.route, '/agent/invoke', `for ${name}`);
+    const body = calls[0]!.body;
+    assert.deepEqual(body, { capability: name === 'desktop_state' ? 'desktop.state' : 'machine.inventory', parameters: {} }, `body for ${name}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Deadline.
 // ---------------------------------------------------------------------------
 
@@ -636,4 +654,82 @@ test('notifications/cancelled with an unknown or finished requestId is ignored',
   server.receive(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: {} }));
   assert.equal(frames.length, before);
   void setBehaviour;
+});
+
+// ---------------------------------------------------------------------------
+// Round 3 — item 1: a cancelled id reused in the same turn keeps its slot.
+// ---------------------------------------------------------------------------
+
+test('a cancelled id reused in the same turn does not lose its slot', async () => {
+  const { server, frames, calls, setBehaviour } = harness();
+  initialize(server);
+
+  // A fake `call` that rejects when its signal aborts (like the real client).
+  const signals: AbortSignal[] = [];
+  setBehaviour((_route, _body, signal) => {
+    signals.push(signal);
+    return new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject({ code: 'connection_failed' }));
+    });
+  });
+
+  // The whole sequence in one receive pass, with no awaits in between: the
+  // aborted first call's rejection runs only in a later microtask.
+  server.receive(JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+  server.receive(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 7 } }));
+  server.receive(JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+
+  // Flush microtasks so the first call's rejection runs, then a tick for any
+  // timers.
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(calls.length, 2, 'exactly the first call and its replacement were invoked');
+  assert.equal(signals.length, 2);
+
+  // The cancel aborted the first call's signal.
+  assert.equal(signals[0]!.aborted, true, 'the cancel must abort the first call');
+
+  // The replacement is still in flight: its signal is not aborted and its id is
+  // still outstanding, so a third tools/call with id 7 must be a duplicate.
+  assert.equal(signals[1]!.aborted, false, 'the replacement must still be in flight');
+  const before = frames.length;
+  server.receive(JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+  assert.equal(errorOf(lastFrame(frames)).code, -32600, 'a third tools/call with id 7 must be -32600 while the replacement is in flight');
+  void before;
+
+  // A second notifications/cancelled for 7 aborts the replacement's signal.
+  server.receive(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 7 } }));
+  assert.equal(signals[1]!.aborted, true, 'a second cancel must abort the replacement signal');
+
+  // close() aborts any call still in flight.
+  server.receive(JSON.stringify({ jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'toros_status', arguments: {} } }));
+  assert.equal(signals.length, 3);
+  server.close();
+  assert.equal(signals[2]!.aborted, true, 'close() must abort a call still in flight');
+});
+
+// ---------------------------------------------------------------------------
+// Round 3 — item 3: a throwing write must not answer a second frame.
+// ---------------------------------------------------------------------------
+
+test('a write that throws does not answer an internal-error frame', () => {
+  const recorded: string[] = [];
+  const server = createMcpServer({
+    call: async () => ({ status: 200, text: '{}', body: {} }),
+    write: (frame: string) => {
+      recorded.push(frame);
+      throw new Error('EPIPE');
+    },
+    log: () => {},
+  });
+  // A ping works before initialize, so no initialize frame is attempted.
+  assert.throws(() => {
+    server.receive(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }));
+  }, /EPIPE/);
+  // Exactly one frame was attempted for that id; no internal-error frame.
+  assert.equal(recorded.length, 1, 'write must have been called exactly once for this id');
+  const frame = JSON.parse(recorded[0]!) as Record<string, unknown>;
+  assert.equal(frame['id'], 1);
+  assert.equal('error' in frame, false, 'no error member on the single written frame');
 });

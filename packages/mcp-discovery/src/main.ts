@@ -73,7 +73,12 @@ async function main(): Promise<void> {
           const rest = chunk.subarray(offset);
           lineChunks.push(rest);
           lineBytes += rest.length;
-          if (lineBytes > FRAME_CAP_BYTES) {
+          // An exact-cap line ending in CRLF can arrive as payload + \r in one
+          // write and the \n later. Without a newline yet we allow one extra
+          // byte when that byte is a trailing 0x0d; any other byte past the cap
+          // (or a second byte) is overflow.
+          const last = rest.length > 0 ? rest[rest.length - 1] : -1;
+          if (lineBytes > FRAME_CAP_BYTES + 1 || (lineBytes === FRAME_CAP_BYTES + 1 && last !== 0x0d)) {
             overflow = true;
             lineChunks.length = 0;
             lineBytes = 0;

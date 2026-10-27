@@ -183,13 +183,19 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 
   let initialized = false;
   let closed = false;
+  /** True while `write` is executing, so a throw from `write` can be told apart from any other throw. */
+  let writing = false;
   const outstanding = new Set<unknown>();
   /** In-flight tool calls keyed by id, so `close()` and `notifications/cancelled` can clean up. */
-  const inflight = new Map<unknown, { timer: NodeJS.Timeout; controller: AbortController }>();
+  const inflight = new Map<unknown, { timer: NodeJS.Timeout | null; controller: AbortController; settled: boolean }>();
 
   function sendJson(value: unknown): void {
     if (closed) return;
+    // Guard `write`: if it throws, `writing` stays true so `receive`'s catch can
+    // rethrow instead of emitting a second (internal-error) frame for that id.
+    writing = true;
     write(JSON.stringify(value));
+    writing = false;
   }
 
   function rpc(id: unknown, result: unknown): void {
@@ -252,11 +258,24 @@ export function createMcpServer(options: McpServerOptions): McpServer {
     }
 
     const controller = new AbortController();
-    let settled = false;
+    const record = { timer: null as NodeJS.Timeout | null, controller, settled: false };
 
+    /**
+     * Settle this call and clean up its map entries — but only when the id is
+     * still bound to *this* call's record. After a cancel or a close the id may
+     * have been reused by a later call in the same stdin chunk, so `finish` must
+     * never delete the maps by id blindly.
+     */
     function finish(fn: () => void): void {
-      if (settled) return;
-      settled = true;
+      // A settled call's handlers must never act again (they may run long after
+      // the call was aborted by a cancel, a close, or the deadline).
+      const rec = inflight.get(id);
+      if (rec === undefined || rec !== record) {
+        // This call's record was already removed (cancel/close/another call
+        // reused the id): it must not touch the maps or write a frame.
+        return;
+      }
+      rec.settled = true;
       outstanding.delete(id);
       inflight.delete(id);
       fn();
@@ -271,14 +290,15 @@ export function createMcpServer(options: McpServerOptions): McpServer {
         rpcError(id, -32001, 'Node Core did not answer within 45 s');
       });
     }, deadlineMs);
+    record.timer = deadline;
 
     outstanding.add(id);
-    inflight.set(id, { timer: deadline, controller });
+    inflight.set(id, record);
 
     void call(entry.route, body, controller.signal)
       .then((result) => {
-        // Deadline or notifications/cancelled already owns this id; a late
-        // answer must not write a second frame.
+        // Deadline, notifications/cancelled, or close already owns this id; a
+        // late answer must not write a second frame.
         if (controller.signal.aborted) return;
         finish(() => {
           clearTimeout(deadline);
@@ -293,14 +313,12 @@ export function createMcpServer(options: McpServerOptions): McpServer {
         });
       })
       .catch((error: unknown) => {
+        // A rejection after a cancel/close must not touch the maps or write a
+        // frame; check the abort on this path too, before `finish`.
+        if (controller.signal.aborted) return;
         const code = errorCodeOf(error);
         finish(() => {
           clearTimeout(deadline);
-          if (controller.signal.aborted) {
-            // The deadline (or notifications/cancelled) already owns this id; a
-            // late client abort must not write a second frame.
-            return;
-          }
           if (code === RESULT_EXCEEDS_CAP) {
             rpcError(id, -32603, 'result exceeds 1 MiB');
           } else if (code === NODE_CORE_DEADLINE) {
@@ -314,10 +332,19 @@ export function createMcpServer(options: McpServerOptions): McpServer {
       });
   }
 
+  /**
+   * Recognise only this module's own sentinel codes, by exact match. Any other
+   * string `code` (e.g. `EPIPE` from a broken pipe, or a Core error string) is
+   * not a sentinel and must fall through to the connection-failure answer.
+   */
   function errorCodeOf(error: unknown): string | null {
     if (typeof error === 'object' && error !== null && 'code' in error) {
       const code = (error as { code: unknown })['code'];
-      return typeof code === 'string' ? code : null;
+      if (typeof code !== 'string') return null;
+      if (code === NODE_CORE_DEADLINE) return code;
+      if (code === RESULT_EXCEEDS_CAP) return code;
+      if (code === 'connection_failed') return code;
+      return null;
     }
     return null;
   }
@@ -469,7 +496,11 @@ export function createMcpServer(options: McpServerOptions): McpServer {
     if (!validId(requestId)) return;
     const entry = inflight.get(requestId);
     if (entry === undefined) return; // unknown or already finished
-    clearTimeout(entry.timer);
+    // Mark the aborted call settled *through its record* so its later
+    // rejection handler (which runs in a following microtask) can never touch
+    // the maps or write a frame, even if the same id is reused in this turn.
+    entry.settled = true;
+    if (entry.timer !== null) clearTimeout(entry.timer);
     entry.controller.abort();
     outstanding.delete(requestId);
     inflight.delete(requestId);
@@ -502,7 +533,15 @@ export function createMcpServer(options: McpServerOptions): McpServer {
         return;
       }
       handleRequest(parsed as Record<string, unknown>);
-    } catch {
+    } catch (error: unknown) {
+      // A throw from `write` itself must propagate: the frame was already being
+      // written, so emitting an internal-error answer would write a second frame
+      // for the same id. Re-throw and leave it to the caller (the process) to
+      // surface the write failure, without a duplicate frame.
+      if (writing) {
+        writing = false;
+        throw error;
+      }
       // An unexpected throw answers that id with -32603 (no detail), or id: null
       // when the frame had no usable id. The process stays alive.
       const record = (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) ? (parsed as Record<string, unknown>) : undefined;
@@ -514,7 +553,9 @@ export function createMcpServer(options: McpServerOptions): McpServer {
   function close(): void {
     closed = true;
     for (const [, entry] of inflight) {
-      clearTimeout(entry.timer);
+      // Mark settled so the aborted call's later handlers never act.
+      entry.settled = true;
+      if (entry.timer !== null) clearTimeout(entry.timer);
       entry.controller.abort();
     }
     inflight.clear();

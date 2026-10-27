@@ -508,6 +508,85 @@ test('a valid frame of exactly the cap ending in CRLF is accepted', async (t) =>
   await stopChild(child);
 });
 
+// ---------------------------------------------------------------------------
+// Round 3 — item 2: an exact-cap CRLF frame split across chunks is accepted.
+// ---------------------------------------------------------------------------
+
+/** Build a ping line whose length (before CRLF) is exactly FRAME_CAP_BYTES. */
+function buildExactCapPing(id: number): string {
+  function buildLine(padLen: number): string {
+    return JSON.stringify({ jsonrpc: '2.0', id, method: 'ping', params: { pad: 'x'.repeat(padLen) } });
+  }
+  let padLen = 0;
+  for (;;) {
+    const line = buildLine(padLen);
+    const delta = FRAME_CAP_BYTES - Buffer.byteLength(line, 'utf8');
+    if (delta === 0) break;
+    padLen += delta; // each extra `x` adds one byte
+    if (padLen < 0) assert.fail('could not size the exact-cap line');
+  }
+  const line = buildLine(padLen);
+  assert.equal(Buffer.byteLength(line, 'utf8'), FRAME_CAP_BYTES);
+  return line;
+}
+
+test('an exact-cap ping whose \\r and \\n arrive in separate writes gets the ping answer', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'toros-mcp-split-crlf-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const standIn = await startStandIn();
+  t.after(() => void closeServer(standIn.server));
+  const token = randomBytes(24).toString('hex');
+  await writeConfig(dir, standIn.port, token);
+
+  const child = spawnMain(['--agent', 'claude'], { LOCALAPPDATA: dir });
+  const { frames, close } = childFrames(child);
+  await new Promise((r) => setTimeout(r, 300));
+
+  const line = buildExactCapPing(700);
+  // The payload + \r in one write, then \n 300 ms later: the reader sees an
+  // exact-cap line plus a trailing CR only once the LF arrives.
+  child.stdin?.write(`${line}\r`);
+  await new Promise((r) => setTimeout(r, 300));
+  child.stdin?.write('\n');
+
+  const frame = await waitForFrame(frames, 700, 2_000);
+  assert.deepEqual(frame['result'], {}, 'the exact-cap ping must be answered');
+  close();
+  await stopChild(child);
+});
+
+test('the same payload with one extra non-CR byte gets one -32600', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'toros-mcp-split-overflow-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const standIn = await startStandIn();
+  t.after(() => void closeServer(standIn.server));
+  const token = randomBytes(24).toString('hex');
+  await writeConfig(dir, standIn.port, token);
+
+  const child = spawnMain(['--agent', 'claude'], { LOCALAPPDATA: dir });
+  const { frames, close } = childFrames(child);
+  await new Promise((r) => setTimeout(r, 300));
+
+  const line = buildExactCapPing(701);
+  // One extra non-CR byte: the payload now exceeds the cap with a byte that is
+  // not the trailing CR, so it overflows before CRLF, yielding one -32600.
+  child.stdin?.write(`${line}x\r`);
+  await new Promise((r) => setTimeout(r, 300));
+  child.stdin?.write('\n');
+
+  // One -32600 (id null) frame for the oversized line, then nothing else.
+  await new Promise((r) => setTimeout(r, 400));
+  const oversized = frames.filter((f) => f['id'] === null && f['error'] !== undefined && (f['error'] as { code: number }).code === -32600);
+  assert.equal(oversized.length, 1, 'exactly one -32600 (id null) frame for the oversized line');
+
+  // The process is still alive and answers a fresh ping.
+  child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id: 702, method: 'ping' }) + '\n');
+  const frame = await waitForFrame(frames, 702, 2_000);
+  assert.deepEqual(frame['result'], {});
+  close();
+  await stopChild(child);
+});
+
 test('a blank line produces no frame', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'toros-mcp-blank-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
@@ -573,6 +652,9 @@ test('a stand-in body of RESULT_CAP_BYTES + 1 gives -32603 and the stand-in sees
     server.close();
     assert.equal(frame['error'], undefined, 'exactly-cap body must not be an error');
     assert.equal((frame['result'] as Record<string, unknown>)['isError'], false);
+    // The returned text is the whole body, exactly RESULT_CAP_BYTES bytes.
+    const content = (frame['result'] as Record<string, unknown>)['content'] as Array<{ text: string }>;
+    assert.equal(content[0]!.text.length, RESULT_CAP_BYTES, 'the returned text must be exactly RESULT_CAP_BYTES bytes');
   }
 
   // RESULT_CAP_BYTES + 1: -32603 and socket closed.
