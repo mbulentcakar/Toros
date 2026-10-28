@@ -281,6 +281,141 @@ describe('node configuration validation — F1 tokens and desktop authorized_app
   });
 });
 
+describe('node configuration validation — agent tokens and desktop gate (spec AT)', () => {
+  const exists = () => true;
+  const CLAUDE = 'c'.repeat(64);
+  const CODEX = 'd'.repeat(64);
+
+  const agentConfig = (root, patch = {}) => ({
+    ...goodConfig(root),
+    agents: { claude: { token: CLAUDE }, codex: { token: CODEX } },
+    ...patch,
+  });
+
+  it('rejects a short agent token', () => {
+    const config = agentConfig(scratch(), { agents: { claude: { token: 'short' } } });
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /`agents\.claude\.token` must be at least 32 characters/);
+  });
+
+  it('rejects an agent token containing a space', () => {
+    const config = agentConfig(scratch(), { agents: { claude: { token: 'A'.repeat(31) + ' ' } } });
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /printable ASCII/);
+  });
+
+  it('rejects an agent token with a trailing newline', () => {
+    const config = agentConfig(scratch(), { agents: { claude: { token: 'A'.repeat(32) + '\n' } } });
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /printable ASCII/);
+  });
+
+  it('rejects operator_token + " " as an agent token (whitespace cannot survive the wire)', () => {
+    const operator = 'b'.repeat(64);
+    const config = {
+      ...goodConfig(scratch()),
+      operator_token: operator,
+      agents: { claude: { token: operator + ' ' } },
+    };
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /printable ASCII/);
+  });
+
+  it('rejects an agent token equal to token, operator_token, or the other agent', () => {
+    const shared = 'e'.repeat(64);
+    const equalToken = agentConfig(scratch(), { token: shared, agents: { claude: { token: shared } } });
+    const titles = blockers(validateNodeConfig(equalToken, { exists })).map((f) => f.title);
+    assert.ok(titles.some((t) => /must differ from `token`/.test(t)));
+
+    const op = 'f'.repeat(64);
+    const equalOperator = agentConfig(scratch(), { operator_token: op, agents: { claude: { token: op } } });
+    const opTitles = blockers(validateNodeConfig(equalOperator, { exists })).map((f) => f.title);
+    assert.ok(opTitles.some((t) => /must differ from `operator_token`/.test(t)));
+
+    const equalOther = agentConfig(scratch(), { agents: { claude: { token: shared }, codex: { token: shared } } });
+    const otherTitles = blockers(validateNodeConfig(equalOther, { exists })).map((f) => f.title);
+    assert.ok(otherTitles.some((t) => /must differ from `agents\.codex\.token`/.test(t)));
+    assert.ok(otherTitles.some((t) => /must differ from `agents\.claude\.token`/.test(t)));
+  });
+
+  it('rejects an array-shaped `agents`', () => {
+    const config = agentConfig(scratch(), { agents: [] });
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /`agents` must be an object/);
+  });
+
+  it('rejects a string-shaped `agents.claude`', () => {
+    const config = agentConfig(scratch(), { agents: { claude: 'not-an-object' } });
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /`agents\.claude` must be an object/);
+  });
+
+  it('rejects a number-shaped `agents.claude.token`', () => {
+    const config = agentConfig(scratch(), { agents: { claude: { token: 42 } } });
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /`agents\.claude\.token` must be a string/);
+  });
+
+  it('reports each agent\'s token present and distinct, with the length not the value', () => {
+    const config = agentConfig(scratch());
+    const ok = validateNodeConfig(config, { exists }).filter((f) => f.level === OK && /^`agents\.(claude|codex)\.token` present and distinct$/.test(f.title));
+    assert.equal(ok.length, 2);
+    for (const finding of ok) {
+      assert.match(finding.detail, /^\d+ characters$/);
+      assert.ok(!finding.detail.includes(CLAUDE) && !finding.detail.includes(CODEX), 'detail holds the length, never the value');
+    }
+  });
+
+  it('rejects a non-empty configured agent token only when it fails a pass; warns on unknown agent keys', () => {
+    const config = agentConfig(scratch(), { agents: { claude: { token: CLAUDE }, gemini: { token: 'g'.repeat(64) } } });
+    const warnings = validateNodeConfig(config, { exists }).filter((f) => f.level === WARN && /gemini/.test(f.title));
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0].title, /`agents\.gemini` is not a recognised agent/);
+  });
+
+  describe('desktop gate', () => {
+    it('OK when the boolean true is set', () => {
+      const config = agentConfig(scratch(), { desktop_control: { ar_gate_cleared: true } });
+      assert.ok(validateNodeConfig(config, { exists }).some((f) => f.level === OK && f.title === 'desktop discovery open to agents'));
+    });
+
+    it('warns for false, "true" and 1, without printing the value', () => {
+      for (const value of [false, 'true', 1]) {
+        const config = agentConfig(scratch(), { desktop_control: { ar_gate_cleared: value } });
+        const found = validateNodeConfig(config, { exists });
+        const warn = found.find((f) => f.level === WARN && /only the boolean `true` opens the gate/.test(f.title));
+        assert.ok(warn, `expected a gate warning for value ${value}`);
+        assert.ok(!JSON.stringify(warn).includes(JSON.stringify(value)), 'the finding must not print the value');
+      }
+    });
+
+    it('reports the string "true" case as type string', () => {
+      const config = agentConfig(scratch(), { desktop_control: { ar_gate_cleared: 'true' } });
+      const found = validateNodeConfig(config, { exists });
+      const warn = found.find((f) => f.level === WARN && /only the boolean `true` opens the gate/.test(f.title));
+      assert.match(warn.detail, /string/);
+    });
+
+    it('warns when the gate is absent with a token, and emits nothing without one', () => {
+      const withToken = validateNodeConfig(agentConfig(scratch()), { exists });
+      assert.ok(withToken.some((f) => f.level === WARN && /only the boolean `true` opens the gate/.test(f.title)));
+
+      const withoutToken = validateNodeConfig(goodConfig(scratch()), { exists });
+      assert.ok(!withoutToken.some((f) => /opens the gate/.test(f.title)), 'no gate finding when no agent token is configured');
+    });
+
+    it('warns when desktop_control is an array', () => {
+      const config = agentConfig(scratch(), { desktop_control: [] });
+      const found = validateNodeConfig(config, { exists });
+      assert.ok(found.some((f) => f.level === WARN && /`desktop_control` must be an object/.test(f.title)));
+    });
+  });
+
+  it('emits the driver-profile warning exactly once with one or two tokens, and never with none', () => {
+    const one = validateNodeConfig(agentConfig(scratch(), { agents: { claude: { token: CLAUDE } } }), { exists });
+    assert.equal(one.filter((f) => f.title === 'agent driver profile cannot be confirmed').length, 1);
+
+    const two = validateNodeConfig(agentConfig(scratch()), { exists });
+    assert.equal(two.filter((f) => f.title === 'agent driver profile cannot be confirmed').length, 1);
+
+    const none = validateNodeConfig(goodConfig(scratch()), { exists });
+    assert.equal(none.filter((f) => f.title === 'agent driver profile cannot be confirmed').length, 0);
+  });
+});
+
 describe('credential handling (criterion 3)', () => {
   it('throws rather than printing a credential value', () => {
     const secret = 'd'.repeat(64);
@@ -322,6 +457,45 @@ describe('credential handling (criterion 3)', () => {
       // ...while still reporting that they are there.
       assert.match(output, /api_key/);
     }
+  });
+
+  it('never emits a configured agent token, end to end (spec AT)', () => {
+    const root = scratch();
+    const localAppData = join(root, 'local');
+    const torosDir = join(localAppData, 'Toros');
+    mkdirSync(torosDir, { recursive: true });
+    const claude = 'ab'.repeat(32);
+    const codex = 'cd'.repeat(32);
+    writeFileSync(join(torosDir, 'config.json'), JSON.stringify({
+      ...goodConfig(root),
+      agents: { claude: { token: claude }, codex: { token: codex } },
+    }));
+
+    for (const args of [[], ['--json']]) {
+      const output = execFileSync(process.execPath, [ORIENT, ...args], {
+        encoding: 'utf8',
+        env: { ...process.env, LOCALAPPDATA: localAppData },
+      });
+      for (const secret of [claude, codex]) {
+        assert.ok(!output.includes(secret), `agent token leaked with args ${JSON.stringify(args)}`);
+      }
+      // ...while still reporting that the tokens are there.
+      assert.match(output, /agents\.claude\.token/);
+    }
+  });
+
+  it('proves the scrub refuses a credential planted where it would render', () => {
+    // Plant an agent token as a workspace root, which orient prints verbatim in
+    // the `workspace root` finding. scrubOrThrow must refuse to print it.
+    const root = scratch();
+    const planted = 'ef'.repeat(32);
+    const config = goodConfig(root);
+    config.workspaces = [{ id: 'sandbox', root: planted }];
+    config.agents = { claude: { token: planted } };
+
+    const text = 'workspace root is ' + planted;
+    assert.throws(() => scrubOrThrow(text, [planted]), /refusing to print/,
+      'a planted credential must make the scrub refuse, or the protection is untested');
   });
 });
 
