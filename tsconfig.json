@@ -14,6 +14,7 @@
     { "path": "./packages/observer" },
     { "path": "./packages/relay" },
     { "path": "./packages/node-core" },
+    { "path": "./packages/mcp-discovery" },
     { "path": "./packages/bakeoff" },
     { "path": "./packages/coordinator" }
   ]
