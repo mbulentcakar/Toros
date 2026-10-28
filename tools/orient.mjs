@@ -195,6 +195,57 @@ export function readVersion(execPath, { run = spawnSync, timeout = 8000 } = {}) 
 
 /* ------------------------------------------------------- config validation */
 
+/**
+ * Collect every non-empty string value under `config.agents`, wherever it sits.
+ *
+ * A credential is not only the recognised `agents.claude.token` / `agents.codex.token`
+ * keys: a bare-string `agents.claude`, a token nested under a non-string `token`
+ * key, or a string under `agents.gemini` are all strings that could surface in
+ * rendered output (config JSON is echoed verbatim in some findings). Registering
+ * only the two canonical keys lets any other string print.
+ *
+ * The walk is bounded: depth ≤ 4, and anything that is not a plain object,
+ * array or string is ignored. Only non-empty strings are returned — a common
+ * short word must not be able to poison the output scrub.
+ */
+export function collectAgentStringValues(agents, { maxDepth = 4 } = {}) {
+  const out = [];
+  const visit = (value, depth) => {
+    if (depth > maxDepth) return;
+    if (typeof value === 'string') {
+      if (value.length > 0) out.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1);
+      return;
+    }
+    if (typeof value === 'object' && value !== null) {
+      for (const item of Object.values(value)) visit(item, depth + 1);
+    }
+  };
+  visit(agents, 0);
+  return out;
+}
+
+/** The MCP discovery server entry the presence check looks for (extracted for tests). */
+export function mcpPresenceFinding(agents, { exists = existsSync, repoRoot = REPO_ROOT } = {}) {
+  // Core accepts a token only under `agents.claude.token` / `agents.codex.token`
+  // (agent-config.ts `agentTokensFromConfig`). A token under `agents.gemini`, an
+  // array element, or any other nesting does not make the stdio server useable.
+  const claudeToken = agents?.claude?.token;
+  const codexToken = agents?.codex?.token;
+  const hasUsableToken = (typeof claudeToken === 'string' && claudeToken.length > 0)
+    || (typeof codexToken === 'string' && codexToken.length > 0);
+  if (!hasUsableToken) return null;
+  const mcpMain = join(repoRoot, 'packages', 'mcp-discovery', 'dist', 'src', 'main.js');
+  return exists(mcpMain)
+    ? finding(OK, 'config', 'MCP discovery server is built', mcpMain)
+    : finding(WARN, 'config', 'MCP discovery server is not built', mcpMain, 'npm run build');
+}
+
+/* ------------------------------------------------------- config validation */
+
 /** Node Core tolerates a UTF-8 BOM (packages/node-core/src/main.ts). So does this. */
 export function parseConfigText(text) {
   return JSON.parse(text.replace(/^\uFEFF/, ''));
@@ -310,9 +361,11 @@ function validateAgentConfig(config) {
 
   // Shape (agent-config.ts `agentTokensFromConfig`): agents must be an object;
   // `agents.claude` / `agents.codex`, each when present, an object with a string
-  // `token`. Core throws on any of these, so they are BLOCKs.
-  if (agents !== undefined) {
-    if (typeof agents !== 'object' || agents === null || Array.isArray(agents)) {
+  // `token`. Core throws on any of these, so they are BLOCKs. `null` is treated
+  // like an absent `agents` (agentTokensFromConfig returns `{}` for it), so it
+  // produces no finding here.
+  if (agents !== undefined && agents !== null) {
+    if (typeof agents !== 'object' || Array.isArray(agents)) {
       out.push(finding(BLOCK, area, '`agents` must be an object of `{ claude, codex }`',
         'Core refuses to start when `agents` is not an object'));
     } else {
@@ -691,27 +744,22 @@ function collectConfiguration({ localAppData = process.env.LOCALAPPDATA } = {}) 
     for (const key of ['token', 'operator_token']) {
       if (typeof config[key] === 'string' && config[key].length > 0) secrets.push(config[key]);
     }
-    // Agent discovery bearers (spec AT): the agent tokens are the third bearer
-    // class. They must be registered before anything renders, exactly like
-    // `token` and `operator_token`, or `scrubOrThrow` could let one out.
-    for (const key of ['agents.claude.token', 'agents.codex.token']) {
-      const [group, name] = key.split('.');
-      const value = config[group]?.[name]?.token;
-      if (typeof value === 'string' && value.length > 0) secrets.push(value);
-    }
+    // Agent discovery bearers (spec AT): every non-empty string value anywhere
+    // under `agents` is a bearer-class credential and must be registered before
+    // anything renders, exactly like `token` and `operator_token`, or
+    // `scrubOrThrow` could let one out. This covers the canonical
+    // `agents.claude.token` / `agents.codex.token` and any other string the
+    // config carries (a bare-string `agents.claude`, a token under `agents.gemini`,
+    // a string nested under a non-string `token`).
+    secrets.push(...collectAgentStringValues(config.agents));
     out.push(finding(OK, area, 'node configuration found', configPath));
     out.push(...validateNodeConfig(config));
     // MCP discovery server presence (spec AT2/AT3): a configured agent token is
-    // only usable when the stdio server it drives has been built.
-    const agentsConfigured = Object.entries(config.agents ?? {})
-      .some(([, entry]) => typeof entry === 'object' && entry !== null
-        && typeof entry.token === 'string' && entry.token.length > 0);
-    if (agentsConfigured) {
-      const mcpMain = join(REPO_ROOT, 'packages', 'mcp-discovery', 'dist', 'src', 'main.js');
-      out.push(existsSync(mcpMain)
-        ? finding(OK, area, 'MCP discovery server is built', mcpMain)
-        : finding(WARN, area, 'MCP discovery server is not built', mcpMain, 'npm run build'));
-    }
+    // only usable when the stdio server it drives has been built. Keyed off the
+    // same condition Core uses — a non-empty string `agents.claude.token` /
+    // `agents.codex.token` — so a token under `agents.gemini` does not count.
+    const mcpFinding = mcpPresenceFinding(config.agents);
+    if (mcpFinding) out.push(mcpFinding);
     // What the operator configured is what a run would actually use, so it
     // outranks whatever happens to be first on PATH.
     for (const [id, spec] of Object.entries(config.adapters ?? {})) {

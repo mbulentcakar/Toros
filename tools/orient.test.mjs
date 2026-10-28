@@ -24,6 +24,8 @@ import {
   readVersion,
   resolveOnPath,
   classifyExchange,
+  collectAgentStringValues,
+  mcpPresenceFinding,
   scrubOrThrow,
   validateNodeConfig,
 } from './orient.mjs';
@@ -349,6 +351,20 @@ describe('node configuration validation — agent tokens and desktop gate (spec 
     assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /`agents\.claude\.token` must be a string/);
   });
 
+  it('accepts `agents: null` the way Core does (agentTokensFromConfig returns {})', () => {
+    // Core treats null like an absent `agents`. orient must not BLOCK it, and
+    // must not emit the gate/driver warnings that only a configured token earns.
+    const config = { ...goodConfig(scratch()), agents: null };
+    const found = validateNodeConfig(config, { exists });
+    assert.deepEqual(blockers(found), []);
+    assert.ok(!found.some((f) => /`agents` must be an object/.test(f.title)),
+      '`agents: null` must not read as a malformed `agents` object');
+    assert.ok(!found.some((f) => /opens the gate/.test(f.title)),
+      'no agent token is configured, so no gate warning');
+    assert.ok(!found.some((f) => f.title === 'agent driver profile cannot be confirmed'),
+      'no agent token is configured, so no driver-profile warning');
+  });
+
   it('reports each agent\'s token present and distinct, with the length not the value', () => {
     const config = agentConfig(scratch());
     const ok = validateNodeConfig(config, { exists }).filter((f) => f.level === OK && /^`agents\.(claude|codex)\.token` present and distinct$/.test(f.title));
@@ -382,11 +398,14 @@ describe('node configuration validation — agent tokens and desktop gate (spec 
       }
     });
 
-    it('reports the string "true" case as type string', () => {
+    it('reports the string "true" case as type string, without printing the value', () => {
       const config = agentConfig(scratch(), { desktop_control: { ar_gate_cleared: 'true' } });
       const found = validateNodeConfig(config, { exists });
       const warn = found.find((f) => f.level === WARN && /only the boolean `true` opens the gate/.test(f.title));
+      assert.equal(warn.detail, 'the configured value is a string',
+        'the detail must be the type sentence, never the configured value');
       assert.match(warn.detail, /string/);
+      assert.ok(!warn.detail.includes('true'), 'the detail must not reproduce the `true` value');
     });
 
     it('warns when the gate is absent with a token, and emits nothing without one', () => {
@@ -413,6 +432,85 @@ describe('node configuration validation — agent tokens and desktop gate (spec 
 
     const none = validateNodeConfig(goodConfig(scratch()), { exists });
     assert.equal(none.filter((f) => f.title === 'agent driver profile cannot be confirmed').length, 0);
+  });
+});
+
+describe('agent string walk and MCP presence (spec AT2/AT3)', () => {
+  it('registers every non-empty string under agents, at any nesting up to depth 4', () => {
+    const agents = {
+      claude: { token: 'c'.repeat(64) },
+      codex: { token: 'd'.repeat(64) },
+      gemini: { token: 'g'.repeat(64) },
+      loose: 'a-bare-string-value',
+      nested: { outer: { inner: { deep: 'e'.repeat(64) } } },
+      array: [{ token: 'f'.repeat(64) }],
+      empty: '',
+      number: 42,
+      bool: false,
+    };
+    const values = collectAgentStringValues(agents);
+    assert.ok(values.includes('c'.repeat(64)), 'claude token registered');
+    assert.ok(values.includes('d'.repeat(64)), 'codex token registered');
+    assert.ok(values.includes('g'.repeat(64)), 'gemini token registered');
+    assert.ok(values.includes('a-bare-string-value'), 'a bare string under agents is registered');
+    assert.ok(values.includes('e'.repeat(64)), 'a string nested under a non-string token is registered');
+    assert.ok(values.includes('f'.repeat(64)), 'a string inside an array element is registered');
+    assert.ok(!values.includes(''), 'empty strings are ignored');
+    assert.equal(values.filter((v) => v === 'e'.repeat(64)).length, 1, 'no duplicates');
+  });
+
+  it('bounds the walk at depth 4', () => {
+    const agents = { a: { b: { c: { d: { e: { f: 'too-deep' } } } } } };
+    assert.deepEqual(collectAgentStringValues(agents), []);
+  });
+
+  it('registers nothing for null, undefined, or a number, and a bare string itself for a string', () => {
+    assert.deepEqual(collectAgentStringValues(null), []);
+    assert.deepEqual(collectAgentStringValues(undefined), []);
+    assert.deepEqual(collectAgentStringValues(42), []);
+    assert.deepEqual(collectAgentStringValues('plain-string'), ['plain-string']);
+  });
+
+  it('mcpPresenceFinding is OK when the built server exists', () => {
+    const finding = mcpPresenceFinding(
+      { claude: { token: 'c'.repeat(64) } },
+      { exists: () => true, repoRoot: '/repo' },
+    );
+    assert.equal(finding.level, OK);
+    assert.match(finding.title, /MCP discovery server is built/);
+  });
+
+  it('mcpPresenceFinding is WARN (npm run build) when the built server is missing', () => {
+    const finding = mcpPresenceFinding(
+      { codex: { token: 'd'.repeat(64) } },
+      { exists: () => false, repoRoot: '/repo' },
+    );
+    assert.equal(finding.level, WARN);
+    assert.match(finding.title, /MCP discovery server is not built/);
+    assert.match(finding.fix, /npm run build/);
+  });
+
+  it('mcpPresenceFinding is null when only agents.gemini has a token', () => {
+    assert.equal(
+      mcpPresenceFinding({ gemini: { token: 'g'.repeat(64) } }, { exists: () => true }),
+      null,
+    );
+    // An empty token, a non-object entry, or an absent `token` key all leave the
+    // usable-token condition false, exactly as agentTokensFromConfig does.
+    assert.equal(
+      mcpPresenceFinding({ gemini: { token: 'g'.repeat(64) }, claude: { token: '' } }, { exists: () => true }),
+      null,
+    );
+    assert.equal(
+      mcpPresenceFinding({ gemini: { token: 'g'.repeat(64) }, claude: 'bare', codex: { token: 42 } }, { exists: () => true }),
+      null,
+    );
+  });
+
+  it('mcpPresenceFinding is null when agents is absent or empty', () => {
+    assert.equal(mcpPresenceFinding(undefined, { exists: () => true }), null);
+    assert.equal(mcpPresenceFinding(null, { exists: () => true }), null);
+    assert.equal(mcpPresenceFinding({}, { exists: () => true }), null);
   });
 });
 
@@ -484,20 +582,74 @@ describe('credential handling (criterion 3)', () => {
     }
   });
 
-  it('proves the scrub refuses a credential planted where it would render', () => {
-    // Plant an agent token as a workspace root, which orient prints verbatim in
-    // the `workspace root` finding. scrubOrThrow must refuse to print it.
-    const root = scratch();
-    const planted = 'ef'.repeat(32);
-    const config = goodConfig(root);
-    config.workspaces = [{ id: 'sandbox', root: planted }];
-    config.agents = { claude: { token: planted } };
+  // The scrub is only meaningful when it holds every string under `agents`: a
+  // secret registered once but sitting in a different shape must still refuse.
+  // Each of these cases plants the token as an absolute, existing workspace
+  // root — the path orient prints verbatim in its `workspace root` finding — so
+  // orient really would print it unless the scrub refuses first.
+  it('refuses to print a planted agent token (agents.claude.token)', () => {
+    runScrubCase('claude', (token) => ({ claude: { token } }));
+  });
 
-    const text = 'workspace root is ' + planted;
-    assert.throws(() => scrubOrThrow(text, [planted]), /refusing to print/,
-      'a planted credential must make the scrub refuse, or the protection is untested');
+  it('refuses to print a planted agent token (agents.gemini.token)', () => {
+    runScrubCase('gemini', (token) => ({ gemini: { token } }));
+  });
+
+  it('refuses to print a planted agent token (bare-string agents.claude)', () => {
+    runScrubCase('claude', (token) => ({ claude: token }));
   });
 });
+
+/**
+ * Drive orient via the CLI for one planted-token shape. The token is planted
+ * both under `agents` (the shape under test) and as an absolute workspace root,
+ * so a failure to register it would let it render in the `workspace root`
+ * finding. `agentsFor` maps the token to the `agents` object under test.
+ */
+function runScrubCase(seed, agentsFor) {
+  const token = (seed === 'claude' ? 'c' : 'g').repeat(64);
+  const root = scratch();
+  const workspaceRoot = join(root, token);
+  mkdirSync(workspaceRoot, { recursive: true });
+
+  // Two independent runs, one per CLI argument shape, so --json and plain text
+  // each get their own configuration and their own assertion.
+  for (const args of [[], ['--json']]) {
+    const localAppData = join(root, args.length ? 'json' : 'text');
+    const torosDir = join(localAppData, 'Toros');
+    mkdirSync(torosDir, { recursive: true });
+    const config = goodConfig(root);
+    config.agents = agentsFor(token);
+    config.workspaces = [{ id: 'sandbox', root: workspaceRoot }];
+    writeFileSync(join(torosDir, 'config.json'), JSON.stringify(config));
+
+    const result = runOrient([...args], localAppData);
+    assert.notEqual(result.status, 0,
+      `orient must refuse (${JSON.stringify(args)}) when the token is planted`);
+    assert.match(result.output, /refusing to print/,
+      'the refusal must be the scrub message');
+    assert.ok(!result.output.includes(token),
+      `token leaked to orient output with args ${JSON.stringify(args)}`);
+  }
+}
+
+/** Spawn `node tools/orient.mjs` and return { status, output } (stdout + stderr). */
+function runOrient(args, localAppData) {
+  try {
+    return {
+      status: 0,
+      output: execFileSync(process.execPath, [ORIENT, ...args], {
+        encoding: 'utf8',
+        env: { ...process.env, LOCALAPPDATA: localAppData },
+      }),
+    };
+  } catch (error) {
+    return {
+      status: error.status ?? 1,
+      output: `${error.stdout ?? ''}${error.stderr ?? ''}`,
+    };
+  }
+}
 
 describe('executed argument vectors (criterion 5)', () => {
   it('runs only a fixed --version vector', () => {

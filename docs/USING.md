@@ -133,13 +133,24 @@ envelope shape (from `packages/envelope/src/envelope.ts`) is:
   "forbidden": [],
   "max_actions": 1000,
   "max_retries": 2,
-  "allowed_apps": []
+  "allowed_apps": [
+    { "image_path": "C:\\Windows\\System32\\notepad.exe" }
+  ]
 }
 ```
 
 The job must name **exactly one** entry in `allowed_workspaces` (the workspace is never a
-choice), at least one of the three AT capabilities in `allowed_capabilities`, and `allowed_apps`
-for desktop (an absent `allowed_apps` denies every `app` target fail-closed).
+choice) and at least one of the three AT capabilities in `allowed_capabilities`. For desktop,
+`allowed_apps` is an array of `AppRule` objects (`packages/contracts/src/envelope.ts`),
+each with exactly one of three shapes:
+
+- `{ "image_sha256": "<64 lower-case hex>" }` — the image hash;
+- `{ "signer": "…", "product_name": "…", "original_filename": "…" }` — the signer rule
+  (all three fields required);
+- `{ "image_path": "C:\\Windows\\System32\\notepad.exe" }` — a full image path.
+
+An absent or empty `allowed_apps` denies every `app` target, fail-closed — a job that does not
+name its applications sees none of them.
 
 Grant it to an agent:
 
@@ -182,8 +193,10 @@ config. The four tools and their substance (from `packages/mcp-discovery/src/pro
   `freshness_token` (optionally `depth` 1–10); page N+1 is `continuation_token` alone.
 - `machine_inventory` — which adapters and tools are ready on the node.
 
-Handles are single-use: re-run `desktop_state` on `refresh_required`. A locked desktop returns
-`session: "unavailable"`.
+Handles are single-use. A locked or disconnected desktop makes `desktop_state` return
+`session: "unavailable"` (with `reason: "locked"` or `"disconnected"`), and `desktop_inspect` on a
+non-active session returns `refresh_required` the same way a used, expired or foreign handle does
+(`adapters-desktop/src/adapter.ts`).
 
 ### 8.5 What the agent sees when refused
 
@@ -198,7 +211,10 @@ A tool error result (`isError: true`) carries `{ error, message, reason? }`
 - `E_PARALLEL_ACTION`;
 - `E_TIMEOUT`.
 
-Every call and refusal leaves a receipt with actor `agent:claude` or `agent:codex`.
+Not every refusal leaves a receipt. `no_grant`, `revoked`, `E_EXPIRED`, `E_JOB_TERMINAL` and
+`E_PARALLEL_ACTION` are thrown before the pipeline and leave **no** receipt. The refusals that do
+reach the pipeline — `E_MODE_DENIED`, `E_CAP_NOT_ALLOWED`, `E_FORBIDDEN`, `E_BUDGET_EXHAUSTED`
+and `E_TIMEOUT` — each leave a receipt with actor `agent:claude` or `agent:codex`.
 
 ### 8.6 The driver-profile requirement and what AT cannot enforce
 
@@ -212,8 +228,8 @@ What AT cannot enforce, stated plainly (spec AT):
 
 - AT bounds what Node Core **returns**. It cannot stop an agent from reading the screen some
   other way — a screenshot tool of its own CLI, or its shell where the CLI has one.
-  Toros-supervised workers run read-only; an agent the operator runs interactively is outside
-  Toros's control.
+  Toros-supervised workers run read-only where the adapter makes them so (Claude in `plan`
+  mode); an agent the operator runs interactively is outside Toros's control.
 - A window title of an allowed app may contain document names. Choosing which apps a job allows
   is the operator's decision; the node allowlist (`adapters.desktop.authorized_apps`) is the
   upper bound.
