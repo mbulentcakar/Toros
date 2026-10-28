@@ -195,6 +195,57 @@ export function readVersion(execPath, { run = spawnSync, timeout = 8000 } = {}) 
 
 /* ------------------------------------------------------- config validation */
 
+/**
+ * Collect every non-empty string value under `config.agents`, wherever it sits.
+ *
+ * A credential is not only the recognised `agents.claude.token` / `agents.codex.token`
+ * keys: a bare-string `agents.claude`, a token nested under a non-string `token`
+ * key, or a string under `agents.gemini` are all strings that could surface in
+ * rendered output (config JSON is echoed verbatim in some findings). Registering
+ * only the two canonical keys lets any other string print.
+ *
+ * The walk is bounded: depth ≤ 4, and anything that is not a plain object,
+ * array or string is ignored. Only non-empty strings are returned — a common
+ * short word must not be able to poison the output scrub.
+ */
+export function collectAgentStringValues(agents, { maxDepth = 4 } = {}) {
+  const out = [];
+  const visit = (value, depth) => {
+    if (depth > maxDepth) return;
+    if (typeof value === 'string') {
+      if (value.length > 0) out.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1);
+      return;
+    }
+    if (typeof value === 'object' && value !== null) {
+      for (const item of Object.values(value)) visit(item, depth + 1);
+    }
+  };
+  visit(agents, 0);
+  return out;
+}
+
+/** The MCP discovery server entry the presence check looks for (extracted for tests). */
+export function mcpPresenceFinding(agents, { exists = existsSync, repoRoot = REPO_ROOT } = {}) {
+  // Core accepts a token only under `agents.claude.token` / `agents.codex.token`
+  // (agent-config.ts `agentTokensFromConfig`). A token under `agents.gemini`, an
+  // array element, or any other nesting does not make the stdio server useable.
+  const claudeToken = agents?.claude?.token;
+  const codexToken = agents?.codex?.token;
+  const hasUsableToken = (typeof claudeToken === 'string' && claudeToken.length > 0)
+    || (typeof codexToken === 'string' && codexToken.length > 0);
+  if (!hasUsableToken) return null;
+  const mcpMain = join(repoRoot, 'packages', 'mcp-discovery', 'dist', 'src', 'main.js');
+  return exists(mcpMain)
+    ? finding(OK, 'config', 'MCP discovery server is built', mcpMain)
+    : finding(WARN, 'config', 'MCP discovery server is not built', mcpMain, 'npm run build');
+}
+
+/* ------------------------------------------------------- config validation */
+
 /** Node Core tolerates a UTF-8 BOM (packages/node-core/src/main.ts). So does this. */
 export function parseConfigText(text) {
   return JSON.parse(text.replace(/^\uFEFF/, ''));
@@ -281,6 +332,137 @@ function validateAuthorizedAppsRules(value) {
       out.push(finding(BLOCK, area, `\`${at}\` must have exactly one rule shape`));
     }
   });
+  return out;
+}
+
+/**
+ * The agent names Node Core recognises (spec AT). `agent-config.ts` and
+ * `agent-grants.ts` both derive from the two names `claude` and `codex`; any
+ * other key under `agents` is ignored by Core, so it is a WARN here.
+ */
+const AGENT_NAMES = ['claude', 'codex'];
+
+/**
+ * Validate `agents.<name>`, mirroring the start-up checks Core runs (spec AT,
+ * `core.ts:226-252` and `agent-config.ts`). Like Core, this applies the passes
+ * in order across the whole bearer class — shape (in `agentTokensFromConfig`
+ * and `assertPrintableAscii`), strength, then distinctness — so a malformed
+ * entry blocks before a weak or shared one is even compared.
+ *
+ * `desktop_control.ar_gate_cleared` is validated only for its shape and value:
+ * nothing here can confirm the driver-profile requirement, so orient warns
+ * rather than probing ACLs.
+ */
+function validateAgentConfig(config) {
+  const out = [];
+  const area = 'config';
+  const agents = config.agents;
+  const configuredTokens = new Map();
+
+  // Shape (agent-config.ts `agentTokensFromConfig`): agents must be an object;
+  // `agents.claude` / `agents.codex`, each when present, an object with a string
+  // `token`. Core throws on any of these, so they are BLOCKs. `null` is treated
+  // like an absent `agents` (agentTokensFromConfig returns `{}` for it), so it
+  // produces no finding here.
+  if (agents !== undefined && agents !== null) {
+    if (typeof agents !== 'object' || Array.isArray(agents)) {
+      out.push(finding(BLOCK, area, '`agents` must be an object of `{ claude, codex }`',
+        'Core refuses to start when `agents` is not an object'));
+    } else {
+      for (const name of AGENT_NAMES) {
+        const entry = agents[name];
+        if (entry === undefined) continue;
+        if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+          out.push(finding(BLOCK, area, `\`agents.${name}\` must be an object with a \`token\``));
+          continue;
+        }
+        const token = entry.token;
+        if (typeof token !== 'string') {
+          out.push(finding(BLOCK, area, `\`agents.${name}.token\` must be a string`));
+          continue;
+        }
+        configuredTokens.set(name, token);
+      }
+      for (const key of Object.keys(agents)) {
+        if (!AGENT_NAMES.includes(key)) {
+          out.push(finding(WARN, area, `\`agents.${key}\` is not a recognised agent`, key,
+            'Core ignores unknown agent keys; the recognised agents are `claude` and `codex`'));
+        }
+      }
+    }
+  }
+
+  // Strength and shape of each token that passed the object/structure checks,
+  // in Core's order: printable ASCII first (`assertPrintableAscii` runs before
+  // the length and distinctness checks, `core.ts:232-251`).
+  for (const name of AGENT_NAMES) {
+    const token = configuredTokens.get(name);
+    if (token === undefined) continue;
+    if (!PRINTABLE_ASCII.test(token)) {
+      out.push(finding(BLOCK, area, `\`agents.${name}.token\` must contain only printable ASCII (0x21–0x7E), with no spaces, tabs or line breaks`,
+        'whitespace would be stripped at the HTTP header boundary, making two tokens indistinguishable on the wire'));
+      continue;
+    }
+    if (token.length < 32) {
+      out.push(finding(BLOCK, area, `\`agents.${name}.token\` must be at least 32 characters`));
+      continue;
+    }
+    // Distinctness, in Core's order (core.ts:242-251): differ from `token`,
+    // from `operator_token` (when set), then from the other agent's token.
+    if (typeof config.token === 'string' && token === config.token) {
+      out.push(finding(BLOCK, area, `\`agents.${name}.token\` must differ from \`token\``,
+        `\`agents.${name}.token\` and \`token\` are currently identical`));
+    }
+    if (typeof config.operator_token === 'string' && config.operator_token.length > 0 && token === config.operator_token) {
+      out.push(finding(BLOCK, area, `\`agents.${name}.token\` must differ from \`operator_token\``,
+        `\`agents.${name}.token\` and \`operator_token\` are currently identical`));
+    }
+    // A token that failed shape/strength already cannot also be a valid bearer,
+    // so the OK finding is emitted only when it passed all three passes above.
+    const other = AGENT_NAMES.find((n) => n !== name);
+    const otherToken = configuredTokens.get(other);
+    if (otherToken !== undefined && token === otherToken) {
+      out.push(finding(BLOCK, area, `\`agents.${name}.token\` must differ from \`agents.${other}.token\``,
+        `\`agents.${name}.token\` and \`agents.${other}.token\` are currently identical`));
+    } else if (PRINTABLE_ASCII.test(token) && token.length >= 32
+      && token !== config.token
+      && !(typeof config.operator_token === 'string' && config.operator_token.length > 0 && token === config.operator_token)) {
+      out.push(finding(OK, area, `\`agents.${name}.token\` present and distinct`, `${token.length} characters`));
+    }
+  }
+
+  // Desktop gate (agent-config.ts `desktopArGateCleared`): strict `=== true`,
+  // fail-closed. Core treats a non-object `desktop_control` as gate closed.
+  const desktopControl = config.desktop_control;
+  const hasAgentToken = configuredTokens.size > 0;
+  const gateClosedText = 'only the boolean `true` opens the gate; agents get `machine.inventory` only';
+  if (desktopControl === undefined) {
+    if (hasAgentToken) {
+      // Absent gate with a token configured: same text as the wrong-value case.
+      out.push(finding(WARN, area, gateClosedText));
+    }
+    // Absent with no agent token: nothing.
+  } else if (typeof desktopControl !== 'object' || desktopControl === null || Array.isArray(desktopControl)) {
+    out.push(finding(WARN, area, '`desktop_control` must be an object', '',
+      'Core treats a non-object `desktop_control` as the gate closed'));
+  } else if (desktopControl.ar_gate_cleared === true) {
+    out.push(finding(OK, area, 'desktop discovery open to agents'));
+  } else if ('ar_gate_cleared' in desktopControl) {
+    out.push(finding(WARN, area, gateClosedText,
+      `the configured value is a ${typeof desktopControl.ar_gate_cleared}`));
+  } else if (hasAgentToken) {
+    out.push(finding(WARN, area, gateClosedText));
+  }
+
+  // Driver-profile requirement (spec AT): orient cannot confirm the agent's CLI
+  // profile cannot read %LOCALAPPDATA%\Toros, so while a token is configured the
+  // warning is unconditional.
+  if (hasAgentToken) {
+    out.push(finding(WARN, area, 'agent driver profile cannot be confirmed',
+      'the agent\'s CLI must run under a profile that cannot read %LOCALAPPDATA%\\Toros; otherwise it can read the other bearers',
+      'run the agent CLI as a separate Windows user, or deny its profile read access to the Toros config directory'));
+  }
+
   return out;
 }
 
@@ -385,6 +567,10 @@ export function validateNodeConfig(config, { exists = existsSync } = {}) {
   // F3b/A9: the desktop application allowlist must be valid AppRule shapes, the
   // same rules Node Core enforces at startup (validateDesktopAuthorizedApps).
   out.push(...validateAuthorizedAppsRules(config.adapters?.desktop?.authorized_apps));
+
+  // Spec AT: agent discovery bearers and the desktop AR gate (`core.ts:226-252`,
+  // `agent-config.ts`).
+  out.push(...validateAgentConfig(config));
 
   return out;
 }
@@ -558,8 +744,22 @@ function collectConfiguration({ localAppData = process.env.LOCALAPPDATA } = {}) 
     for (const key of ['token', 'operator_token']) {
       if (typeof config[key] === 'string' && config[key].length > 0) secrets.push(config[key]);
     }
+    // Agent discovery bearers (spec AT): every non-empty string value anywhere
+    // under `agents` is a bearer-class credential and must be registered before
+    // anything renders, exactly like `token` and `operator_token`, or
+    // `scrubOrThrow` could let one out. This covers the canonical
+    // `agents.claude.token` / `agents.codex.token` and any other string the
+    // config carries (a bare-string `agents.claude`, a token under `agents.gemini`,
+    // a string nested under a non-string `token`).
+    secrets.push(...collectAgentStringValues(config.agents));
     out.push(finding(OK, area, 'node configuration found', configPath));
     out.push(...validateNodeConfig(config));
+    // MCP discovery server presence (spec AT2/AT3): a configured agent token is
+    // only usable when the stdio server it drives has been built. Keyed off the
+    // same condition Core uses — a non-empty string `agents.claude.token` /
+    // `agents.codex.token` — so a token under `agents.gemini` does not count.
+    const mcpFinding = mcpPresenceFinding(config.agents);
+    if (mcpFinding) out.push(mcpFinding);
     // What the operator configured is what a run would actually use, so it
     // outranks whatever happens to be first on PATH.
     for (const [id, spec] of Object.entries(config.adapters ?? {})) {
