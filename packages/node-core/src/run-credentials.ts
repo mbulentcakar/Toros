@@ -49,7 +49,11 @@ export interface RunCredentials {
  */
 const MAX_REMEMBERED_REVOKED_TOKENS = 512;
 
-export function createRunCredentials(nodeToken: string, operatorToken?: string): RunCredentials {
+export function createRunCredentials(
+  nodeToken: string,
+  operatorToken?: string,
+  agentTokens: { readonly claude?: string; readonly codex?: string } = {},
+): RunCredentials {
   /**
    * Live per-run credentials. A run may reach the conversation it was started
    * for and no other: the coordinator never names a conversation, it presents
@@ -153,10 +157,13 @@ export function createRunCredentials(nodeToken: string, operatorToken?: string):
      * rule at the authority that owns the store, so a faulty or hostile
      * `append_turn`, or an operator pasting a bearer into the chat box, cannot put
      * a live credential into durable history and back into later model context.
+     * The scope is every bearer class the node knows: node, operator, and the
+     * configured agent tokens — an agent bearer pasted into an objective, an
+     * acceptance line or a turn is sealed/rehydrated by exactly the same paths.
      */
     redactSecrets(content: string): string {
       let out = content;
-      const secrets = [nodeToken, operatorToken, ...runTokens.keys(), ...revokedTokens];
+      const secrets = [nodeToken, operatorToken, agentTokens.claude, agentTokens.codex, ...runTokens.keys(), ...revokedTokens];
       for (const secret of secrets) {
         if (secret === undefined || secret.length < 8) continue;
         out = out.split(secret).join('[redacted]');

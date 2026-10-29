@@ -150,6 +150,7 @@ export function createHttpTransport(deps: {
   readonly tools: ToolRouteSurface;
   readonly operator: RouteSurface;
   readonly chrome: RouteSurface;
+  readonly agent: RouteSurface;
 }): HttpTransport {
   let server: Server | null = null;
   let actualPort = 0;
@@ -235,6 +236,22 @@ export function createHttpTransport(deps: {
       }
       if (!authenticateAgainst(request, response, operatorToken)) return;
       await deps.operator.handle(parts[1], request, response);
+      return;
+    }
+    // The agent surface (spec AT) is a third, separate bearer class: an
+    // operator-granted session presents its own `agents.*.token`, matched on
+    // the agent routes themselves. The node and operator bearers are refused
+    // here, defence in depth like the operator branch above — timing-safe, so a
+    // start-up distinctness check that is ever skipped still cannot admit them.
+    if (parts[0] === 'agent') {
+      const bearer = request.headers.authorization;
+      if (typeof bearer === 'string' && bearer.startsWith('Bearer ')) {
+        const supplied = bearer.slice(7);
+        if (equalTokens(supplied, deps.token)) { send(response, 401, { error: 'Unauthorized' }); return; }
+        const operatorToken = deps.operator_token;
+        if (operatorToken !== undefined && operatorToken.length > 0 && equalTokens(supplied, operatorToken)) { send(response, 401, { error: 'Unauthorized' }); return; }
+      }
+      await deps.agent.handle(parts[1], request, response);
       return;
     }
     const caller = authenticate(request, response);

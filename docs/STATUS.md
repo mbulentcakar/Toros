@@ -4,7 +4,7 @@ What is true right now. Claims about the project live here and nowhere else; the
 points at this file rather than repeating it. Per-machine operator records are kept outside the
 repository.
 
-## Where the project is — 2026-09-21
+## Where the project is — 2026-10-28
 
 - **Phase 1 is live on two Windows nodes.** Node Core runs as a limited, single-instance logon
   task on loopback; the SPEC §10 acceptance list passes against the running service on both.
@@ -14,9 +14,14 @@ repository.
   are in `docs/finding-cli-*.md`.
 - **The Hermes coordinator runs against an OpenAI-compatible endpoint** (OpenRouter in the
   reference setup) and has completed a bounded job that drives a worker and reports back.
-- **The cockpit, Chrome worker, and desktop discovery adapter exist and are tested**, but are
-  optional on a tool node, and the desktop data surface is not production-enabled until its
-  adversarial review clears (`docs/reviews/`).
+- **The cockpit, Chrome worker, and desktop discovery adapter exist and are tested.** The
+  desktop discovery surface's adversarial review and native re-review are complete (the AR gate
+  cleared in mbulentcakar/Toros#18); a node opens it to agents only with
+  `desktop_control.ar_gate_cleared: true`.
+- **Agent discovery over MCP (spec AT) is merged**: an operator-granted Claude Code or Codex
+  session can call the read-only discovery capabilities through `packages/mcp-discovery`
+  (`docs/USING.md` §8). Verified with real Claude Code 2.1.310 and codex-cli 0.160.1 against a
+  native test node; not yet enabled on the production nodes.
 
 ## Open known issues
 
@@ -34,3 +39,5 @@ repository.
 
 Public-readiness: install and usage guides written against a fresh machine, then the
 `succeeded`-receipt fix above. Phase 2 (a second node with pull-based transfer) remains planned.
+Spec AS (agent desktop actions under missions, mbulentcakar/Toros#1) builds on AT's credentials
+and MCP server; it awaits operator acceptance.

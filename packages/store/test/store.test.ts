@@ -118,7 +118,7 @@ describe('Migrations and lifecycle', () => {
     const version = upgraded.prepare('SELECT MAX(version) AS version FROM schema_version').get() as { version: number };
     const columns = upgraded.prepare('PRAGMA table_info(receipts)').all() as Array<{ name: string }>;
     upgraded.close();
-    assert.equal(version.version, 6);
+    assert.equal(version.version, 7);
     assert.ok(columns.some((column) => column.name === 'adapter_fields'));
   });
 
@@ -162,7 +162,7 @@ describe('Migrations and lifecycle', () => {
       "SELECT name FROM sqlite_master WHERE type='index' AND name IN ('receipts_retry', 'receipts_session_outcome') ORDER BY name",
     ).all() as Array<{ name: string }>;
     upgraded.close();
-    assert.deepEqual(versions.map((row) => row.version), [1, 2, 3, 4, 5, 6]);
+    assert.deepEqual(versions.map((row) => row.version), [1, 2, 3, 4, 5, 6, 7]);
     assert.deepEqual(indexes.map((row) => row.name), ['receipts_retry', 'receipts_session_outcome']);
     assert.equal(columns.filter((column) => column.name === 'adapter_fields').length, 1);
   });
@@ -243,7 +243,7 @@ describe('Migrations and lifecycle', () => {
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('conversations', 'conversation_turns') ORDER BY name")
       .all() as Array<{ name: string }>;
     upgraded.close();
-    assert.equal(version.version, 6);
+    assert.equal(version.version, 7);
     assert.deepEqual(tables.map((row) => row.name), ['conversation_turns', 'conversations']);
   });
 
@@ -314,7 +314,7 @@ describe('Migrations and lifecycle', () => {
     ).all() as Array<{ name: string }>;
     const afterRows = upgraded.prepare('SELECT * FROM receipts ORDER BY receipt_id').all();
     upgraded.close();
-    assert.deepEqual(versions.map((row) => row.version), [1, 2, 3, 4, 5, 6]);
+    assert.deepEqual(versions.map((row) => row.version), [1, 2, 3, 4, 5, 6, 7]);
     assert.deepEqual(indexes.map((row) => row.name), ['receipts_retry', 'receipts_session_outcome']);
     assert.deepEqual(afterRows, beforeRows);
   });

@@ -1,0 +1,28 @@
+{
+  "name": "@toros/mcp-discovery",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local stdio MCP server that exposes operator-granted read-only discovery (spec AT) to a Claude or Codex session",
+  "_comment_entrypoints": "tsconfig sets rootDir '.' so that src/ and test/ both compile, which puts the emitted entrypoint at dist/src/index.js — not dist/index.js. These paths must match that layout or every consumer fails with TS2307 'Cannot find module @toros/mcp-discovery'.",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build",
+    "test": "npm run build && node --test dist/test/*.test.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@toros/node-core": "*",
+    "@toros/contracts": "*",
+    "@toros/envelope": "*",
+    "@toros/store": "*"
+  }
+}

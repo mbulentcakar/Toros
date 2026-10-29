@@ -73,7 +73,8 @@ A headless local service responsible for:
 - persisting job/session state;
 - writing append-only action receipts;
 - producing explicit checkpoints and relay capsules;
-- mediating every CLI, desktop, and transport adapter.
+- mediating every CLI, desktop, and transport adapter;
+- serving read-only discovery (Spec AR) to an operator-granted Claude or Codex session over the loopback `/agent/*` routes (Spec AT).
 
 ### 4.3 Adapter boundaries
 
@@ -232,7 +233,8 @@ be worse than the gap.
   absolute deny tiers are classified by Node Core before any agent is asked;
 - append-only receipts for request, decision, execution, and result;
 - envelope-digest binding on every action (§5);
-- no credentials in model context or relay capsules.
+- no credentials in model context or relay capsules;
+- each bearer (`token`, `operator_token`, `agents.*.token`) is pairwise distinct, at least 32 characters, and accepted only on its own routes; the `operator` and `agent:` actor labels cannot be claimed over the tools surface.
 
 Append-only is a mechanism, not a convention. The event log is a hash chain: each row carries
 `prev_hash` (the `hash` of the preceding row for that node, or 64 zeroes for the genesis row)

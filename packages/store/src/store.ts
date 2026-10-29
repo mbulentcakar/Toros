@@ -52,6 +52,7 @@ import { sql as MIGRATION_3_SQL } from './migrations/003_conversations.js';
 import { sql as MIGRATION_4_SQL } from './migrations/004_job_conversation.js';
 import { sql as MIGRATION_5_SQL } from './migrations/005_receipt_query_indexes.js';
 import { sql as MIGRATION_6_SQL } from './migrations/006_conversation_lifecycle_and_usage.js';
+import { sql as MIGRATION_7_SQL } from './migrations/007_agent_grants.js';
 
 const MIGRATIONS = [
   [1, MIGRATION_1_SQL],
@@ -60,6 +61,7 @@ const MIGRATIONS = [
   [4, MIGRATION_4_SQL],
   [5, MIGRATION_5_SQL],
   [6, MIGRATION_6_SQL],
+  [7, MIGRATION_7_SQL],
 ] as const;
 
 export const COUNT_RETRIES_SQL = `SELECT COUNT(*) AS count

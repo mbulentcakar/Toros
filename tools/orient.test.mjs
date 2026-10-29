@@ -24,6 +24,8 @@ import {
   readVersion,
   resolveOnPath,
   classifyExchange,
+  collectAgentStringValues,
+  mcpPresenceFinding,
   scrubOrThrow,
   validateNodeConfig,
 } from './orient.mjs';
@@ -281,6 +283,237 @@ describe('node configuration validation — F1 tokens and desktop authorized_app
   });
 });
 
+describe('node configuration validation — agent tokens and desktop gate (spec AT)', () => {
+  const exists = () => true;
+  const CLAUDE = 'c'.repeat(64);
+  const CODEX = 'd'.repeat(64);
+
+  const agentConfig = (root, patch = {}) => ({
+    ...goodConfig(root),
+    agents: { claude: { token: CLAUDE }, codex: { token: CODEX } },
+    ...patch,
+  });
+
+  it('rejects a short agent token', () => {
+    const config = agentConfig(scratch(), { agents: { claude: { token: 'short' } } });
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /`agents\.claude\.token` must be at least 32 characters/);
+  });
+
+  it('rejects an agent token containing a space', () => {
+    const config = agentConfig(scratch(), { agents: { claude: { token: 'A'.repeat(31) + ' ' } } });
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /printable ASCII/);
+  });
+
+  it('rejects an agent token with a trailing newline', () => {
+    const config = agentConfig(scratch(), { agents: { claude: { token: 'A'.repeat(32) + '\n' } } });
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /printable ASCII/);
+  });
+
+  it('rejects operator_token + " " as an agent token (whitespace cannot survive the wire)', () => {
+    const operator = 'b'.repeat(64);
+    const config = {
+      ...goodConfig(scratch()),
+      operator_token: operator,
+      agents: { claude: { token: operator + ' ' } },
+    };
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /printable ASCII/);
+  });
+
+  it('rejects an agent token equal to token, operator_token, or the other agent', () => {
+    const shared = 'e'.repeat(64);
+    const equalToken = agentConfig(scratch(), { token: shared, agents: { claude: { token: shared } } });
+    const titles = blockers(validateNodeConfig(equalToken, { exists })).map((f) => f.title);
+    assert.ok(titles.some((t) => /must differ from `token`/.test(t)));
+
+    const op = 'f'.repeat(64);
+    const equalOperator = agentConfig(scratch(), { operator_token: op, agents: { claude: { token: op } } });
+    const opTitles = blockers(validateNodeConfig(equalOperator, { exists })).map((f) => f.title);
+    assert.ok(opTitles.some((t) => /must differ from `operator_token`/.test(t)));
+
+    const equalOther = agentConfig(scratch(), { agents: { claude: { token: shared }, codex: { token: shared } } });
+    const otherTitles = blockers(validateNodeConfig(equalOther, { exists })).map((f) => f.title);
+    assert.ok(otherTitles.some((t) => /must differ from `agents\.codex\.token`/.test(t)));
+    assert.ok(otherTitles.some((t) => /must differ from `agents\.claude\.token`/.test(t)));
+  });
+
+  it('rejects an array-shaped `agents`', () => {
+    const config = agentConfig(scratch(), { agents: [] });
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /`agents` must be an object/);
+  });
+
+  it('rejects a string-shaped `agents.claude`', () => {
+    const config = agentConfig(scratch(), { agents: { claude: 'not-an-object' } });
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /`agents\.claude` must be an object/);
+  });
+
+  it('rejects a number-shaped `agents.claude.token`', () => {
+    const config = agentConfig(scratch(), { agents: { claude: { token: 42 } } });
+    assert.match(blockers(validateNodeConfig(config, { exists }))[0].title, /`agents\.claude\.token` must be a string/);
+  });
+
+  it('accepts `agents: null` the way Core does (agentTokensFromConfig returns {})', () => {
+    // Core treats null like an absent `agents`. orient must not BLOCK it, and
+    // must not emit the gate/driver warnings that only a configured token earns.
+    const config = { ...goodConfig(scratch()), agents: null };
+    const found = validateNodeConfig(config, { exists });
+    assert.deepEqual(blockers(found), []);
+    assert.ok(!found.some((f) => /`agents` must be an object/.test(f.title)),
+      '`agents: null` must not read as a malformed `agents` object');
+    assert.ok(!found.some((f) => /opens the gate/.test(f.title)),
+      'no agent token is configured, so no gate warning');
+    assert.ok(!found.some((f) => f.title === 'agent driver profile cannot be confirmed'),
+      'no agent token is configured, so no driver-profile warning');
+  });
+
+  it('reports each agent\'s token present and distinct, with the length not the value', () => {
+    const config = agentConfig(scratch());
+    const ok = validateNodeConfig(config, { exists }).filter((f) => f.level === OK && /^`agents\.(claude|codex)\.token` present and distinct$/.test(f.title));
+    assert.equal(ok.length, 2);
+    for (const finding of ok) {
+      assert.match(finding.detail, /^\d+ characters$/);
+      assert.ok(!finding.detail.includes(CLAUDE) && !finding.detail.includes(CODEX), 'detail holds the length, never the value');
+    }
+  });
+
+  it('rejects a non-empty configured agent token only when it fails a pass; warns on unknown agent keys', () => {
+    const config = agentConfig(scratch(), { agents: { claude: { token: CLAUDE }, gemini: { token: 'g'.repeat(64) } } });
+    const warnings = validateNodeConfig(config, { exists }).filter((f) => f.level === WARN && /gemini/.test(f.title));
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0].title, /`agents\.gemini` is not a recognised agent/);
+  });
+
+  describe('desktop gate', () => {
+    it('OK when the boolean true is set', () => {
+      const config = agentConfig(scratch(), { desktop_control: { ar_gate_cleared: true } });
+      assert.ok(validateNodeConfig(config, { exists }).some((f) => f.level === OK && f.title === 'desktop discovery open to agents'));
+    });
+
+    it('warns for false, "true" and 1, without printing the value', () => {
+      for (const value of [false, 'true', 1]) {
+        const config = agentConfig(scratch(), { desktop_control: { ar_gate_cleared: value } });
+        const found = validateNodeConfig(config, { exists });
+        const warn = found.find((f) => f.level === WARN && /only the boolean `true` opens the gate/.test(f.title));
+        assert.ok(warn, `expected a gate warning for value ${value}`);
+        assert.ok(!JSON.stringify(warn).includes(JSON.stringify(value)), 'the finding must not print the value');
+      }
+    });
+
+    it('reports the string "true" case as type string, without printing the value', () => {
+      const config = agentConfig(scratch(), { desktop_control: { ar_gate_cleared: 'true' } });
+      const found = validateNodeConfig(config, { exists });
+      const warn = found.find((f) => f.level === WARN && /only the boolean `true` opens the gate/.test(f.title));
+      assert.equal(warn.detail, 'the configured value is a string',
+        'the detail must be the type sentence, never the configured value');
+      assert.match(warn.detail, /string/);
+      assert.ok(!warn.detail.includes('true'), 'the detail must not reproduce the `true` value');
+    });
+
+    it('warns when the gate is absent with a token, and emits nothing without one', () => {
+      const withToken = validateNodeConfig(agentConfig(scratch()), { exists });
+      assert.ok(withToken.some((f) => f.level === WARN && /only the boolean `true` opens the gate/.test(f.title)));
+
+      const withoutToken = validateNodeConfig(goodConfig(scratch()), { exists });
+      assert.ok(!withoutToken.some((f) => /opens the gate/.test(f.title)), 'no gate finding when no agent token is configured');
+    });
+
+    it('warns when desktop_control is an array', () => {
+      const config = agentConfig(scratch(), { desktop_control: [] });
+      const found = validateNodeConfig(config, { exists });
+      assert.ok(found.some((f) => f.level === WARN && /`desktop_control` must be an object/.test(f.title)));
+    });
+  });
+
+  it('emits the driver-profile warning exactly once with one or two tokens, and never with none', () => {
+    const one = validateNodeConfig(agentConfig(scratch(), { agents: { claude: { token: CLAUDE } } }), { exists });
+    assert.equal(one.filter((f) => f.title === 'agent driver profile cannot be confirmed').length, 1);
+
+    const two = validateNodeConfig(agentConfig(scratch()), { exists });
+    assert.equal(two.filter((f) => f.title === 'agent driver profile cannot be confirmed').length, 1);
+
+    const none = validateNodeConfig(goodConfig(scratch()), { exists });
+    assert.equal(none.filter((f) => f.title === 'agent driver profile cannot be confirmed').length, 0);
+  });
+});
+
+describe('agent string walk and MCP presence (spec AT2/AT3)', () => {
+  it('registers every non-empty string under agents, at any nesting up to depth 4', () => {
+    const agents = {
+      claude: { token: 'c'.repeat(64) },
+      codex: { token: 'd'.repeat(64) },
+      gemini: { token: 'g'.repeat(64) },
+      loose: 'a-bare-string-value',
+      nested: { outer: { inner: { deep: 'e'.repeat(64) } } },
+      array: [{ token: 'f'.repeat(64) }],
+      empty: '',
+      number: 42,
+      bool: false,
+    };
+    const values = collectAgentStringValues(agents);
+    assert.ok(values.includes('c'.repeat(64)), 'claude token registered');
+    assert.ok(values.includes('d'.repeat(64)), 'codex token registered');
+    assert.ok(values.includes('g'.repeat(64)), 'gemini token registered');
+    assert.ok(values.includes('a-bare-string-value'), 'a bare string under agents is registered');
+    assert.ok(values.includes('e'.repeat(64)), 'a string nested under a non-string token is registered');
+    assert.ok(values.includes('f'.repeat(64)), 'a string inside an array element is registered');
+    assert.ok(!values.includes(''), 'empty strings are ignored');
+    assert.equal(values.filter((v) => v === 'e'.repeat(64)).length, 1, 'no duplicates');
+  });
+
+  it('bounds the walk at depth 4', () => {
+    const agents = { a: { b: { c: { d: { e: { f: 'too-deep' } } } } } };
+    assert.deepEqual(collectAgentStringValues(agents), []);
+  });
+
+  it('registers nothing for null, undefined, or a number, and a bare string itself for a string', () => {
+    assert.deepEqual(collectAgentStringValues(null), []);
+    assert.deepEqual(collectAgentStringValues(undefined), []);
+    assert.deepEqual(collectAgentStringValues(42), []);
+    assert.deepEqual(collectAgentStringValues('plain-string'), ['plain-string']);
+  });
+
+  it('mcpPresenceFinding is OK when the built server exists', () => {
+    const finding = mcpPresenceFinding(
+      { claude: { token: 'c'.repeat(64) } },
+      { exists: () => true, repoRoot: '/repo' },
+    );
+    assert.equal(finding.level, OK);
+    assert.match(finding.title, /MCP discovery server is built/);
+  });
+
+  it('mcpPresenceFinding is WARN (npm run build) when the built server is missing', () => {
+    const finding = mcpPresenceFinding(
+      { codex: { token: 'd'.repeat(64) } },
+      { exists: () => false, repoRoot: '/repo' },
+    );
+    assert.equal(finding.level, WARN);
+    assert.match(finding.title, /MCP discovery server is not built/);
+    assert.match(finding.fix, /npm run build/);
+  });
+
+  it('mcpPresenceFinding is null when only agents.gemini has a token', () => {
+    assert.equal(
+      mcpPresenceFinding({ gemini: { token: 'g'.repeat(64) } }, { exists: () => true }),
+      null,
+    );
+    // An empty token, a non-object entry, or an absent `token` key all leave the
+    // usable-token condition false, exactly as agentTokensFromConfig does.
+    assert.equal(
+      mcpPresenceFinding({ gemini: { token: 'g'.repeat(64) }, claude: { token: '' } }, { exists: () => true }),
+      null,
+    );
+    assert.equal(
+      mcpPresenceFinding({ gemini: { token: 'g'.repeat(64) }, claude: 'bare', codex: { token: 42 } }, { exists: () => true }),
+      null,
+    );
+  });
+
+  it('mcpPresenceFinding is null when agents is absent or empty', () => {
+    assert.equal(mcpPresenceFinding(undefined, { exists: () => true }), null);
+    assert.equal(mcpPresenceFinding(null, { exists: () => true }), null);
+    assert.equal(mcpPresenceFinding({}, { exists: () => true }), null);
+  });
+});
+
 describe('credential handling (criterion 3)', () => {
   it('throws rather than printing a credential value', () => {
     const secret = 'd'.repeat(64);
@@ -323,7 +556,100 @@ describe('credential handling (criterion 3)', () => {
       assert.match(output, /api_key/);
     }
   });
+
+  it('never emits a configured agent token, end to end (spec AT)', () => {
+    const root = scratch();
+    const localAppData = join(root, 'local');
+    const torosDir = join(localAppData, 'Toros');
+    mkdirSync(torosDir, { recursive: true });
+    const claude = 'ab'.repeat(32);
+    const codex = 'cd'.repeat(32);
+    writeFileSync(join(torosDir, 'config.json'), JSON.stringify({
+      ...goodConfig(root),
+      agents: { claude: { token: claude }, codex: { token: codex } },
+    }));
+
+    for (const args of [[], ['--json']]) {
+      const output = execFileSync(process.execPath, [ORIENT, ...args], {
+        encoding: 'utf8',
+        env: { ...process.env, LOCALAPPDATA: localAppData },
+      });
+      for (const secret of [claude, codex]) {
+        assert.ok(!output.includes(secret), `agent token leaked with args ${JSON.stringify(args)}`);
+      }
+      // ...while still reporting that the tokens are there.
+      assert.match(output, /agents\.claude\.token/);
+    }
+  });
+
+  // The scrub is only meaningful when it holds every string under `agents`: a
+  // secret registered once but sitting in a different shape must still refuse.
+  // Each of these cases plants the token as an absolute, existing workspace
+  // root — the path orient prints verbatim in its `workspace root` finding — so
+  // orient really would print it unless the scrub refuses first.
+  it('refuses to print a planted agent token (agents.claude.token)', () => {
+    runScrubCase('claude', (token) => ({ claude: { token } }));
+  });
+
+  it('refuses to print a planted agent token (agents.gemini.token)', () => {
+    runScrubCase('gemini', (token) => ({ gemini: { token } }));
+  });
+
+  it('refuses to print a planted agent token (bare-string agents.claude)', () => {
+    runScrubCase('claude', (token) => ({ claude: token }));
+  });
 });
+
+/**
+ * Drive orient via the CLI for one planted-token shape. The token is planted
+ * both under `agents` (the shape under test) and as an absolute workspace root,
+ * so a failure to register it would let it render in the `workspace root`
+ * finding. `agentsFor` maps the token to the `agents` object under test.
+ */
+function runScrubCase(seed, agentsFor) {
+  const token = (seed === 'claude' ? 'c' : 'g').repeat(64);
+  const root = scratch();
+  const workspaceRoot = join(root, token);
+  mkdirSync(workspaceRoot, { recursive: true });
+
+  // Two independent runs, one per CLI argument shape, so --json and plain text
+  // each get their own configuration and their own assertion.
+  for (const args of [[], ['--json']]) {
+    const localAppData = join(root, args.length ? 'json' : 'text');
+    const torosDir = join(localAppData, 'Toros');
+    mkdirSync(torosDir, { recursive: true });
+    const config = goodConfig(root);
+    config.agents = agentsFor(token);
+    config.workspaces = [{ id: 'sandbox', root: workspaceRoot }];
+    writeFileSync(join(torosDir, 'config.json'), JSON.stringify(config));
+
+    const result = runOrient([...args], localAppData);
+    assert.notEqual(result.status, 0,
+      `orient must refuse (${JSON.stringify(args)}) when the token is planted`);
+    assert.match(result.output, /refusing to print/,
+      'the refusal must be the scrub message');
+    assert.ok(!result.output.includes(token),
+      `token leaked to orient output with args ${JSON.stringify(args)}`);
+  }
+}
+
+/** Spawn `node tools/orient.mjs` and return { status, output } (stdout + stderr). */
+function runOrient(args, localAppData) {
+  try {
+    return {
+      status: 0,
+      output: execFileSync(process.execPath, [ORIENT, ...args], {
+        encoding: 'utf8',
+        env: { ...process.env, LOCALAPPDATA: localAppData },
+      }),
+    };
+  } catch (error) {
+    return {
+      status: error.status ?? 1,
+      output: `${error.stdout ?? ''}${error.stderr ?? ''}`,
+    };
+  }
+}
 
 describe('executed argument vectors (criterion 5)', () => {
   it('runs only a fixed --version vector', () => {
