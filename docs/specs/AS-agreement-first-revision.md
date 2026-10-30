@@ -74,7 +74,7 @@ widened. To stop the old authority, cancel the job and revoke any AT grant on it
 - `packages/contracts/src/ports.ts`: the optional parameter only;
 - `docs/specs/00-CONTRACTS.md`: A12;
 - the coordinator's `propose_job` schema in `packages/coordinator/src/index.ts`;
-- `apps/cockpit/src/{components/HermesChat.tsx,api.ts}`;
+- `apps/cockpit/src/{components/HermesChat.tsx,api.ts,types.ts}`;
 - the tests for all of the above;
 - `docs/USING.md`.
 
