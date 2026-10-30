@@ -234,6 +234,14 @@ export function createOperatorRoutes(deps: {
         if (existing.conversation_id !== conversationId) {
           throw toros(ErrorCode.E_SCHEMA, 'the proposal changed; review it again');
         }
+        // The turn at seq is immutable and is the agreement snapshot. A retry
+        // does not re-validate against the registry (it may have changed since
+        // the accept); it trusts only what the turn recorded, and refuses a
+        // caller-supplied digest that diverges from that.
+        const storedDigest = await deps.draft.storedProposalDigest(conversationId, seq);
+        if (storedDigest !== suppliedDigest) {
+          throw toros(ErrorCode.E_SCHEMA, 'the proposal changed; review it again');
+        }
         const events = await deps.store().listEvents(derivedId);
         if (!events.some((event) => event.kind === 'job.created')) {
           await deps.store().appendEvent({
@@ -242,7 +250,7 @@ export function createOperatorRoutes(deps: {
             kind: 'job.created',
             payload: {
               envelope_digest: existing.envelope_digest,
-              agreement_digest: suppliedDigest,
+              agreement_digest: storedDigest,
               conversation_id: conversationId,
               proposal_seq: seq,
             },

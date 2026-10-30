@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { digest, ErrorCode, type JobRecord, type JsonValue, type Store, type Workspace } from '@toros/contracts';
+import { digest, ErrorCode, TorosError, type JobRecord, type JsonValue, type Store, type Workspace } from '@toros/contracts';
 import { sealEnvelope } from '@toros/envelope';
 
 import { asRecord, optionalString, requiredPositiveInteger, requiredString, stringArray, toros } from './http.js';
@@ -165,6 +165,7 @@ export interface DraftService {
   readonly createJobFromArgs: (args: Readonly<Record<string, JsonValue>>, options?: CreateJobOptions) => Promise<JobRecord>;
   readonly validateDraft: (args: Readonly<Record<string, JsonValue>>, agent?: string | null) => Readonly<Record<string, JsonValue>>;
   readonly liveProposal: (conversationId: string, seq: number) => Promise<{ readonly args: Record<string, JsonValue>; readonly agreement_digest: string }>;
+  readonly storedProposalDigest: (conversationId: string, seq: number) => Promise<string>;
   readonly agents: () => readonly string[];
 }
 
@@ -334,8 +335,22 @@ export function createDraftService(deps: {
     if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) throw changed();
 
     // Registered adapters or workspaces may have changed since the turn was
-    // written, so the stored proposal is validated again before sealing.
-    const draft = validateDraft(candidate as Record<string, JsonValue>);
+    // written, so the stored proposal is validated again before sealing. A
+    // re-validation failure — a capability or workspace that has since been
+    // unregistered, or a capability that no longer matches the pinned agent —
+    // means the normalized form no longer matches what the operator saw, so the
+    // accept is refused with the same "the proposal changed" refusal as a stale
+    // seq or wrong digest, not the raw E_NOT_REGISTERED error code.
+    const draft = (() => {
+      try {
+        return validateDraft(candidate as Record<string, JsonValue>);
+      } catch (cause: unknown) {
+        if (cause instanceof TorosError && (cause.code === ErrorCode.E_NOT_REGISTERED || cause.code === ErrorCode.E_WORKSPACE_DENIED || cause.code === ErrorCode.E_CAP_NOT_ALLOWED)) {
+          throw changed();
+        }
+        throw cause;
+      }
+    })();
     const capabilities = draft['capabilities'] as ReadonlyArray<{ readonly id: string }>;
     return {
       args: {
@@ -352,10 +367,49 @@ export function createDraftService(deps: {
     };
   }
 
+  /**
+   * The agreement digest the proposal turn at `seq` was stored with, verified
+   * against its own immutable recorded proposal.
+   *
+   * This is the retry path's read: it does NOT re-validate against the
+   * registry. The registry may have changed since the accept, and that must
+   * not invalidate an already-sealed job; what matters is that the turn at
+   * `seq` is a proposal and internally consistent — its stored
+   * `agreement_digest` equals the digest recomputed over its stored (already
+   * redacted) proposal. The turn is immutable, so this is a faithful record of
+   * what the operator agreed to, never of what the caller now claims.
+   *
+   * Any other case (missing turn, not a proposal, a recomputed digest that
+   * diverges from the stored one) is `E_SCHEMA` "the proposal changed; review
+   * it again".
+   */
+  async function storedProposalDigest(conversationId: string, seq: number): Promise<string> {
+    const changed = () => toros(ErrorCode.E_SCHEMA, 'the proposal changed; review it again');
+    const turns = await deps.store().listTurns(conversationId);
+    const turn = turns.find((entry) => entry.seq === seq);
+    if (turn === undefined || turn.channel !== 'machine') throw changed();
+    let parsed: unknown;
+    try { parsed = JSON.parse(turn.content); }
+    catch { throw changed(); }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw changed();
+    const record = parsed as Record<string, unknown>;
+    const storedDigest = record['agreement_digest'];
+    const proposal = record['propose_job'];
+    if (typeof storedDigest !== 'string' || typeof proposal !== 'object' || proposal === null || Array.isArray(proposal)) {
+      throw changed();
+    }
+    // The stored proposal is already redacted, and its digest was computed over
+    // exactly that redacted form, so recompute directly — no redaction, no
+    // registry — and compare to what the turn recorded.
+    if (agreementDigest(proposal as Record<string, JsonValue>) !== storedDigest) throw changed();
+    return storedDigest;
+  }
+
   return {
     createJobFromArgs,
     validateDraft,
     liveProposal,
+    storedProposalDigest,
     agents: () => cliLifecycleFamilies(deps.registeredCapabilities()),
   };
 }

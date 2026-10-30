@@ -179,6 +179,7 @@ export function HermesChat({ active = true, onOpenJob }: HermesChatProps = {}): 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [acceptedJobId, setAcceptedJobId] = useState<string | null>(null);
+  const [hermesStarted, setHermesStarted] = useState(false);
   const [agents, setAgents] = useState<readonly string[]>([]);
   const [agent, setAgent] = useState('');
   const [models, setModels] = useState<ReadonlyArray<{ readonly id: string; readonly label: string; readonly provider: string }>>([]);
@@ -284,7 +285,7 @@ export function HermesChat({ active = true, onOpenJob }: HermesChatProps = {}): 
     try {
       const created = await createConversation('New conversation');
       setConversations((current) => [created, ...current]);
-      setSelected(created.conversation_id); setTurns([]); setUsage(null); setAcceptedJobId(null);
+      setSelected(created.conversation_id); setTurns([]); setUsage(null); setAcceptedJobId(null); setHermesStarted(false);
     } catch (cause: unknown) { setError(apiError(cause)); }
     finally { setBusy(false); }
   }
@@ -295,9 +296,23 @@ export function HermesChat({ active = true, onOpenJob }: HermesChatProps = {}): 
     try {
       await archiveConversation(selected);
       const remaining = conversations.filter((item) => item.conversation_id !== selected);
-      setConversations(remaining); setSelected(remaining[0]?.conversation_id ?? ''); setTurns([]); setUsage(null); setAcceptedJobId(null);
+      setConversations(remaining); setSelected(remaining[0]?.conversation_id ?? ''); setTurns([]); setUsage(null); setAcceptedJobId(null); setHermesStarted(false);
     } catch (cause: unknown) { setError(apiError(cause)); }
     finally { setBusy(false); }
+  }
+
+  async function startAcceptedJob(jobId: string): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      await startHermes(jobId);
+      setHermesStarted(true);
+      setTurns(await listTurns(selected));
+    } catch (cause: unknown) {
+      setError(apiError(cause));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function accept(): Promise<void> {
@@ -309,9 +324,12 @@ export function HermesChat({ active = true, onOpenJob }: HermesChatProps = {}): 
       const proposalTurn = proposalOf(lastTurn);
       if (proposalTurn === null) return;
       const job = await acceptProposal(selected, lastTurn.seq, proposalTurn.agreement_digest);
-      await startHermes(job.job_id);
+      // Record the accepted job immediately: the agreement is sealed and the
+      // job exists regardless of whether its first Hermes start succeeds.
       setAcceptedJobId(job.job_id);
+      setHermesStarted(false);
       setTurns(await listTurns(selected));
+      await startAcceptedJob(job.job_id);
     } catch (cause: unknown) {
       setError(apiError(cause));
     } finally {
@@ -362,8 +380,15 @@ export function HermesChat({ active = true, onOpenJob }: HermesChatProps = {}): 
         API reasoning; subscription-backed CLI usage is tracked as activity, not estimated dollars. Do not paste secrets.
       </p>
       {error !== null && <ErrorState error={error} />}
-      {acceptedJobId !== null && (
+      {acceptedJobId !== null && hermesStarted && (
         <div className="hermes-chat__accepted"><span>Job created and Hermes started.</span><button className="text-button" onClick={() => onOpenJob?.(acceptedJobId)} type="button">Open job workspace →</button></div>
+      )}
+      {acceptedJobId !== null && !hermesStarted && (
+        <div className="hermes-chat__accepted">
+          <span>Job created, but Hermes did not start.</span>
+          <button className="btn" disabled={busy} onClick={() => { void startAcceptedJob(acceptedJobId); }} type="button">Start Hermes</button>
+          <button className="text-button" onClick={() => onOpenJob?.(acceptedJobId)} type="button">Open job workspace →</button>
+        </div>
       )}
 
       <div className="hermes-chat__thread" aria-label="Conversation">

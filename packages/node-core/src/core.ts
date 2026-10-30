@@ -168,7 +168,8 @@ export class Core implements NodeCore {
       this.options.coordinator?.onRunEnded((runId) => { this.runCredentials.revoke(runId); });
       this.runEndedListenerRegistered = true;
     }
-    const store = await openStore({ path: this.options.db_path, nodeId: this.options.node_id });
+    const store = (this.options as NodeCoreOptions & { readonly store?: Store }).store
+      ?? await openStore({ path: this.options.db_path, nodeId: this.options.node_id });
     this.store = store;
     const registry = createRegistry({ workspaces: this.options.workspaces });
     for (const adapter of this.options.adapters) {

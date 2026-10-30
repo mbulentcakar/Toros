@@ -12,9 +12,10 @@ import {
   type AdapterContext,
   type AdapterManifest,
   type JsonValue,
+  type SealedEnvelope,
   type SessionAdapter,
+  type Store,
 } from '@toros/contracts';
-import { sealEnvelope } from '@toros/envelope';
 import { openStore } from '@toros/store';
 import {
   createNodeCore,
@@ -756,6 +757,47 @@ interface ProposalFixture {
   readonly agreement_digest: string;
 }
 
+/**
+ * `store` is an internal instance-scoped seam: NodeCoreOptions does not declare
+ * it, and a test that needs a wrapped (failing) store constructs its own Core
+ * with it. This alias types the seam without touching the public interface.
+ */
+type CoreOptions = Parameters<typeof createNodeCore>[0] & { readonly store?: Store };
+
+/**
+ * Wrap a real store so the FIRST appendEvent that follows a createJob throws.
+ * That is exactly the `job.created` event, so the accept seals a bound job and
+ * then errors out — the failure the round-1 check-2 test used to fake by hand.
+ */
+function wrapFailingStore(real: Store): { store: Store; armed: () => boolean; spent: () => boolean } {
+  let armed = false;
+  let spent = false;
+  const store: Store = new Proxy(real, {
+    get(target, prop) {
+      const value = Reflect.get(target, prop, target);
+      if (prop === 'createJob') {
+        return async (sealed: SealedEnvelope, options?: { conversation_id?: string }) => {
+          const job = await (value as Store['createJob']).call(target, sealed, options);
+          armed = true;
+          return job;
+        };
+      }
+      if (prop === 'appendEvent') {
+        return (input: Parameters<Store['appendEvent']>[0]) => {
+          if (armed && !spent) {
+            spent = true;
+            armed = false;
+            return Promise.reject(new Error('injected failure right after createJob'));
+          }
+          return (value as Store['appendEvent']).call(target, input);
+        };
+      }
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return { store, armed: () => armed, spent: () => spent };
+}
+
 /** Start a node, open a conversation, propose one mock job, and return its live proposal. */
 async function proposeFixture(t: { after: (hook: () => Promise<void>) => void }): Promise<ProposalFixture & { core: ReturnType<typeof createNodeCore>; dir: string }> {
   const dir = await mkdtemp(join(tmpdir(), 'toros-agreement-'));
@@ -802,39 +844,72 @@ test('check 1: accepting the same proposal twice yields one job, one turn, one e
 });
 
 test('check 2: a retry after createJob returns the same bound job and completes the missing turn and event', async (t) => {
-  const f = await proposeFixture(t);
-  // Simulate a failure after createJob: the job exists and is bound, but the
-  // job.created event and the "Job created" turn were never written.
-  const derivedId = deriveJobId(f.conversationId, f.seq);
-  const store = await openStore({ path: join(f.dir, 'node.sqlite'), nodeId: 'node' });
-  await store.createJob(sealEnvelope({
-    job_id: derivedId,
-    objective: 'Do the bounded thing',
-    allowed_capabilities: ['mock.run'],
-    allowed_workspaces: ['work'],
-    acceptance: ['done'],
-    forbidden: ['push'],
-    max_actions: 2,
-    max_retries: 1,
-    expires_at: '2999-01-01T00:00:00Z',
-  }), { conversation_id: f.conversationId });
-  await store.close();
+  // The real accept_proposal path, with a store that throws once right after
+  // the durable createJob insert. No job is pre-created by hand: the failure
+  // happens inside the accept itself, so a create-then-bind regression (a job
+  // sealed without conversation_id and bound later by setJobConversation)
+  // would leave the job unbound and fail the assertion below.
+  const dir = await mkdtemp(join(tmpdir(), 'toros-agreement-crash-'));
+  const starts: Array<{ jobId: string; input?: CoordinatorStartInput }> = [];
+  const realStore = await openStore({ path: join(dir, 'node.sqlite'), nodeId: 'node' });
+  // Fail the first appendEvent that follows a createJob: that is the
+  // job.created event, so the accept seals a bound job and then errors out.
+  const { store } = wrapFailingStore(realStore);
+  const core = createNodeCore({
+    node_id: 'node', db_path: join(dir, 'node.sqlite'), workspaces: [{ id: 'work', root: dir }],
+    port: 0, token: coordinatorToken, operator_token: operatorToken,
+    adapters: [adapter], observer: null, approval_required: [], coordinator: fakeCoordinator(starts),
+    store,
+  } as CoreOptions);
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+  const { port } = await core.start();
 
-  const accepted = await post(f.port, '/operator/accept_proposal', { conversation_id: f.conversationId, seq: f.seq, agreement_digest: f.agreement_digest }, operatorToken);
+  // Open a conversation and propose exactly as the real flow does.
+  const conversation = await post(port, '/operator/conversation_create', { title: 'crash' }, operatorToken);
+  const conversationId = String(conversation.body.conversation_id);
+  await post(port, '/operator/conversation_send', { conversation_id: conversationId, message: 'do the bounded thing' }, operatorToken);
+  const advisoryToken = String(starts.at(-1)?.input?.run_token);
+  await post(port, '/tools/propose_job', {
+    objective: 'Do the bounded thing',
+    plan: ['Run the bounded operation', 'Report the result'],
+    acceptance: ['done'],
+    capabilities: [{ id: 'mock.run', why: 'to do it' }],
+    workspaces: ['work'],
+    forbidden: ['push'],
+    max_actions: 2, max_retries: 1, expires_in_hours: 8,
+  }, advisoryToken);
+
+  const { seq, agreement_digest } = await liveProposalSeqAndDigest(port, conversationId);
+  const derivedId = deriveJobId(conversationId, seq);
+  const acceptBody = { conversation_id: conversationId, seq, agreement_digest };
+
+  // First accept hits the injected failure after createJob.
+  const first = await post(port, '/operator/accept_proposal', acceptBody, operatorToken);
+  assert.notEqual(first.status, 200, 'the injected failure did not surface as an error');
+
+  // The job was durably created AND bound in the same insert, even though the
+  // event and turn never got written.
+  const failed = await realStore.getJob(derivedId);
+  assert(failed !== null, 'the failed accept did not create the job');
+  assert.equal(failed.conversation_id, conversationId);
+  assert.equal((await realStore.listJobs()).length, 1);
+
+  // The retry returns the SAME job id and completes the missing event and turn.
+  const accepted = await post(port, '/operator/accept_proposal', acceptBody, operatorToken);
   assert.equal(accepted.status, 200);
   assert.equal(accepted.body.job_id, derivedId);
-  assert.equal(accepted.body.conversation_id, f.conversationId);
+  assert.equal(accepted.body.conversation_id, conversationId);
+  assert.equal(((await post(port, '/operator/jobs', {}, operatorToken)).body.jobs as unknown[]).length, 1);
 
-  // The missing event and turn are now complete, exactly once each.
-  const events = (await post(f.port, '/tools/list_activity', { job_id: derivedId }, coordinatorToken)).body.events as Array<Record<string, unknown>>;
+  const events = (await post(port, '/tools/list_activity', { job_id: derivedId }, coordinatorToken)).body.events as Array<Record<string, unknown>>;
   assert.equal(events.filter((event) => event.kind === 'job.created').length, 1);
-  const turns = (await post(f.port, '/operator/conversation_turns', { conversation_id: f.conversationId }, operatorToken)).body.turns as Array<Record<string, unknown>>;
+  const turns = (await post(port, '/operator/conversation_turns', { conversation_id: conversationId }, operatorToken)).body.turns as Array<Record<string, unknown>>;
   assert.equal(turns.filter((turn) => String(turn.content).startsWith('Job created:')).length, 1);
 
   // Starting it never invents a second conversation: the job is already bound.
-  const started = await post(f.port, '/operator/hermes_start', { job_id: derivedId }, operatorToken);
+  const started = await post(port, '/operator/hermes_start', { job_id: derivedId }, operatorToken);
   assert.equal(started.status, 200);
-  assert.equal(((await post(f.port, '/operator/jobs', {}, operatorToken)).body.jobs as unknown[]).length, 1);
+  assert.equal(((await post(port, '/operator/jobs', {}, operatorToken)).body.jobs as unknown[]).length, 1);
 });
 
 test('check 3: a stale seq or a wrong digest is refused and creates no job', async (t) => {
@@ -864,6 +939,80 @@ test('check 3b: a malformed seq or digest is refused with E_SCHEMA', async (t) =
   const badDigest = await post(f.port, '/operator/accept_proposal', { conversation_id: f.conversationId, seq: f.seq, agreement_digest: 'NOT-HEX' }, operatorToken);
   assert.equal(badDigest.status, 400);
   assert.equal(badDigest.body.error, ErrorCode.E_SCHEMA);
+});
+
+test('check 1b: a retry after a completed accept with a wrong digest is refused and never re-records', async (t) => {
+  const f = await proposeFixture(t);
+  const acceptBody = { conversation_id: f.conversationId, seq: f.seq, agreement_digest: f.agreement_digest };
+  const first = await post(f.port, '/operator/accept_proposal', acceptBody, operatorToken);
+  assert.equal(first.status, 200);
+  const jobId = String(first.body.job_id);
+
+  // A retry that supplies a different, well-formed digest must be refused: the
+  // retry path trusts the immutable turn's stored digest, not the caller's.
+  const wrong = await post(f.port, '/operator/accept_proposal', { conversation_id: f.conversationId, seq: f.seq, agreement_digest: 'f'.repeat(64) }, operatorToken);
+  assert.equal(wrong.status, 400);
+  assert.equal(wrong.body.error, ErrorCode.E_SCHEMA);
+  assert.equal(wrong.body.message, 'the proposal changed; review it again');
+
+  // Nothing was re-recorded: still one job, one turn, and one event carrying the TRUE digest.
+  assert.equal(((await post(f.port, '/operator/jobs', {}, operatorToken)).body.jobs as unknown[]).length, 1);
+  const events = (await post(f.port, '/tools/list_activity', { job_id: jobId }, coordinatorToken)).body.events as Array<Record<string, unknown>>;
+  const created = events.filter((event) => event.kind === 'job.created');
+  assert.equal(created.length, 1);
+  assert.equal((created[0]!.payload as Record<string, unknown>).agreement_digest, f.agreement_digest);
+});
+
+test('check 1c: a retry after an injected failure records the true digest, and a wrong digest is refused', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'toros-agreement-retry-digest-'));
+  const starts: Array<{ jobId: string; input?: CoordinatorStartInput }> = [];
+  const realStore = await openStore({ path: join(dir, 'node.sqlite'), nodeId: 'node' });
+  const { store } = wrapFailingStore(realStore);
+  const core = createNodeCore({
+    node_id: 'node', db_path: join(dir, 'node.sqlite'), workspaces: [{ id: 'work', root: dir }],
+    port: 0, token: coordinatorToken, operator_token: operatorToken,
+    adapters: [adapter], observer: null, approval_required: [], coordinator: fakeCoordinator(starts),
+    store,
+  } as CoreOptions);
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+  const { port } = await core.start();
+
+  const conversation = await post(port, '/operator/conversation_create', { title: 'retry' }, operatorToken);
+  const conversationId = String(conversation.body.conversation_id);
+  await post(port, '/operator/conversation_send', { conversation_id: conversationId, message: 'do the bounded thing' }, operatorToken);
+  const advisoryToken = String(starts.at(-1)?.input?.run_token);
+  await post(port, '/tools/propose_job', {
+    objective: 'Do the bounded thing',
+    plan: ['Run the bounded operation', 'Report the result'],
+    acceptance: ['done'],
+    capabilities: [{ id: 'mock.run', why: 'to do it' }],
+    workspaces: ['work'],
+    forbidden: ['push'],
+    max_actions: 2, max_retries: 1, expires_in_hours: 8,
+  }, advisoryToken);
+
+  const { seq, agreement_digest } = await liveProposalSeqAndDigest(port, conversationId);
+  const derivedId = deriveJobId(conversationId, seq);
+
+  // First accept fails after createJob, leaving a bound job with no event/turn.
+  const first = await post(port, '/operator/accept_proposal', { conversation_id: conversationId, seq, agreement_digest }, operatorToken);
+  assert.notEqual(first.status, 200);
+
+  // A wrong digest on the retry is refused and records nothing.
+  const wrong = await post(port, '/operator/accept_proposal', { conversation_id: conversationId, seq, agreement_digest: 'f'.repeat(64) }, operatorToken);
+  assert.equal(wrong.status, 400);
+  assert.equal(wrong.body.error, ErrorCode.E_SCHEMA);
+  assert.equal(wrong.body.message, 'the proposal changed; review it again');
+  assert.equal((await realStore.listEvents(derivedId)).length, 0, 'a wrong-digest retry wrote an event');
+
+  // The correct digest completes the recovery and the event carries the TRUE digest.
+  const accepted = await post(port, '/operator/accept_proposal', { conversation_id: conversationId, seq, agreement_digest }, operatorToken);
+  assert.equal(accepted.status, 200);
+  assert.equal(accepted.body.job_id, derivedId);
+  const events = await realStore.listEvents(derivedId);
+  const created = events.filter((event) => event.kind === 'job.created');
+  assert.equal(created.length, 1);
+  assert.equal((created[0]!.payload as Record<string, unknown>).agreement_digest, agreement_digest);
 });
 
 test('check 4: the three agreement fields are validated, kept off the envelope, and an unknown capability is still refused', async (t) => {
