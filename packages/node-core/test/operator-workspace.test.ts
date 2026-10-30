@@ -14,12 +14,15 @@ import {
   type JsonValue,
   type SessionAdapter,
 } from '@toros/contracts';
+import { sealEnvelope } from '@toros/envelope';
+import { openStore } from '@toros/store';
 import {
   createNodeCore,
   type CoordinatorControl,
   type CoordinatorRun,
   type CoordinatorStartInput,
 } from '../src/index.js';
+import { deriveJobId } from '../src/draft.js';
 import { MODEL_PROFILES } from '../src/model-profiles.js';
 
 const coordinatorToken = 'coordinator-token-for-operator-workspace';
@@ -142,9 +145,21 @@ async function post(
         body: JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>,
       }));
     });
-    req.on('error', reject);
+req.on('error', reject);
     req.end(JSON.stringify(body));
   });
+}
+
+/** The seq and agreement digest of the conversation's live proposal turn. */
+async function liveProposalSeqAndDigest(port: number, conversationId: string): Promise<{ seq: number; agreement_digest: string }> {
+  const turns = (await post(port, '/operator/conversation_turns', { conversation_id: conversationId }, operatorToken))
+    .body.turns as Array<Record<string, unknown>>;
+  const last = turns.at(-1);
+  assert(last !== undefined, 'expected a proposal turn');
+  const parsed = JSON.parse(String(last.content)) as Record<string, unknown>;
+  const agreement_digest = parsed['agreement_digest'];
+  assert.equal(typeof agreement_digest, 'string');
+  return { seq: last.seq as number, agreement_digest: agreement_digest as string };
 }
 
 test('operator creates, lists, starts, and stops only registered bounded jobs', async (t) => {
@@ -363,8 +378,11 @@ test('an advisory run can talk and propose, and Node Core refuses it everything 
   assert.equal(((await post(port, '/operator/jobs', {}, operatorToken)).body.jobs as unknown[]).length, 0);
 
   // The recorded proposal is authoritative; extra envelope fields are ignored.
+  const { seq, agreement_digest } = await liveProposalSeqAndDigest(port, conversationId);
   const accepted = await post(port, '/operator/accept_proposal', {
     conversation_id: conversationId,
+    seq,
+    agreement_digest,
     objective: 'A client-authored widening attempt',
     allowed_capabilities: ['anything.at.all'],
   }, operatorToken);
@@ -420,7 +438,8 @@ test('a CLI proposal is completed before review, the agent is pinned, and the re
   assert.deepEqual(capabilities.map((capability) => capability.id), ['codex.start', 'codex.send', 'codex.read', 'codex.stop']);
   assert.equal(capabilities.some((capability) => capability.id === 'codex.interrupt'), false);
 
-  const completed = await post(port, '/operator/accept_proposal', { conversation_id: conversationId }, operatorToken);
+  const { seq, agreement_digest } = await liveProposalSeqAndDigest(port, conversationId);
+  const completed = await post(port, '/operator/accept_proposal', { conversation_id: conversationId, seq, agreement_digest }, operatorToken);
   assert.equal(completed.status, 200);
   assert.deepEqual((completed.body.envelope as Record<string, unknown>).allowed_capabilities, capabilities.map((capability) => capability.id));
 });
@@ -450,7 +469,7 @@ test('a run pinned to one agent may not propose another', async (t) => {
   assert.match(String(denied.body.message), /set to codex; claude\.start belongs to claude/);
 });
 
-test('one proposal cannot be approved twice concurrently', async (t) => {
+test('one proposal accepted twice concurrently still yields one job', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'toros-proposal-race-'));
   const starts: Array<{ jobId: string; input?: CoordinatorStartInput }> = [];
   const core = createNodeCore({
@@ -470,11 +489,14 @@ test('one proposal cannot be approved twice concurrently', async (t) => {
     forbidden: [], max_actions: 2, max_retries: 1, expires_in_hours: 8,
   }, advisoryToken);
 
+  const { seq, agreement_digest } = await liveProposalSeqAndDigest(port, conversationId);
   const results = await Promise.all([
-    post(port, '/operator/accept_proposal', { conversation_id: conversationId }, operatorToken),
-    post(port, '/operator/accept_proposal', { conversation_id: conversationId }, operatorToken),
+    post(port, '/operator/accept_proposal', { conversation_id: conversationId, seq, agreement_digest }, operatorToken),
+    post(port, '/operator/accept_proposal', { conversation_id: conversationId, seq, agreement_digest }, operatorToken),
   ]);
-  assert.equal(results.filter((result) => result.status === 200).length, 1);
+  // Both accepts succeed (idempotent), but only one job is ever sealed.
+  assert.equal(results.filter((result) => result.status === 200).length, 2);
+  assert.equal(results[0]?.body.job_id, results[1]?.body.job_id);
   assert.equal(((await post(port, '/operator/jobs', {}, operatorToken)).body.jobs as unknown[]).length, 1);
 });
 
@@ -609,7 +631,8 @@ test('a credential pasted into a proposal objective is redacted before it is sea
     forbidden: [], max_actions: 3, max_retries: 1, expires_in_hours: 8,
   }, advisoryToken);
   assert.equal(proposed.status, 200);
-  const accepted = await post(port, '/operator/accept_proposal', { conversation_id: conversationId }, operatorToken);
+  const { seq, agreement_digest } = await liveProposalSeqAndDigest(port, conversationId);
+  const accepted = await post(port, '/operator/accept_proposal', { conversation_id: conversationId, seq, agreement_digest }, operatorToken);
   assert.equal(accepted.status, 200);
 
   // Neither credential survives in the sealed envelope...
@@ -720,4 +743,218 @@ test('a running stage graph survives restart as paused work requiring operator r
   const restored = (listed.body.pipelines as Array<Record<string, unknown>>).find((item) => item.pipeline_id === pipelineId);
   assert.equal(restored?.state, 'paused');
   assert.match(String(restored?.error), /restarted/i);
+});
+
+// ---------------------------------------------------------------------------
+// Agreement-first acceptance (spec AS, slice AF)
+// ---------------------------------------------------------------------------
+
+interface ProposalFixture {
+  readonly port: number;
+  readonly conversationId: string;
+  readonly seq: number;
+  readonly agreement_digest: string;
+}
+
+/** Start a node, open a conversation, propose one mock job, and return its live proposal. */
+async function proposeFixture(t: { after: (hook: () => Promise<void>) => void }): Promise<ProposalFixture & { core: ReturnType<typeof createNodeCore>; dir: string }> {
+  const dir = await mkdtemp(join(tmpdir(), 'toros-agreement-'));
+  const starts: Array<{ jobId: string; input?: CoordinatorStartInput }> = [];
+  const core = createNodeCore({
+    node_id: 'node', db_path: join(dir, 'node.sqlite'), workspaces: [{ id: 'work', root: dir }],
+    port: 0, token: coordinatorToken, operator_token: operatorToken,
+    adapters: [adapter], observer: null, approval_required: [], coordinator: fakeCoordinator(starts),
+  });
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+  const { port } = await core.start();
+  const conversation = await post(port, '/operator/conversation_create', { title: 'agreement' }, operatorToken);
+  const conversationId = String(conversation.body.conversation_id);
+  await post(port, '/operator/conversation_send', { conversation_id: conversationId, message: 'do the bounded thing' }, operatorToken);
+  const advisoryToken = String(starts.at(-1)?.input?.run_token);
+  await post(port, '/tools/propose_job', {
+    objective: 'Do the bounded thing',
+    plan: ['Run the bounded operation', 'Report the result'],
+    acceptance: ['done'],
+    capabilities: [{ id: 'mock.run', why: 'to do it' }],
+    workspaces: ['work'],
+    forbidden: ['push'],
+    max_actions: 2, max_retries: 1, expires_in_hours: 8,
+  }, advisoryToken);
+  const { seq, agreement_digest } = await liveProposalSeqAndDigest(port, conversationId);
+  return { core, dir, port, conversationId, seq, agreement_digest };
+}
+
+test('check 1: accepting the same proposal twice yields one job, one turn, one event', async (t) => {
+  const f = await proposeFixture(t);
+  const acceptBody = { conversation_id: f.conversationId, seq: f.seq, agreement_digest: f.agreement_digest };
+  const first = await post(f.port, '/operator/accept_proposal', acceptBody, operatorToken);
+  assert.equal(first.status, 200);
+  const jobId = String(first.body.job_id);
+  const second = await post(f.port, '/operator/accept_proposal', acceptBody, operatorToken);
+  assert.equal(second.status, 200);
+  assert.equal(second.body.job_id, jobId);
+
+  assert.equal(((await post(f.port, '/operator/jobs', {}, operatorToken)).body.jobs as unknown[]).length, 1);
+  const turns = (await post(f.port, '/operator/conversation_turns', { conversation_id: f.conversationId }, operatorToken)).body.turns as Array<Record<string, unknown>>;
+  assert.equal(turns.filter((turn) => String(turn.content).startsWith('Job created:')).length, 1);
+  const events = (await post(f.port, '/tools/list_activity', { job_id: jobId }, coordinatorToken)).body.events as Array<Record<string, unknown>>;
+  assert.equal(events.filter((event) => event.kind === 'job.created').length, 1);
+});
+
+test('check 2: a retry after createJob returns the same bound job and completes the missing turn and event', async (t) => {
+  const f = await proposeFixture(t);
+  // Simulate a failure after createJob: the job exists and is bound, but the
+  // job.created event and the "Job created" turn were never written.
+  const derivedId = deriveJobId(f.conversationId, f.seq);
+  const store = await openStore({ path: join(f.dir, 'node.sqlite'), nodeId: 'node' });
+  await store.createJob(sealEnvelope({
+    job_id: derivedId,
+    objective: 'Do the bounded thing',
+    allowed_capabilities: ['mock.run'],
+    allowed_workspaces: ['work'],
+    acceptance: ['done'],
+    forbidden: ['push'],
+    max_actions: 2,
+    max_retries: 1,
+    expires_at: '2999-01-01T00:00:00Z',
+  }), { conversation_id: f.conversationId });
+  await store.close();
+
+  const accepted = await post(f.port, '/operator/accept_proposal', { conversation_id: f.conversationId, seq: f.seq, agreement_digest: f.agreement_digest }, operatorToken);
+  assert.equal(accepted.status, 200);
+  assert.equal(accepted.body.job_id, derivedId);
+  assert.equal(accepted.body.conversation_id, f.conversationId);
+
+  // The missing event and turn are now complete, exactly once each.
+  const events = (await post(f.port, '/tools/list_activity', { job_id: derivedId }, coordinatorToken)).body.events as Array<Record<string, unknown>>;
+  assert.equal(events.filter((event) => event.kind === 'job.created').length, 1);
+  const turns = (await post(f.port, '/operator/conversation_turns', { conversation_id: f.conversationId }, operatorToken)).body.turns as Array<Record<string, unknown>>;
+  assert.equal(turns.filter((turn) => String(turn.content).startsWith('Job created:')).length, 1);
+
+  // Starting it never invents a second conversation: the job is already bound.
+  const started = await post(f.port, '/operator/hermes_start', { job_id: derivedId }, operatorToken);
+  assert.equal(started.status, 200);
+  assert.equal(((await post(f.port, '/operator/jobs', {}, operatorToken)).body.jobs as unknown[]).length, 1);
+});
+
+test('check 3: a stale seq or a wrong digest is refused and creates no job', async (t) => {
+  const f = await proposeFixture(t);
+
+  // A wrong digest is refused.
+  const wrongDigest = await post(f.port, '/operator/accept_proposal', { conversation_id: f.conversationId, seq: f.seq, agreement_digest: '0'.repeat(64) }, operatorToken);
+  assert.equal(wrongDigest.status, 400);
+  assert.equal(wrongDigest.body.error, ErrorCode.E_SCHEMA);
+  assert.equal(wrongDigest.body.message, 'the proposal changed; review it again');
+  assert.equal(((await post(f.port, '/operator/jobs', {}, operatorToken)).body.jobs as unknown[]).length, 0);
+
+  // A newer turn advances the tail, making the old seq stale.
+  await post(f.port, '/operator/reject_proposal', { conversation_id: f.conversationId }, operatorToken);
+  const stale = await post(f.port, '/operator/accept_proposal', { conversation_id: f.conversationId, seq: f.seq, agreement_digest: f.agreement_digest }, operatorToken);
+  assert.equal(stale.status, 400);
+  assert.equal(stale.body.error, ErrorCode.E_SCHEMA);
+  assert.equal(stale.body.message, 'the proposal changed; review it again');
+  assert.equal(((await post(f.port, '/operator/jobs', {}, operatorToken)).body.jobs as unknown[]).length, 0);
+});
+
+test('check 3b: a malformed seq or digest is refused with E_SCHEMA', async (t) => {
+  const f = await proposeFixture(t);
+  const badSeq = await post(f.port, '/operator/accept_proposal', { conversation_id: f.conversationId, seq: -1, agreement_digest: f.agreement_digest }, operatorToken);
+  assert.equal(badSeq.status, 400);
+  assert.equal(badSeq.body.error, ErrorCode.E_SCHEMA);
+  const badDigest = await post(f.port, '/operator/accept_proposal', { conversation_id: f.conversationId, seq: f.seq, agreement_digest: 'NOT-HEX' }, operatorToken);
+  assert.equal(badDigest.status, 400);
+  assert.equal(badDigest.body.error, ErrorCode.E_SCHEMA);
+});
+
+test('check 4: the three agreement fields are validated, kept off the envelope, and an unknown capability is still refused', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'toros-agreement-fields-'));
+  const starts: Array<{ jobId: string; input?: CoordinatorStartInput }> = [];
+  const core = createNodeCore({
+    node_id: 'node', db_path: join(dir, 'node.sqlite'), workspaces: [{ id: 'work', root: dir }],
+    port: 0, token: coordinatorToken, operator_token: operatorToken,
+    adapters: [adapter], observer: null, approval_required: [], coordinator: fakeCoordinator(starts),
+  });
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+  const { port } = await core.start();
+  const conversation = await post(port, '/operator/conversation_create', { title: 'fields' }, operatorToken);
+  const conversationId = String(conversation.body.conversation_id);
+  await post(port, '/operator/conversation_send', { conversation_id: conversationId, message: 'tidy the sheet' }, operatorToken);
+  const advisoryToken = String(starts.at(-1)?.input?.run_token);
+
+  const draft = {
+    objective: 'Tidy the sheet', plan: ['Open it', 'Correct it'], acceptance: ['corrected'],
+    capabilities: [{ id: 'mock.run', why: 'to edit it' }], workspaces: ['work'],
+    forbidden: [], max_actions: 3, max_retries: 1, expires_in_hours: 8,
+    intent: 'Tidy the Q4 sheet per our conversation',
+    target: 'The Q4 workbook',
+    changes: 'Correct totals; do not touch other sheets',
+  };
+  const proposed = await post(port, '/tools/propose_job', draft, advisoryToken);
+  assert.equal(proposed.status, 200);
+  const proposal = proposed.body.proposal as Record<string, unknown>;
+  assert.equal(proposal.intent, draft.intent);
+  assert.equal(proposal.target, draft.target);
+  assert.equal(proposal.changes, draft.changes);
+
+  // A too-long field is refused.
+  const tooLong = await post(port, '/tools/propose_job', { ...draft, intent: 'x'.repeat(2001) }, advisoryToken);
+  assert.equal(tooLong.body.error, ErrorCode.E_SCHEMA);
+  // A non-string field is refused.
+  const notString = await post(port, '/tools/propose_job', { ...draft, changes: 42 }, advisoryToken);
+  assert.equal(notString.body.error, ErrorCode.E_SCHEMA);
+  // An unknown capability is still refused at proposal time.
+  const unknown = await post(port, '/tools/propose_job', { ...draft, capabilities: [{ id: 'shell.exec', why: 'no' }] }, advisoryToken);
+  assert.equal(unknown.body.error, ErrorCode.E_NOT_REGISTERED);
+
+  // Accepting puts none of the three fields on the sealed envelope.
+  const { seq, agreement_digest } = await liveProposalSeqAndDigest(port, conversationId);
+  const accepted = await post(port, '/operator/accept_proposal', { conversation_id: conversationId, seq, agreement_digest }, operatorToken);
+  assert.equal(accepted.status, 200);
+  const envelope = accepted.body.envelope as Record<string, unknown>;
+  assert.equal('intent' in envelope, false);
+  assert.equal('target' in envelope, false);
+  assert.equal('changes' in envelope, false);
+});
+
+test('check 5: the job.created event carries ids and digests only, never free text', async (t) => {
+  const f = await proposeFixture(t);
+  const accepted = await post(f.port, '/operator/accept_proposal', { conversation_id: f.conversationId, seq: f.seq, agreement_digest: f.agreement_digest }, operatorToken);
+  assert.equal(accepted.status, 200);
+  const jobId = String(accepted.body.job_id);
+  const events = (await post(f.port, '/tools/list_activity', { job_id: jobId }, coordinatorToken)).body.events as Array<Record<string, unknown>>;
+  const created = events.find((event) => event.kind === 'job.created');
+  assert(created !== undefined);
+  const payload = created.payload as Record<string, unknown>;
+  assert.equal(payload.agreement_digest, f.agreement_digest);
+  assert.equal(payload.conversation_id, f.conversationId);
+  assert.equal(payload.proposal_seq, f.seq);
+  // No free text: the objective and plan never appear in the payload.
+  assert.equal(typeof payload.objective, 'undefined');
+  assert.equal(typeof payload.plan, 'undefined');
+});
+
+test('check 6: create_job without a conversation behaves exactly as before', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'toros-direct-create-'));
+  const core = createNodeCore({
+    node_id: 'node', db_path: join(dir, 'node.sqlite'), workspaces: [{ id: 'work', root: dir }],
+    port: 0, token: coordinatorToken, operator_token: operatorToken,
+    adapters: [adapter], observer: null, approval_required: [], coordinator: fakeCoordinator([]),
+  });
+  t.after(async () => { await core.stop(); await rm(dir, { recursive: true, force: true }); });
+  const { port } = await core.start();
+  const created = await post(port, '/operator/create_job', {
+    objective: 'direct task', allowed_capabilities: ['mock.run'], allowed_workspaces: ['work'],
+    acceptance: ['done'], forbidden: [], max_actions: 1, max_retries: 0, expires_in_hours: 24,
+  }, operatorToken);
+  assert.equal(created.status, 200);
+  assert.equal(created.body.conversation_id, null);
+  const jobId = String(created.body.job_id);
+  const events = (await post(port, '/tools/list_activity', { job_id: jobId }, coordinatorToken)).body.events as Array<Record<string, unknown>>;
+  const createdEvent = events.find((event) => event.kind === 'job.created');
+  assert(createdEvent !== undefined);
+  const payload = createdEvent.payload as Record<string, unknown>;
+  assert.equal(typeof payload.envelope_digest, 'string');
+  assert.equal('agreement_digest' in payload, false);
+  assert.equal('conversation_id' in payload, false);
+  assert.equal('proposal_seq' in payload, false);
 });

@@ -3,7 +3,7 @@ import type { Relay } from '@toros/relay';
 
 import type { ActionPipeline } from './action-pipeline.js';
 import type { ConversationGuard } from './conversation-guard.js';
-import { MAX_TURN_BYTES, type DraftService } from './draft.js';
+import { agreementDigest, redactProposal, MAX_TURN_BYTES, type DraftService } from './draft.js';
 import { optionalString, requiredString, stringArray, toros, type ToolRouteSurface } from './http.js';
 import type { RunBinding, RunCredentials } from './run-credentials.js';
 import type { StageGraphController } from './stage-graph.js';
@@ -118,7 +118,9 @@ export function createToolRoutes(deps: {
       const run = deps.runCredentials.runFor(args, advisory);
       return deps.conversationGuard.run(run.conversation_id, async () => {
         const proposal = deps.draft.validateDraft(args, run.agent);
-        await deps.store().appendTurn({ conversation_id: run.conversation_id, role: 'hermes', channel: 'machine', content: deps.runCredentials.redactSecrets(JSON.stringify({ propose_job: proposal })), job_id: null });
+        const redacted = redactProposal(proposal, deps.runCredentials.redactSecrets);
+        const agreement_digest = agreementDigest(redacted);
+        await deps.store().appendTurn({ conversation_id: run.conversation_id, role: 'hermes', channel: 'machine', content: JSON.stringify({ propose_job: redacted, agreement_digest }), job_id: null });
         return { proposal };
       });
     }
