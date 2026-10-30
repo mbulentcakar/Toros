@@ -98,11 +98,15 @@ describe('Hermes chat', () => {
       max_actions: 20,
       max_retries: 2,
       expires_in_hours: 8,
+      intent: 'Tidy the totals column only',
+      target: 'The Q4 workbook',
+      changes: 'Correct totals; leave everything else',
     };
+    const agreementDigest = 'a'.repeat(64);
     const turns = [
       turn(1, { role: 'operator', channel: 'human', content: 'Tidy last quarter' }),
       turn(2, { content: JSON.stringify({ ask: '<img src=x onerror=alert(1)> Which workbook?' }) }),
-      turn(3, { channel: 'machine', content: JSON.stringify({ propose_job: proposal }) }),
+      turn(3, { channel: 'machine', content: JSON.stringify({ propose_job: proposal, agreement_digest: agreementDigest }) }),
     ];
     mockOperator((operation) => {
       if (operation === 'operator_catalog') return { capabilities: [], workspaces: ['work'], agents: ['codex', 'claude'] };
@@ -124,9 +128,13 @@ describe('Hermes chat', () => {
 
     expect(screen.getByText('Open the Q4 workbook')).toBeTruthy();
     expect(screen.getByText('Correct the totals column')).toBeTruthy();
+    // The three agreement fields are rendered on the card.
+    expect(screen.getByText(/Tidy the totals column only/)).toBeTruthy();
+    expect(screen.getByText(/The Q4 workbook/)).toBeTruthy();
+    expect(screen.getByText(/Correct totals; leave everything else/)).toBeTruthy();
     expect(screen.queryByLabelText('Proposed objective')).toBeNull();
     expect(screen.queryByRole('checkbox')).toBeNull();
-    const approve = screen.getByRole('button', { name: 'Approve and run' }) as HTMLButtonElement;
+    const approve = screen.getByRole('button', { name: 'Agree and run' }) as HTMLButtonElement;
     expect(approve.disabled).toBe(false);
 
     fireEvent.click(approve);
@@ -141,7 +149,7 @@ describe('Hermes chat', () => {
     const call = invokeMock.mock.calls.find(
       (entry) => entry[0] === 'node_core_request' && entry[1]?.operation === 'operator_accept_proposal',
     );
-    expect(call![1].body).toEqual({ conversation_id: conversationId });
+    expect(call![1].body).toEqual({ conversation_id: conversationId, seq: 3, agreement_digest: agreementDigest });
   });
 
   it('summarises machine turns without hiding their stored content', async () => {

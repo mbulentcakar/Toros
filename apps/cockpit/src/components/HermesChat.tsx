@@ -45,17 +45,25 @@ function humanText(content: string): string {
   return content;
 }
 
-/** A machine turn carrying a draft envelope, or null if it carries something else. */
-function proposalOf(turn: ConversationTurn): JobProposal | null {
+/** A machine turn carrying a draft envelope and its agreement digest, or null. */
+interface ProposalTurn {
+  readonly proposal: JobProposal;
+  readonly agreement_digest: string;
+}
+
+function proposalOf(turn: ConversationTurn): ProposalTurn | null {
   if (turn.channel !== 'machine') return null;
   try {
     const parsed: unknown = JSON.parse(turn.content);
     if (typeof parsed !== 'object' || parsed === null) return null;
-    const draft = (parsed as Record<string, unknown>).propose_job;
+    const record = parsed as Record<string, unknown>;
+    const draft = record.propose_job;
     if (typeof draft !== 'object' || draft === null) return null;
-    const record = draft as Record<string, unknown>;
-    if (typeof record.objective !== 'string') return null;
-    return record as unknown as JobProposal;
+    const draftRecord = draft as Record<string, unknown>;
+    if (typeof draftRecord.objective !== 'string') return null;
+    const agreement_digest = record.agreement_digest;
+    if (typeof agreement_digest !== 'string') return null;
+    return { proposal: draftRecord as unknown as JobProposal, agreement_digest };
   } catch {
     return null;
   }
@@ -117,6 +125,15 @@ function ProposalCard({ proposal, busy, onAccept, onReject }: ProposalCardProps)
       <ol className="hermes-proposal__plan">
         {plan.map((step, index) => <li key={`${index}-${step}`}>{step}</li>)}
       </ol>
+      {proposal.intent !== undefined && (
+        <p className="hermes-proposal__intent"><strong>Intent</strong> {proposal.intent}</p>
+      )}
+      {proposal.target !== undefined && (
+        <p className="hermes-proposal__target"><strong>Target</strong> {proposal.target}</p>
+      )}
+      {proposal.changes !== undefined && (
+        <p className="hermes-proposal__changes"><strong>Changes</strong> {proposal.changes}</p>
+      )}
       <dl className="hermes-proposal__facts">
         <dt>Using</dt>
         <dd>{agent === null ? `This machine, in ${where}` : `${workerLabel(agent)} in ${where}`}</dd>
@@ -133,8 +150,9 @@ function ProposalCard({ proposal, busy, onAccept, onReject }: ProposalCardProps)
         ))}
         </ul>
       </details>
+      <p className="hermes-proposal__drafted">Drafted by Hermes{agent === null ? '' : ` for ${workerLabel(agent)}`}.</p>
       <div className="hermes-proposal__decision">
-        <button className="btn btn--approve" disabled={busy} onClick={onAccept} type="button">Approve and run</button>
+        <button className="btn btn--approve" disabled={busy} onClick={onAccept} type="button">Agree and run</button>
         <button className="btn" disabled={busy} onClick={onReject} type="button">No — let me explain</button>
       </div>
     </article>
@@ -286,7 +304,11 @@ export function HermesChat({ active = true, onOpenJob }: HermesChatProps = {}): 
     setBusy(true);
     setError(null);
     try {
-      const job = await acceptProposal(selected);
+      const lastTurn = turns.at(-1);
+      if (lastTurn === undefined) return;
+      const proposalTurn = proposalOf(lastTurn);
+      if (proposalTurn === null) return;
+      const job = await acceptProposal(selected, lastTurn.seq, proposalTurn.agreement_digest);
       await startHermes(job.job_id);
       setAcceptedJobId(job.job_id);
       setTurns(await listTurns(selected));
@@ -351,7 +373,7 @@ export function HermesChat({ active = true, onOpenJob }: HermesChatProps = {}): 
             const proposal = proposalOf(turn);
             if (proposal !== null) {
               return turn.seq === latestProposalSeq
-                ? <ProposalCard busy={busy} key={turn.seq} onAccept={() => { void accept(); }} onReject={() => { void reject(); }} proposal={proposal} />
+                ? <ProposalCard busy={busy} key={turn.seq} onAccept={() => { void accept(); }} onReject={() => { void reject(); }} proposal={proposal.proposal} />
                 : <p className="hermes-chat__superseded" key={turn.seq}>An earlier proposal, superseded.</p>;
             }
             if (turn.channel === 'machine') return <details className="machine-turn" key={turn.seq}><summary>Action · {machineSummary(turn.content)}</summary><pre>{turn.content}</pre></details>;
