@@ -401,6 +401,25 @@ describe('Jobs and sessions', () => {
     await store.close();
   });
 
+  it('createJob with a conversation_id binds the job in the same insert', async () => {
+    const store = await openStore(makeStoreOptions(':memory:'));
+    const sealed = makeSealed();
+    const created = await store.createJob(sealed, { conversation_id: 'conv-1' });
+    assert.equal(created.conversation_id, 'conv-1');
+    const fetched = await store.getJob(created.job_id);
+    assert(fetched !== null);
+    assert.equal(fetched.conversation_id, 'conv-1');
+    await store.close();
+  });
+
+  it('createJob without a conversation_id leaves the job unbound', async () => {
+    const store = await openStore(makeStoreOptions(':memory:'));
+    const sealed = makeSealed();
+    const created = await store.createJob(sealed);
+    assert.equal(created.conversation_id, null);
+    await store.close();
+  });
+
   it('incrementActionsUsed is atomic under concurrent calls', async () => {
     const store = await openStore(makeStoreOptions(':memory:'));
     const sealed = makeSealed();
