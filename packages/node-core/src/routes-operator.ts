@@ -10,7 +10,7 @@ import { isAgentName, type AgentGrants, type AgentName } from './agent-grants.js
 import type { ConversationGuard } from './conversation-guard.js';
 import { type BrowserAcquisitionController, type BrowserAcquisitionInput } from './browser-acquisition.js';
 import type { CoordinatorControl } from './coordinator-supervisor.js';
-import { MAX_TURN_BYTES, type DraftService } from './draft.js';
+import { deriveJobId, MAX_TURN_BYTES, type DraftService } from './draft.js';
 import { asRecord, optionalString, readBody, requiredPositiveInteger, requiredString, send, stringArray, toros, type RouteSurface, type ToolRouteSurface } from './http.js';
 import type { RunCredentials } from './run-credentials.js';
 import { AGENT_DISCOVERY_CAPABILITIES } from './routes-agent.js';
@@ -204,15 +204,76 @@ export function createOperatorRoutes(deps: {
       send(response, 200, { run });
     });
   };
-  /** Seal exactly the live proposal Node Core recorded. */
+  /**
+   * Seal exactly the proposal the operator saw, named by its turn and digest.
+   *
+   * The job id is derived from (conversation, seq), so a retry after a partial
+   * failure can never seal a second job: it finds the existing one, finishes
+   * any missing step, and returns it. A stale seq or a wrong digest is refused
+   * with E_SCHEMA and creates nothing.
+   */
   const acceptProposal: OperatorHandler = async (request, response) => {
-    const args = asRecord(await readBody(request)); const conversationId = requiredString(args, 'conversation_id');
+    const args = asRecord(await readBody(request));
+    const conversationId = requiredString(args, 'conversation_id');
+    const rawSeq = args['seq'];
+    if (typeof rawSeq !== 'number' || !Number.isInteger(rawSeq) || rawSeq < 0) {
+      throw toros(ErrorCode.E_SCHEMA, 'seq must be a non-negative integer');
+    }
+    const seq = rawSeq;
+    const suppliedDigest = args['agreement_digest'];
+    if (typeof suppliedDigest !== 'string' || !/^[0-9a-f]{64}$/.test(suppliedDigest)) {
+      throw toros(ErrorCode.E_SCHEMA, 'agreement_digest must be a 64-character lowercase hex string');
+    }
     if (await deps.store().getConversation(conversationId) === null) throw toros(ErrorCode.E_SCHEMA, 'Unknown conversation');
     await deps.conversationGuard.run(conversationId, async () => {
-      const created = await deps.draft.createJobFromArgs(await deps.draft.liveProposal(conversationId));
-      const current = await deps.store().setJobConversation(created.job_id, conversationId);
-      await deps.store().appendTurn({ conversation_id: conversationId, role: 'system', channel: 'human', content: `Job created: ${current.envelope.objective}`, job_id: current.job_id });
-      send(response, 200, current);
+      const derivedId = deriveJobId(conversationId, seq);
+      // Retry first: a successful accept makes the "Job created" turn the last
+      // turn, so the last-turn check below would otherwise refuse a retry.
+      const existing = await deps.store().getJob(derivedId);
+      if (existing !== null) {
+        if (existing.conversation_id !== conversationId) {
+          throw toros(ErrorCode.E_SCHEMA, 'the proposal changed; review it again');
+        }
+        // The turn at seq is immutable and is the agreement snapshot. A retry
+        // does not re-validate against the registry (it may have changed since
+        // the accept); it trusts only what the turn recorded, and refuses a
+        // caller-supplied digest that diverges from that.
+        const storedDigest = await deps.draft.storedProposalDigest(conversationId, seq);
+        if (storedDigest !== suppliedDigest) {
+          throw toros(ErrorCode.E_SCHEMA, 'the proposal changed; review it again');
+        }
+        const events = await deps.store().listEvents(derivedId);
+        if (!events.some((event) => event.kind === 'job.created')) {
+          await deps.store().appendEvent({
+            node_id: deps.node_id,
+            job_id: derivedId,
+            kind: 'job.created',
+            payload: {
+              envelope_digest: existing.envelope_digest,
+              agreement_digest: storedDigest,
+              conversation_id: conversationId,
+              proposal_seq: seq,
+            },
+          });
+        }
+        const turns = await deps.store().listTurns(conversationId);
+        if (!turns.some((turn) => turn.job_id === derivedId && turn.role === 'system')) {
+          await deps.store().appendTurn({ conversation_id: conversationId, role: 'system', channel: 'human', content: `Job created: ${existing.envelope.objective}`, job_id: derivedId });
+        }
+        send(response, 200, existing);
+        return;
+      }
+      const { args: proposalArgs, agreement_digest } = await deps.draft.liveProposal(conversationId, seq);
+      if (agreement_digest !== suppliedDigest) {
+        throw toros(ErrorCode.E_SCHEMA, 'the proposal changed; review it again');
+      }
+      const created = await deps.draft.createJobFromArgs(proposalArgs, {
+        job_id: derivedId,
+        conversation_id: conversationId,
+        agreement: { agreement_digest, proposal_seq: seq },
+      });
+      await deps.store().appendTurn({ conversation_id: conversationId, role: 'system', channel: 'human', content: `Job created: ${created.envelope.objective}`, job_id: created.job_id });
+      send(response, 200, created);
     });
   };
   /**
@@ -224,7 +285,10 @@ export function createOperatorRoutes(deps: {
     const args = asRecord(await readBody(request)); const conversationId = requiredString(args, 'conversation_id');
     if (await deps.store().getConversation(conversationId) === null) throw toros(ErrorCode.E_SCHEMA, 'Unknown conversation');
     await deps.conversationGuard.run(conversationId, async () => {
-      await deps.draft.liveProposal(conversationId);
+      const turns = await deps.store().listTurns(conversationId);
+      const last = turns.at(-1);
+      if (last === undefined || last.channel !== 'machine') throw toros(ErrorCode.E_SCHEMA, 'There is no proposal to approve in this conversation');
+      await deps.draft.liveProposal(conversationId, last.seq);
       await deps.store().appendTurn({ conversation_id: conversationId, role: 'system', channel: 'human', content: 'Proposal rejected. Continue the conversation to revise it.', job_id: null });
       send(response, 200, { rejected: true });
     });

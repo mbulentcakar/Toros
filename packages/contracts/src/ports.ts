@@ -171,7 +171,12 @@ export interface AppendTurnInput {
  * already hold.
  */
 export interface Store {
-  createJob(sealed: SealedEnvelope): Promise<JobRecord>;
+  /**
+   * Persist a sealed envelope as a job. When `options.conversation_id` is
+   * given, the job is bound to that conversation in the same insert, so an
+   * accepted job is bound from its first durable moment (contracts A12).
+   */
+  createJob(sealed: SealedEnvelope, options?: { conversation_id?: string }): Promise<JobRecord>;
   getJob(jobId: string): Promise<JobRecord | null>;
   /**
    * Bind a job to its conversation, once. Rebinding to a different

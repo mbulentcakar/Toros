@@ -196,8 +196,8 @@ function createStore(db: DatabaseSync, nodeId: string): Store {
 
   // Jobs
   const insertJob = db.prepare(
-    `INSERT INTO jobs (job_id, envelope, envelope_digest, state, created_at, updated_at, actions_used)
-     VALUES (?, ?, ?, ?, ?, ?, 0)`,
+    `INSERT INTO jobs (job_id, envelope, envelope_digest, state, created_at, updated_at, actions_used, conversation_id)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
   );
   const selectJob = db.prepare('SELECT * FROM jobs WHERE job_id = ?');
   const selectJobs = db.prepare('SELECT * FROM jobs ORDER BY created_at DESC, job_id DESC');
@@ -533,9 +533,10 @@ function createStore(db: DatabaseSync, nodeId: string): Store {
   const storeImpl: Store = {
     // --- Jobs -----------------------------------------------------------
 
-    async createJob(sealed: SealedEnvelope): Promise<JobRecord> {
+    async createJob(sealed: SealedEnvelope, options?: { conversation_id?: string }): Promise<JobRecord> {
       const envelopeJson = canonicalize(sealed.envelope);
       const now = nowISO();
+      const conversationId = options?.conversation_id ?? null;
       insertJob.run(
         sealed.envelope.job_id,
         envelopeJson,
@@ -543,6 +544,7 @@ function createStore(db: DatabaseSync, nodeId: string): Store {
         'working',
         now,
         now,
+        conversationId,
       );
       return {
         job_id: sealed.envelope.job_id,
@@ -552,7 +554,7 @@ function createStore(db: DatabaseSync, nodeId: string): Store {
         created_at: now,
         updated_at: now,
         actions_used: 0,
-        conversation_id: null,
+        conversation_id: conversationId,
       };
     },
 

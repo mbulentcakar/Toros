@@ -98,11 +98,15 @@ describe('Hermes chat', () => {
       max_actions: 20,
       max_retries: 2,
       expires_in_hours: 8,
+      intent: 'Tidy the totals column only',
+      target: 'The Q4 workbook',
+      changes: 'Correct totals; leave everything else',
     };
+    const agreementDigest = 'a'.repeat(64);
     const turns = [
       turn(1, { role: 'operator', channel: 'human', content: 'Tidy last quarter' }),
       turn(2, { content: JSON.stringify({ ask: '<img src=x onerror=alert(1)> Which workbook?' }) }),
-      turn(3, { channel: 'machine', content: JSON.stringify({ propose_job: proposal }) }),
+      turn(3, { channel: 'machine', content: JSON.stringify({ propose_job: proposal, agreement_digest: agreementDigest }) }),
     ];
     mockOperator((operation) => {
       if (operation === 'operator_catalog') return { capabilities: [], workspaces: ['work'], agents: ['codex', 'claude'] };
@@ -124,9 +128,13 @@ describe('Hermes chat', () => {
 
     expect(screen.getByText('Open the Q4 workbook')).toBeTruthy();
     expect(screen.getByText('Correct the totals column')).toBeTruthy();
+    // The three agreement fields are rendered on the card.
+    expect(screen.getByText(/Tidy the totals column only/)).toBeTruthy();
+    expect(screen.getByText(/The Q4 workbook/)).toBeTruthy();
+    expect(screen.getByText(/Correct totals; leave everything else/)).toBeTruthy();
     expect(screen.queryByLabelText('Proposed objective')).toBeNull();
     expect(screen.queryByRole('checkbox')).toBeNull();
-    const approve = screen.getByRole('button', { name: 'Approve and run' }) as HTMLButtonElement;
+    const approve = screen.getByRole('button', { name: 'Agree and run' }) as HTMLButtonElement;
     expect(approve.disabled).toBe(false);
 
     fireEvent.click(approve);
@@ -141,7 +149,69 @@ describe('Hermes chat', () => {
     const call = invokeMock.mock.calls.find(
       (entry) => entry[0] === 'node_core_request' && entry[1]?.operation === 'operator_accept_proposal',
     );
-    expect(call![1].body).toEqual({ conversation_id: conversationId });
+    expect(call![1].body).toEqual({ conversation_id: conversationId, seq: 3, agreement_digest: agreementDigest });
+  });
+
+  it('shows a retry control and re-calls startHermes with the same job when the start fails', async () => {
+    const proposal = {
+      objective: 'Tidy the Q4 workbook',
+      plan: ['Open the Q4 workbook'],
+      acceptance: ['totals reconcile'],
+      capabilities: [{ id: 'codex.start', why: 'to open Codex' }, { id: 'codex.send', why: 'to send' }, { id: 'codex.read', why: 'to read' }, { id: 'codex.stop', why: 'to stop' }],
+      workspaces: ['work'],
+      forbidden: [],
+      max_actions: 5,
+      max_retries: 1,
+      expires_in_hours: 8,
+    };
+    const agreementDigest = 'b'.repeat(64);
+    const turns = [
+      turn(1, { role: 'operator', channel: 'human', content: 'Tidy last quarter' }),
+      turn(2, { channel: 'machine', content: JSON.stringify({ propose_job: proposal, agreement_digest: agreementDigest }) }),
+    ];
+    // accept succeeds; the first start fails, then succeeds on retry.
+    let startAttempts = 0;
+    mockOperator((operation) => {
+      if (operation === 'operator_catalog') return { capabilities: [], workspaces: ['work'], agents: ['codex'] };
+      if (operation === 'operator_conversations') return {
+        conversations: [{ conversation_id: conversationId, node_id: 'n', title: 'Tidy', created_at: '', updated_at: '', state: 'open' }, { conversation_id: 'c2', node_id: 'n', title: 'Other', created_at: '', updated_at: '', state: 'open' }],
+      };
+      if (operation === 'operator_conversation_turns') return { turns };
+      if (operation === 'operator_accept_proposal') return { job_id: 'job-9', envelope: {}, state: 'working' };
+      if (operation === 'operator_hermes_start') {
+        startAttempts += 1;
+        if (startAttempts === 1) throw new Error('Hermes start failed');
+        return { run: { run_id: 'run-9', state: 'running' } };
+      }
+      throw new Error(`unexpected operation ${operation}`);
+    });
+
+    render(<HermesChat />);
+    const approve = await screen.findByRole('button', { name: 'Agree and run' });
+    fireEvent.click(approve);
+
+    // The banner does NOT claim Hermes started; a Start Hermes control appears.
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('node_core_request', { operation: 'operator_hermes_start', body: { job_id: 'job-9' } }));
+    await screen.findByRole('button', { name: 'Start Hermes' });
+    expect(screen.queryByText('Job created and Hermes started.')).toBeNull();
+
+    // The retry belongs to the conversation it was accepted in: another conversation does not show it.
+    fireEvent.change(screen.getByRole('combobox', { name: 'Conversation' }), { target: { value: 'c2' } });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Start Hermes' })).toBeNull());
+    fireEvent.change(screen.getByRole('combobox', { name: 'Conversation' }), { target: { value: conversationId } });
+
+    // Clicking it calls startHermes with the same job id.
+    fireEvent.click(await screen.findByRole('button', { name: 'Start Hermes' }));
+    await waitFor(() => expect(invokeMock.mock.calls.filter(
+      (entry) => entry[0] === 'node_core_request' && entry[1]?.operation === 'operator_hermes_start',
+    )).toHaveLength(2));
+    const starts = invokeMock.mock.calls.filter(
+      (entry) => entry[0] === 'node_core_request' && entry[1]?.operation === 'operator_hermes_start',
+    );
+    expect(starts).toHaveLength(2);
+    expect(starts[0]![1].body).toEqual({ job_id: 'job-9' });
+    expect(starts[1]![1].body).toEqual({ job_id: 'job-9' });
+    expect(await screen.findByText('Job created and Hermes started.')).toBeTruthy();
   });
 
   it('summarises machine turns without hiding their stored content', async () => {
