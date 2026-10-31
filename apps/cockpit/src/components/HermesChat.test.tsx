@@ -174,7 +174,7 @@ describe('Hermes chat', () => {
     mockOperator((operation) => {
       if (operation === 'operator_catalog') return { capabilities: [], workspaces: ['work'], agents: ['codex'] };
       if (operation === 'operator_conversations') return {
-        conversations: [{ conversation_id: conversationId, node_id: 'n', title: 'Tidy', created_at: '', updated_at: '', state: 'open' }],
+        conversations: [{ conversation_id: conversationId, node_id: 'n', title: 'Tidy', created_at: '', updated_at: '', state: 'open' }, { conversation_id: 'c2', node_id: 'n', title: 'Other', created_at: '', updated_at: '', state: 'open' }],
       };
       if (operation === 'operator_conversation_turns') return { turns };
       if (operation === 'operator_accept_proposal') return { job_id: 'job-9', envelope: {}, state: 'working' };
@@ -192,11 +192,16 @@ describe('Hermes chat', () => {
 
     // The banner does NOT claim Hermes started; a Start Hermes control appears.
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('node_core_request', { operation: 'operator_hermes_start', body: { job_id: 'job-9' } }));
-    const retry = await screen.findByRole('button', { name: 'Start Hermes' });
+    await screen.findByRole('button', { name: 'Start Hermes' });
     expect(screen.queryByText('Job created and Hermes started.')).toBeNull();
 
+    // The retry belongs to the conversation it was accepted in: another conversation does not show it.
+    fireEvent.change(screen.getByRole('combobox', { name: 'Conversation' }), { target: { value: 'c2' } });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Start Hermes' })).toBeNull());
+    fireEvent.change(screen.getByRole('combobox', { name: 'Conversation' }), { target: { value: conversationId } });
+
     // Clicking it calls startHermes with the same job id.
-    fireEvent.click(retry);
+    fireEvent.click(await screen.findByRole('button', { name: 'Start Hermes' }));
     await waitFor(() => expect(invokeMock.mock.calls.filter(
       (entry) => entry[0] === 'node_core_request' && entry[1]?.operation === 'operator_hermes_start',
     )).toHaveLength(2));

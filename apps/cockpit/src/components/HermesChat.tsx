@@ -178,7 +178,9 @@ export function HermesChat({ active = true, onOpenJob }: HermesChatProps = {}): 
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
-  const [acceptedJobId, setAcceptedJobId] = useState<string | null>(null);
+  // The accepted job belongs to the conversation it was accepted in; its banner and
+  // retry control show only while that conversation is selected.
+  const [accepted, setAccepted] = useState<{ readonly job_id: string; readonly conversation_id: string } | null>(null);
   const [hermesStarted, setHermesStarted] = useState(false);
   const [agents, setAgents] = useState<readonly string[]>([]);
   const [agent, setAgent] = useState('');
@@ -285,7 +287,7 @@ export function HermesChat({ active = true, onOpenJob }: HermesChatProps = {}): 
     try {
       const created = await createConversation('New conversation');
       setConversations((current) => [created, ...current]);
-      setSelected(created.conversation_id); setTurns([]); setUsage(null); setAcceptedJobId(null); setHermesStarted(false);
+      setSelected(created.conversation_id); setTurns([]); setUsage(null); setAccepted(null); setHermesStarted(false);
     } catch (cause: unknown) { setError(apiError(cause)); }
     finally { setBusy(false); }
   }
@@ -296,7 +298,7 @@ export function HermesChat({ active = true, onOpenJob }: HermesChatProps = {}): 
     try {
       await archiveConversation(selected);
       const remaining = conversations.filter((item) => item.conversation_id !== selected);
-      setConversations(remaining); setSelected(remaining[0]?.conversation_id ?? ''); setTurns([]); setUsage(null); setAcceptedJobId(null); setHermesStarted(false);
+      setConversations(remaining); setSelected(remaining[0]?.conversation_id ?? ''); setTurns([]); setUsage(null); setAccepted(null); setHermesStarted(false);
     } catch (cause: unknown) { setError(apiError(cause)); }
     finally { setBusy(false); }
   }
@@ -326,7 +328,7 @@ export function HermesChat({ active = true, onOpenJob }: HermesChatProps = {}): 
       const job = await acceptProposal(selected, lastTurn.seq, proposalTurn.agreement_digest);
       // Record the accepted job immediately: the agreement is sealed and the
       // job exists regardless of whether its first Hermes start succeeds.
-      setAcceptedJobId(job.job_id);
+      setAccepted({ job_id: job.job_id, conversation_id: selected });
       setHermesStarted(false);
       setTurns(await listTurns(selected));
       await startAcceptedJob(job.job_id);
@@ -357,6 +359,7 @@ export function HermesChat({ active = true, onOpenJob }: HermesChatProps = {}): 
   // by the conversation that followed them.
   const lastTurn = turns.at(-1);
   const latestProposalSeq = lastTurn !== undefined && proposalOf(lastTurn) !== null ? lastTurn.seq : null;
+  const acceptedJobId = accepted !== null && accepted.conversation_id === selected ? accepted.job_id : null;
 
   return (
     <div className="hermes-chat">
