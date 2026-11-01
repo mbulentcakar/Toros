@@ -280,9 +280,9 @@ export async function getConversationUsage(conversationId: string): Promise<Mode
   return result.summary;
 }
 
-/** Confirm the live proposal recorded by Node Core; no client-authored envelope travels. */
-export async function acceptProposal(conversationId: string): Promise<JobRecord> {
-  return request<JobRecord>('operator_accept_proposal', { conversation_id: conversationId });
+/** Confirm the proposal the operator saw, named by its turn and digest; no client-authored envelope travels. */
+export async function acceptProposal(conversationId: string, seq: number, agreementDigest: string): Promise<JobRecord> {
+  return request<JobRecord>('operator_accept_proposal', { conversation_id: conversationId, seq, agreement_digest: agreementDigest });
 }
 
 export async function rejectProposal(conversationId: string): Promise<void> {

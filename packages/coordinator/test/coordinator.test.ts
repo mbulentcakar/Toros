@@ -998,6 +998,26 @@ test('an advisory run drafts the envelope so the operator never has to', async (
   assert.equal(listed.jobs.length, 1);
 });
 
+test('the advisory prompt describes the three optional agreement fields', async (t) => {
+  const f = await fixture({ withConversation: true });
+  t.after(() => finish(f));
+
+  const runToken = await f.mintAdvisoryToken('Tidy up last quarter for me');
+  const advisoryConfig: CoordinatorConfig = { ...f.config, token: runToken };
+  const model = new CannedModel([{ say: 'On it.' }]);
+
+  await runAdvisory({
+    config: advisoryConfig, model, request: f.request, runToken,
+    capabilities: ['mock.run'], workspaces: ['work'], output: { write() {} },
+  });
+
+  const system = model.seen[0]?.find((message) => message.role === 'system')?.content ?? '';
+  assert.match(system, /intent/);
+  assert.match(system, /target/);
+  assert.match(system, /changes/);
+  assert.match(system, /optional/);
+});
+
 test('an advisory run that only talks records a human turn and asks for the operator', async (t) => {
   const f = await fixture({ withConversation: true });
   t.after(() => finish(f));

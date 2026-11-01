@@ -355,3 +355,15 @@ credential; `E_CAP_NOT_ALLOWED` means the capability is not in `allowed_capabili
 
 Consumers: contracts (`errors.ts`, test), node-core (the AT agent routes, AT1). Nothing else
 enumerates the codes; the cockpit renders `error` strings as received.
+
+### A12 — `Store.createJob` takes an optional `conversation_id` (spec AS, slice AF) (2026-10-30)
+
+**Gap.** An accepted proposal was sealed and created as a job, then bound to its conversation in a
+second store call. A failure between the two left an unbound job that `conversationFor` would later
+give a fresh conversation with no agreement.
+
+| Contract type | Change |
+|---|---|
+| `Store.createJob` (`ports.ts`) | **Structural.** `createJob(sealed, options?: { conversation_id?: string })`. When `conversation_id` is given, the job is bound to that conversation in the same insert, so an accepted job is bound from its first durable moment. Without it, behaviour is unchanged. |
+
+Consumers: store (`store.ts`), node-core (`draft.ts`). Nothing else calls `createJob`.

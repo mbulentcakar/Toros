@@ -337,6 +337,9 @@ export interface JobProposal {
   readonly max_actions: number;
   readonly max_retries: number;
   readonly expires_in_hours: number;
+  readonly intent?: string;
+  readonly target?: string;
+  readonly changes?: string;
 }
 
 export type StageId = 'specification' | 'implementation' | 'code_review' | 'security_review';
