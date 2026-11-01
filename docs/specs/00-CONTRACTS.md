@@ -279,6 +279,32 @@ is `E_ADAPTER_FAILURE`, not silently omitted. Store migration 002 adds the
 durable column, and existing version-1 databases receive an empty object for
 historical receipts.
 
+### A7 — desktop control: event kinds, `E_APPROVAL_DENIED`, delegated-approval semantics (spec AS) — PROPOSED
+
+**Status: proposed with spec AS (2026-10-13). Not in effect.** It is made by the architect in
+slice AS0, with every consumer in the same diff and the full suite green. An implementation
+worker on any other AS slice still treats `packages/contracts` as frozen.
+
+**Gap.** Spec AS needs events the closed `EventKind` union cannot express, a denial outcome no
+code describes (there is no deny path today, only approve or expire), and approvals decided by
+someone other than a human. The independent review (AS-B7) inventoried the following.
+
+| Contract type | Change |
+|---|---|
+| `EventKind` (`receipt.ts`) | **Structural.** Add `mission.created`, `mission.held`, `mission.resumed`, `mission.ended`, `mission.invalidated`, `desktop.request_received`, `desktop.request_rejected`, `desktop.request_classified`, `desktop.request_authorized`, `desktop.request_reported`, `desktop.request_invalidated`, `desktop.app_granted`, `desktop.app_denied`, `desktop.outcome_uncertain`, `desktop.outcome_unknown`. This is the complete list (spec AS revision 5, stage→event table). The lifecycle stages `replayed`, `policy_allowed` and `executed` use the existing `action.requested`, `action.decided` and `action.finished`. |
+| `ErrorCode` (`errors.ts`) | **Structural.** Add `E_APPROVAL_DENIED`: an approver (agent or operator) refused this exact request, or the mission is held after such a refusal. Distinct from `E_APPROVAL_REQUIRED` (a decision is pending) and `E_APPROVAL_INVALID` (the presented approval does not authorise this action). **Documentation:** `E_SECRET_DETECTED` widens from relay creation to any input refused for secret content. |
+| `ActionSchema` (`capability.ts`) | **Documentation.** `always_requires_approval` means "approval through a gate Node Core recognizes": human, or, for spec AS desktop actions only, a Node-run delegate within an operator mission. `mutates: false` is no longer a blanket exemption: Node Core may gate reads by tier (AS gate table). Fields unchanged. |
+| `ApprovalVerifier` (`ports.ts`) | **Documentation.** Authority remains operator-issued, **or** Node-issued from a delegate verdict that Node Core itself obtained. No external route may decide a delegate approval. `consume` stays atomic and single-use. Signature unchanged. |
+| `ApprovalBinding` (`ports.ts`) | **No change.** AS's server-prepared approval record is the canonical argument object, so `arguments_digest` covers it. |
+| `Receipt.actor` (`receipt.ts`) | **Documentation.** May be `agent:claude` / `agent:codex` for driver actions. `adapter_fields` already fits. |
+| `EventRow`, `AppendEventInput`, `Store` | No change: `payload: JsonValue` fits; `kind` follows the amended union. |
+| `JobEnvelope`, `AdapterContext`, `Adapter`, `TargetResolver`, `AppIdentity` | **No further change beyond A8, A9 and A10** *(rev 6)*. A mission's job lists admitted apps in A8's `allowed_apps`; the `desktop_uia` adapter implements A8's `resolver` for app admission and element targets, so policy, not the adapter, decides each one; `ctx.actor` carries `agent:claude` / `agent:codex`; `target_decisions` carries Core's verdicts. Packaged apps use A10. |
+| `AdapterManifest`, `ActionResult`, `SessionAdapter`, `SessionRecord`, `Permission`, `PolicyDecision`, `CapabilityId` | No change. Mission and grant state stay in Node Core; the OS desktop session is not a CLI `SessionRecord`. |
+
+Outside `packages/contracts`, and owned by their AS slices: `NodeCoreOptions` (agent tokens),
+the approval registry's deny path and replay trigger, the approver runner options, and the AS
+adapter API. Binding comments in specs D, T, E and V are updated where behaviour differs.
+
 ### A8 — Two-phase target resolution (2026-10-20)
 
 **Gap.** The envelope could bound capabilities, workspaces and forbidden terms,
@@ -295,7 +321,8 @@ session), `ResolvedTarget` (an `app` or `capability` keyed by an adapter-opaque
 string), `TargetDecisions` (Core's `allowed`/`denied` verdict per key), and the
 `TargetResolver` port — plus `Adapter.resolver?: TargetResolver` and
 `AdapterContext.actor` / `AdapterContext.target_decisions?`. `JobEnvelope` gains
-an optional `allowed_apps: readonly AppRule[]` (hash, signer+product, or path),
+an optional `allowed_apps: readonly AppRule[]` (hash, signer+product — A9 adds
+`original_filename` — or path; A10 proposes a package shape),
 participating in the digest only when present. Policy gains a deterministic
 `authorizeTargets` and the `desktop_session_id` option. Node Core performs the
 resolve under the same timeout/abort as invoke, validates the output, passes the
@@ -340,6 +367,54 @@ OriginalFilename — the value the version resource carries independent of any a
 `en-US\<image>.mui` — for example `NOTEPAD.EXE`, never `NOTEPAD.EXE.MUI`. This is a clarification
 of what the value means, not a type change: the field remains `string | null` and A9's
 case-insensitive comparison is unchanged.
+
+### A10 — packaged-app identity (spec AS revision 6) — PROPOSED
+
+**Status: proposed with spec AS revision 6 (2026-10-26; round 2 after the independent review).
+Not in effect.** Made by the architect in slice AS0 together with A7, every consumer in the same
+diff.
+
+**Gap.** A8/A9 identify an application by image hash, image path, or signer + product +
+`OriginalFilename`. A packaged (MSIX/AppX) application is poorly served by all three:
+
+- its image lives under a versioned install path, and its hash changes on every Store update;
+- its image may carry no Authenticode signature of its own (`CalculatorApp.exe` reports
+  `NotSigned`; the package is signed, not the file), so no A9 rule can name it;
+- where the image *is* signed (packaged `Notepad.exe`), an A9 rule names it, but it also matches a
+  copy of the same file run without package identity.
+
+**Change.**
+
+| Contract type | Change |
+|---|---|
+| `AppIdentity` (`ports.ts`) | **Structural.** Add four fields, each OS-read by the adapter. Never taken from the window, UIA, or the image path text. `package_family_name: string \| null` comes from `GetPackageFamilyName` on the process handle (the `PROCESS_QUERY_LIMITED_INFORMATION` handle the probe already opens). `package_signature_kind: 'store' \| 'system' \| 'enterprise' \| 'developer' \| 'none' \| null` and `package_version: string \| null` (dotted quad, `Package.Id.Version`) come from the registered package: `GetPackageFullName` on the handle, then `PackageManager.FindPackageForUser(<session user SID>, <full name>)` (WinRT, usable from the unpackaged Windows PowerShell 5.1 probe; `Package.Current` is not, and `GetStagedPackageOrigin` is a different enum). `package_relative_path: string \| null` is the image path relative to that package's `InstalledLocation`: separator-bounded, no `..`, not absolute, no alternate data stream. |
+| `AppRule` (`envelope.ts`) | **Structural.** A fourth shape `{ package_family_name: string, package_relative_path?: string }`. The family name is 1–255 characters, matching `^[A-Za-z0-9.-]+_[a-z0-9]{13}$`. Both fields compare case-insensitively. It matches only when the identity's `package_signature_kind` is `store` or `system`. A `null` identity value never matches. It participates in the digest like the other shapes. |
+| `Policy.authorizeTargets` and the probe's copy of `AppRuleMatches` | **Behavioural, both changed together.** The new shape is evaluated as above. An identity with a non-null `package_family_name` **never** matches an `image_path` rule, wherever the path is: a versioned path is not an identity, and package roots are not only `C:\Program Files\WindowsApps`. The family-name read decides by its return status, not by where the image lies: `ERROR_SUCCESS` publishes the name; `APPMODEL_ERROR_NO_PACKAGE` (15700) publishes `null` (a genuinely unpackaged process); **any other status drops the target**. When the name was published, a failed origin, version or relative-path read also drops the target. So an unreadable packaged process cannot fall through to a path rule, on any install volume. Hash and signer rules are unchanged. |
+
+**What the family name proves, stated plainly.** Its 13-character publisher id is a hash of the
+publisher *subject string*, not of the signing key. A sideloaded or developer package signed by
+any certificate the machine trusts with the same subject gets the same family name. That is why
+every A10 match also requires origin `store` or `system`: Windows checks those signatures against
+the Store or the OS image. While the Store package is installed, Windows refuses a second package
+with the same family name. The origin check covers the case where it has been removed.
+
+**Consumers:**
+- contracts;
+- envelope (validation, digest);
+- policy (`appRuleMatches`);
+- adapters-desktop (the probe reads the four fields, applies the matching rules and the drop rule
+  above, and the resolver publishes the fields);
+- node-core (`desktop.authorized_apps` validation);
+- adapters-uia (AS `packaged` profile form).
+
+**Tests:**
+- a rule for one family name never admits another;
+- an updated package's new hash and path do not matter;
+- a renamed or copied classic image never acquires a family name;
+- a developer-signed package carrying a Store family name is not admitted;
+- a packaged process is not admitted by an exact `image_path` rule for its own image;
+- a family-name read that fails with any status other than 15700 drops the target;
+- `package_version` comes from the probe's real read (a fixture asserts it equals `Get-AppxPackage`'s `Version` for the same full name), never from a hand-built identity.
 
 ### A11 — `E_GRANT_INVALID`; `E_MODE_DENIED` on the agent surface (spec AT) (2026-10-27)
 
