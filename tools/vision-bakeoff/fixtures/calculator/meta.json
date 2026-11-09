@@ -1,0 +1,23 @@
+{
+  "app": "calculator",
+  "executable": "C:\\Windows\\System32\\calc.exe",
+  "scale_factor": 1.5,
+  "window_rect": {
+    "left": 2042,
+    "bottom": 1750,
+    "top": 672,
+    "right": 3444,
+    "height": 1078,
+    "width": 1402
+  },
+  "image_size": {
+    "width": 1402,
+    "height": 1078
+  },
+  "captured_at": "2026-11-09T15:52:28.324Z",
+  "element_count": 62,
+  "dpi": 144,
+  "pid": 23380,
+  "hwnd": 3542156,
+  "image_sha256": "03dab17d4847e34676d720dab0c9cc25bc3e7a51e33b99898236473d1cd3ba48"
+}

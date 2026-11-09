@@ -1,0 +1,2880 @@
+[
+  {
+    "is_offscreen": false,
+    "name": "Calculator",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Window",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 2042,
+      "bottom": 1750,
+      "top": 672,
+      "right": 3444,
+      "height": 1078,
+      "width": 1402
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Calculator",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": "TitleBar",
+        "index": 0
+      }
+    ],
+    "control_type": "Window",
+    "automation_id": "TitleBar",
+    "bounding_rect": {
+      "left": 3151,
+      "bottom": 721,
+      "top": 673,
+      "right": 3433,
+      "height": 48,
+      "width": 282
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": true,
+    "name": "System",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": "TitleBar",
+        "index": 0
+      },
+      {
+        "control_type": "MenuBar",
+        "name": "System",
+        "automation_id": "SystemMenuBar",
+        "index": 0
+      }
+    ],
+    "control_type": "MenuBar",
+    "automation_id": "SystemMenuBar",
+    "bounding_rect": {
+      "left": 0,
+      "bottom": 0,
+      "top": 0,
+      "right": 0,
+      "height": 0,
+      "width": 0
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": true,
+    "name": "System",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": "TitleBar",
+        "index": 0
+      },
+      {
+        "control_type": "MenuBar",
+        "name": "System",
+        "automation_id": "SystemMenuBar",
+        "index": 0
+      },
+      {
+        "control_type": "MenuItem",
+        "name": "System",
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "MenuItem",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 0,
+      "bottom": 0,
+      "top": 0,
+      "right": 0,
+      "height": 0,
+      "width": 0
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Minimize Calculator",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": "TitleBar",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Minimize Calculator",
+        "automation_id": "Minimize",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "Minimize",
+    "bounding_rect": {
+      "left": 3226,
+      "bottom": 721,
+      "top": 673,
+      "right": 3295,
+      "height": 48,
+      "width": 69
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Maximize Calculator",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": "TitleBar",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Maximize Calculator",
+        "automation_id": "Maximize",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "Maximize",
+    "bounding_rect": {
+      "left": 3295,
+      "bottom": 721,
+      "top": 673,
+      "right": 3364,
+      "height": 48,
+      "width": 69
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Close Calculator",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": "TitleBar",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Close Calculator",
+        "automation_id": "Close",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "Close",
+    "bounding_rect": {
+      "left": 3364,
+      "bottom": 721,
+      "top": 673,
+      "right": 3433,
+      "height": 48,
+      "width": 69
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Calculator",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Window",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 2053,
+      "bottom": 1739,
+      "top": 673,
+      "right": 3433,
+      "height": 1066,
+      "width": 1380
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Calculator",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Text",
+        "name": "Calculator",
+        "automation_id": "AppName",
+        "index": 0
+      }
+    ],
+    "control_type": "Text",
+    "automation_id": "AppName",
+    "bounding_rect": {
+      "left": 2125,
+      "bottom": 709,
+      "top": 685,
+      "right": 2207,
+      "height": 24,
+      "width": 82
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      }
+    ],
+    "control_type": "Custom",
+    "automation_id": "NavView",
+    "bounding_rect": {
+      "left": 2053,
+      "bottom": 1739,
+      "top": 717,
+      "right": 3433,
+      "height": 1022,
+      "width": 1380
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Open Navigation",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Open Navigation",
+        "automation_id": "TogglePaneButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "TogglePaneButton",
+    "bounding_rect": {
+      "left": 2059,
+      "bottom": 784,
+      "top": 730,
+      "right": 2119,
+      "height": 54,
+      "width": 60
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Group",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 2053,
+      "bottom": 1739,
+      "top": 717,
+      "right": 3433,
+      "height": 1022,
+      "width": 1380
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": true,
+    "name": "Expression is ",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Text",
+        "name": "Expression is ",
+        "automation_id": "CalculatorExpression",
+        "index": 0
+      }
+    ],
+    "control_type": "Text",
+    "automation_id": "CalculatorExpression",
+    "bounding_rect": {
+      "left": 0,
+      "bottom": 0,
+      "top": 0,
+      "right": 0,
+      "height": 0,
+      "width": 0
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Display is 0",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Text",
+        "name": "Display is 0",
+        "automation_id": "CalculatorResults",
+        "index": 0
+      }
+    ],
+    "control_type": "Text",
+    "automation_id": "CalculatorResults",
+    "bounding_rect": {
+      "left": 2053,
+      "bottom": 998,
+      "top": 841,
+      "right": 2953,
+      "height": 157,
+      "width": 900
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Memory controls",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Memory controls",
+        "automation_id": "MemoryPanel",
+        "index": 0
+      }
+    ],
+    "control_type": "Group",
+    "automation_id": "MemoryPanel",
+    "bounding_rect": {
+      "left": 2060,
+      "bottom": 1067,
+      "top": 1000,
+      "right": 2657,
+      "height": 67,
+      "width": 597
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Clear all memory",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Memory controls",
+        "automation_id": "MemoryPanel",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Clear all memory",
+        "automation_id": "ClearMemoryButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "ClearMemoryButton",
+    "bounding_rect": {
+      "left": 2060,
+      "bottom": 1067,
+      "top": 1000,
+      "right": 2177,
+      "height": 67,
+      "width": 117
+    },
+    "enabled": false
+  },
+  {
+    "is_offscreen": false,
+    "name": "Memory recall",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Memory controls",
+        "automation_id": "MemoryPanel",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Memory recall",
+        "automation_id": "MemRecall",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "MemRecall",
+    "bounding_rect": {
+      "left": 2180,
+      "bottom": 1067,
+      "top": 1000,
+      "right": 2296,
+      "height": 67,
+      "width": 116
+    },
+    "enabled": false
+  },
+  {
+    "is_offscreen": false,
+    "name": "Memory add",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Memory controls",
+        "automation_id": "MemoryPanel",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Memory add",
+        "automation_id": "MemPlus",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "MemPlus",
+    "bounding_rect": {
+      "left": 2299,
+      "bottom": 1067,
+      "top": 1000,
+      "right": 2416,
+      "height": 67,
+      "width": 117
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Memory subtract",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Memory controls",
+        "automation_id": "MemoryPanel",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Memory subtract",
+        "automation_id": "MemMinus",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "MemMinus",
+    "bounding_rect": {
+      "left": 2420,
+      "bottom": 1067,
+      "top": 1000,
+      "right": 2537,
+      "height": 67,
+      "width": 117
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Memory store",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Memory controls",
+        "automation_id": "MemoryPanel",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Memory store",
+        "automation_id": "memButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "memButton",
+    "bounding_rect": {
+      "left": 2540,
+      "bottom": 1067,
+      "top": 1000,
+      "right": 2656,
+      "height": 67,
+      "width": 116
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Display controls",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Display controls",
+        "automation_id": "DisplayControls",
+        "index": 0
+      }
+    ],
+    "control_type": "Group",
+    "automation_id": "DisplayControls",
+    "bounding_rect": {
+      "left": 2060,
+      "bottom": 1178,
+      "top": 1070,
+      "right": 2947,
+      "height": 108,
+      "width": 887
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Percent",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Display controls",
+        "automation_id": "DisplayControls",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Percent",
+        "automation_id": "percentButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "percentButton",
+    "bounding_rect": {
+      "left": 2060,
+      "bottom": 1178,
+      "top": 1070,
+      "right": 2280,
+      "height": 108,
+      "width": 220
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Clear entry",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Display controls",
+        "automation_id": "DisplayControls",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Clear entry",
+        "automation_id": "clearEntryButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "clearEntryButton",
+    "bounding_rect": {
+      "left": 2283,
+      "bottom": 1178,
+      "top": 1070,
+      "right": 2503,
+      "height": 108,
+      "width": 220
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Clear",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Display controls",
+        "automation_id": "DisplayControls",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Clear",
+        "automation_id": "clearButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "clearButton",
+    "bounding_rect": {
+      "left": 2506,
+      "bottom": 1178,
+      "top": 1070,
+      "right": 2725,
+      "height": 108,
+      "width": 219
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Backspace",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Display controls",
+        "automation_id": "DisplayControls",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Backspace",
+        "automation_id": "backSpaceButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "backSpaceButton",
+    "bounding_rect": {
+      "left": 2728,
+      "bottom": 1178,
+      "top": 1070,
+      "right": 2947,
+      "height": 108,
+      "width": 219
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Standard functions",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Standard functions",
+        "automation_id": "StandardFunctions",
+        "index": 0
+      }
+    ],
+    "control_type": "Group",
+    "automation_id": "StandardFunctions",
+    "bounding_rect": {
+      "left": 2060,
+      "bottom": 1289,
+      "top": 1181,
+      "right": 2725,
+      "height": 108,
+      "width": 665
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Reciprocal",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Standard functions",
+        "automation_id": "StandardFunctions",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Reciprocal",
+        "automation_id": "invertButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "invertButton",
+    "bounding_rect": {
+      "left": 2060,
+      "bottom": 1289,
+      "top": 1181,
+      "right": 2280,
+      "height": 108,
+      "width": 220
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Square",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Standard functions",
+        "automation_id": "StandardFunctions",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Square",
+        "automation_id": "xpower2Button",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "xpower2Button",
+    "bounding_rect": {
+      "left": 2283,
+      "bottom": 1289,
+      "top": 1181,
+      "right": 2503,
+      "height": 108,
+      "width": 220
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Square root",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Standard functions",
+        "automation_id": "StandardFunctions",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Square root",
+        "automation_id": "squareRootButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "squareRootButton",
+    "bounding_rect": {
+      "left": 2506,
+      "bottom": 1289,
+      "top": 1181,
+      "right": 2725,
+      "height": 108,
+      "width": 219
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Standard operators",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Standard operators",
+        "automation_id": "StandardOperators",
+        "index": 0
+      }
+    ],
+    "control_type": "Group",
+    "automation_id": "StandardOperators",
+    "bounding_rect": {
+      "left": 2728,
+      "bottom": 1734,
+      "top": 1181,
+      "right": 2947,
+      "height": 553,
+      "width": 219
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Divide by",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Standard operators",
+        "automation_id": "StandardOperators",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Divide by",
+        "automation_id": "divideButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "divideButton",
+    "bounding_rect": {
+      "left": 2728,
+      "bottom": 1289,
+      "top": 1181,
+      "right": 2947,
+      "height": 108,
+      "width": 219
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Multiply by",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Standard operators",
+        "automation_id": "StandardOperators",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Multiply by",
+        "automation_id": "multiplyButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "multiplyButton",
+    "bounding_rect": {
+      "left": 2728,
+      "bottom": 1400,
+      "top": 1292,
+      "right": 2947,
+      "height": 108,
+      "width": 219
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Minus",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Standard operators",
+        "automation_id": "StandardOperators",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Minus",
+        "automation_id": "minusButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "minusButton",
+    "bounding_rect": {
+      "left": 2728,
+      "bottom": 1510,
+      "top": 1403,
+      "right": 2947,
+      "height": 107,
+      "width": 219
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Plus",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Standard operators",
+        "automation_id": "StandardOperators",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Plus",
+        "automation_id": "plusButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "plusButton",
+    "bounding_rect": {
+      "left": 2728,
+      "bottom": 1621,
+      "top": 1513,
+      "right": 2947,
+      "height": 108,
+      "width": 219
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Equals",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Standard operators",
+        "automation_id": "StandardOperators",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Equals",
+        "automation_id": "equalButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "equalButton",
+    "bounding_rect": {
+      "left": 2728,
+      "bottom": 1734,
+      "top": 1625,
+      "right": 2947,
+      "height": 109,
+      "width": 219
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Number pad",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Number pad",
+        "automation_id": "NumberPad",
+        "index": 0
+      }
+    ],
+    "control_type": "Group",
+    "automation_id": "NumberPad",
+    "bounding_rect": {
+      "left": 2060,
+      "bottom": 1734,
+      "top": 1292,
+      "right": 2725,
+      "height": 442,
+      "width": 665
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Zero",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Number pad",
+        "automation_id": "NumberPad",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Zero",
+        "automation_id": "num0Button",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "num0Button",
+    "bounding_rect": {
+      "left": 2283,
+      "bottom": 1733,
+      "top": 1624,
+      "right": 2503,
+      "height": 109,
+      "width": 220
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "One",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Number pad",
+        "automation_id": "NumberPad",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "One",
+        "automation_id": "num1Button",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "num1Button",
+    "bounding_rect": {
+      "left": 2060,
+      "bottom": 1621,
+      "top": 1513,
+      "right": 2280,
+      "height": 108,
+      "width": 220
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Two",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Number pad",
+        "automation_id": "NumberPad",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Two",
+        "automation_id": "num2Button",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "num2Button",
+    "bounding_rect": {
+      "left": 2283,
+      "bottom": 1621,
+      "top": 1513,
+      "right": 2503,
+      "height": 108,
+      "width": 220
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Three",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Number pad",
+        "automation_id": "NumberPad",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Three",
+        "automation_id": "num3Button",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "num3Button",
+    "bounding_rect": {
+      "left": 2506,
+      "bottom": 1621,
+      "top": 1513,
+      "right": 2725,
+      "height": 108,
+      "width": 219
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Four",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Number pad",
+        "automation_id": "NumberPad",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Four",
+        "automation_id": "num4Button",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "num4Button",
+    "bounding_rect": {
+      "left": 2060,
+      "bottom": 1511,
+      "top": 1403,
+      "right": 2280,
+      "height": 108,
+      "width": 220
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Five",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Number pad",
+        "automation_id": "NumberPad",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Five",
+        "automation_id": "num5Button",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "num5Button",
+    "bounding_rect": {
+      "left": 2283,
+      "bottom": 1511,
+      "top": 1403,
+      "right": 2503,
+      "height": 108,
+      "width": 220
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Six",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Number pad",
+        "automation_id": "NumberPad",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Six",
+        "automation_id": "num6Button",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "num6Button",
+    "bounding_rect": {
+      "left": 2506,
+      "bottom": 1511,
+      "top": 1403,
+      "right": 2725,
+      "height": 108,
+      "width": 219
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Seven",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Number pad",
+        "automation_id": "NumberPad",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Seven",
+        "automation_id": "num7Button",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "num7Button",
+    "bounding_rect": {
+      "left": 2060,
+      "bottom": 1400,
+      "top": 1292,
+      "right": 2280,
+      "height": 108,
+      "width": 220
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Eight",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Number pad",
+        "automation_id": "NumberPad",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Eight",
+        "automation_id": "num8Button",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "num8Button",
+    "bounding_rect": {
+      "left": 2283,
+      "bottom": 1400,
+      "top": 1292,
+      "right": 2503,
+      "height": 108,
+      "width": 220
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Nine",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Number pad",
+        "automation_id": "NumberPad",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Nine",
+        "automation_id": "num9Button",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "num9Button",
+    "bounding_rect": {
+      "left": 2506,
+      "bottom": 1400,
+      "top": 1292,
+      "right": 2725,
+      "height": 108,
+      "width": 219
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Decimal separator",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "Number pad",
+        "automation_id": "NumberPad",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Decimal separator",
+        "automation_id": "decimalSeparatorButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "decimalSeparatorButton",
+    "bounding_rect": {
+      "left": 2506,
+      "bottom": 1733,
+      "top": 1624,
+      "right": 2725,
+      "height": 109,
+      "width": 219
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Positive negative",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Positive negative",
+        "automation_id": "negateButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "negateButton",
+    "bounding_rect": {
+      "left": 2060,
+      "bottom": 1734,
+      "top": 1625,
+      "right": 2280,
+      "height": 109,
+      "width": 220
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "History and Memory lists",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "History and Memory lists",
+        "automation_id": "DockPanel",
+        "index": 0
+      }
+    ],
+    "control_type": "Group",
+    "automation_id": "DockPanel",
+    "bounding_rect": {
+      "left": 2953,
+      "bottom": 1739,
+      "top": 717,
+      "right": 3433,
+      "height": 1022,
+      "width": 480
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "History and Memory lists",
+        "automation_id": "DockPanel",
+        "index": 0
+      },
+      {
+        "control_type": "Tab",
+        "name": null,
+        "automation_id": "DockPivot",
+        "index": 0
+      }
+    ],
+    "control_type": "Tab",
+    "automation_id": "DockPivot",
+    "bounding_rect": {
+      "left": 2953,
+      "bottom": 1739,
+      "top": 717,
+      "right": 3433,
+      "height": 1022,
+      "width": 480
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "There’s no history yet. History",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "History and Memory lists",
+        "automation_id": "DockPanel",
+        "index": 0
+      },
+      {
+        "control_type": "Tab",
+        "name": null,
+        "automation_id": "DockPivot",
+        "index": 0
+      },
+      {
+        "control_type": "TabItem",
+        "name": "There’s no history yet. History",
+        "automation_id": "HistoryLabel",
+        "index": 0
+      }
+    ],
+    "control_type": "TabItem",
+    "automation_id": "HistoryLabel",
+    "bounding_rect": {
+      "left": 2953,
+      "bottom": 788,
+      "top": 717,
+      "right": 3055,
+      "height": 71,
+      "width": 102
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "There’s no history yet.",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "History and Memory lists",
+        "automation_id": "DockPanel",
+        "index": 0
+      },
+      {
+        "control_type": "Tab",
+        "name": null,
+        "automation_id": "DockPivot",
+        "index": 0
+      },
+      {
+        "control_type": "TabItem",
+        "name": "There’s no history yet. History",
+        "automation_id": "HistoryLabel",
+        "index": 0
+      },
+      {
+        "control_type": "Text",
+        "name": "There’s no history yet.",
+        "automation_id": "HistoryEmpty",
+        "index": 0
+      }
+    ],
+    "control_type": "Text",
+    "automation_id": "HistoryEmpty",
+    "bounding_rect": {
+      "left": 2971,
+      "bottom": 1739,
+      "top": 816,
+      "right": 3397,
+      "height": 923,
+      "width": 426
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "There’s nothing saved in memory. Memory",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Group",
+        "name": "History and Memory lists",
+        "automation_id": "DockPanel",
+        "index": 0
+      },
+      {
+        "control_type": "Tab",
+        "name": null,
+        "automation_id": "DockPivot",
+        "index": 0
+      },
+      {
+        "control_type": "TabItem",
+        "name": "There’s nothing saved in memory. Memory",
+        "automation_id": "MemoryLabel",
+        "index": 0
+      }
+    ],
+    "control_type": "TabItem",
+    "automation_id": "MemoryLabel",
+    "bounding_rect": {
+      "left": 3055,
+      "bottom": 788,
+      "top": 717,
+      "right": 3169,
+      "height": 71,
+      "width": 114
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Standard Calculator mode",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Text",
+        "name": "Standard Calculator mode",
+        "automation_id": "Header",
+        "index": 0
+      }
+    ],
+    "control_type": "Text",
+    "automation_id": "Header",
+    "bounding_rect": {
+      "left": 2125,
+      "bottom": 775,
+      "top": 735,
+      "right": 2248,
+      "height": 40,
+      "width": 123
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Keep on top",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Custom",
+        "name": null,
+        "automation_id": "NavView",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Keep on top",
+        "automation_id": "NormalAlwaysOnTopButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "NormalAlwaysOnTopButton",
+    "bounding_rect": {
+      "left": 2263,
+      "bottom": 781,
+      "top": 733,
+      "right": 2311,
+      "height": 48,
+      "width": 48
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Pane",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 2053,
+      "bottom": 1739,
+      "top": 721,
+      "right": 3433,
+      "height": 1018,
+      "width": 1380
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Calculator",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "TitleBar",
+        "name": "Calculator",
+        "automation_id": "TitleBar",
+        "index": 0
+      }
+    ],
+    "control_type": "TitleBar",
+    "automation_id": "TitleBar",
+    "bounding_rect": {
+      "left": 2053,
+      "bottom": 717,
+      "top": 683,
+      "right": 3433,
+      "height": 34,
+      "width": 1380
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "System Menu Bar",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "TitleBar",
+        "name": "Calculator",
+        "automation_id": "TitleBar",
+        "index": 0
+      },
+      {
+        "control_type": "MenuBar",
+        "name": "System Menu Bar",
+        "automation_id": "SystemMenuBar",
+        "index": 0
+      }
+    ],
+    "control_type": "MenuBar",
+    "automation_id": "SystemMenuBar",
+    "bounding_rect": {
+      "left": 2053,
+      "bottom": 716,
+      "top": 683,
+      "right": 2086,
+      "height": 33,
+      "width": 33
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "System",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "TitleBar",
+        "name": "Calculator",
+        "automation_id": "TitleBar",
+        "index": 0
+      },
+      {
+        "control_type": "MenuBar",
+        "name": "System Menu Bar",
+        "automation_id": "SystemMenuBar",
+        "index": 0
+      },
+      {
+        "control_type": "MenuItem",
+        "name": "System",
+        "automation_id": "Item 1",
+        "index": 0
+      }
+    ],
+    "control_type": "MenuItem",
+    "automation_id": "Item 1",
+    "bounding_rect": {
+      "left": 2053,
+      "bottom": 716,
+      "top": 683,
+      "right": 2086,
+      "height": 33,
+      "width": 33
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": true,
+    "name": "Minimize",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "TitleBar",
+        "name": "Calculator",
+        "automation_id": "TitleBar",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Minimize",
+        "automation_id": "Minimize",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "Minimize",
+    "bounding_rect": {
+      "left": 0,
+      "bottom": 0,
+      "top": 0,
+      "right": 0,
+      "height": 0,
+      "width": 0
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": true,
+    "name": "Maximize",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "TitleBar",
+        "name": "Calculator",
+        "automation_id": "TitleBar",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Maximize",
+        "automation_id": "Maximize",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "Maximize",
+    "bounding_rect": {
+      "left": 0,
+      "bottom": 0,
+      "top": 0,
+      "right": 0,
+      "height": 0,
+      "width": 0
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": true,
+    "name": "Close",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "Calculator",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "TitleBar",
+        "name": "Calculator",
+        "automation_id": "TitleBar",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Close",
+        "automation_id": "Close",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "Close",
+    "bounding_rect": {
+      "left": 0,
+      "bottom": 0,
+      "top": 0,
+      "right": 0,
+      "height": 0,
+      "width": 0
+    },
+    "enabled": true
+  }
+]
