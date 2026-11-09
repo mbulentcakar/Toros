@@ -446,11 +446,12 @@ function advisoryPrompt(capabilities: readonly string[], workspaces: readonly st
       `The operator chose the ${agent} agent for this task. When the work needs a CLI agent, use ${agent} and request no capability belonging to another agent.`,
     ]),
     'The plan is what the operator reads and approves. Write it as 1 to 12 short steps in the order you intend to work, each a plain sentence naming what you will do and to what. No identifiers, no JSON, no restating the objective.',
+    'When the work is agreed, you may also state three optional fields, each at most 2000 characters: "intent" (the bounded request agreed in conversation, in your own words), "target" (the specific file, app or device), and "changes" (the permitted changes and intended side effects).',
     'Output exactly one JSON object, and exactly one of these keys:',
     ...(firstResponse ? ['This is your first response in this conversation. Also include "title":"..." with a specific 2 to 60 character session name.'] : []),
     '{"say":"..."} to reply without needing an answer.',
     '{"ask":"..."} to ask the operator one question.',
-    '{"propose":{"objective":"...","plan":["...","..."],"acceptance":["..."],"capabilities":[{"id":"...","why":"..."}],"workspaces":["..."],"forbidden":["..."],"max_actions":20,"max_retries":2,"expires_in_hours":8}}',
+    '{"propose":{"objective":"...","plan":["...","..."],"acceptance":["..."],"capabilities":[{"id":"...","why":"..."}],"workspaces":["..."],"forbidden":["..."],"max_actions":20,"max_retries":2,"expires_in_hours":8,"intent":"...","target":"...","changes":"..."}}',
   ].join('\n\n');
 }
 
