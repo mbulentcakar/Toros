@@ -2,7 +2,7 @@
 
 **Read `00-CONTRACTS.md` first.** It is short and it is binding.
 
-**Status: proposed, revision 6 (2026-10-26). Not accepted.** Revision 6 rebases AS on what the AR
+**Status: accepted by the operator 2026-11-09, at revision 6 (2026-10-26).** Implementation starts with slice AS0 (contract amendments A7 and A10). `act` stays off until every item in "Prerequisites before `act` is enabled" has cleared. The AS revision (`AS-agreement-first-revision.md`, slice AF, merged in #24) applies on top. History: Revision 6 rebases AS on what the AR
 remediation actually shipped: contract amendments **A8** (two-phase resolve) and **A9** (signer
 rules need `OriginalFilename`), token-sequence `forbidden` matching (RR-01), and the cleared AR gate
 (PR mbulentcakar/Toros#18, 2026-10-24). It also closes a gap the AR native runs exposed: the two
@@ -1288,7 +1288,7 @@ verdicts. Real Notepad and Calculator are used for smoke tests under a real miss
 ## Out of scope
 
 Mac or Linux desktops. Launching applications. More than one driver per mission. Agents other than
-Claude and Codex as driver or approver. Any vision or coordinate fallback. Persisting missions
+Claude and Codex as driver or approver. Any vision or coordinate fallback for actuation (spec AU's `vision.locate` and `vision.check` are not a fallback: they never act and change no AS rule). Persisting missions
 across restarts. Letting the approver ask the driver questions. Semantic guarantees beyond the
 enumerated snapshot.
 

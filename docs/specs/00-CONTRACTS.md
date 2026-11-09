@@ -279,9 +279,9 @@ is `E_ADAPTER_FAILURE`, not silently omitted. Store migration 002 adds the
 durable column, and existing version-1 databases receive an empty object for
 historical receipts.
 
-### A7 — desktop control: event kinds, `E_APPROVAL_DENIED`, delegated-approval semantics (spec AS) — PROPOSED
+### A7 — desktop control: event kinds, `E_APPROVAL_DENIED`, delegated-approval semantics (spec AS) — ACCEPTED, NOT YET MADE
 
-**Status: proposed with spec AS (2026-10-13). Not in effect.** It is made by the architect in
+**Status: accepted with spec AS on 2026-11-09 (proposed 2026-10-13). Not yet in effect.** It is made by the architect in
 slice AS0, with every consumer in the same diff and the full suite green. An implementation
 worker on any other AS slice still treats `packages/contracts` as frozen.
 
@@ -368,10 +368,10 @@ OriginalFilename — the value the version resource carries independent of any a
 of what the value means, not a type change: the field remains `string | null` and A9's
 case-insensitive comparison is unchanged.
 
-### A10 — packaged-app identity (spec AS revision 6) — PROPOSED
+### A10 — packaged-app identity (spec AS revision 6) — ACCEPTED, NOT YET MADE
 
-**Status: proposed with spec AS revision 6 (2026-10-26; round 2 after the independent review).
-Not in effect.** Made by the architect in slice AS0 together with A7, every consumer in the same
+**Status: accepted with spec AS revision 6 on 2026-11-09 (proposed 2026-10-26; round 2 after the
+independent review). Not yet in effect.** Made by the architect in slice AS0 together with A7, every consumer in the same
 diff.
 
 **Gap.** A8/A9 identify an application by image hash, image path, or signer + product +

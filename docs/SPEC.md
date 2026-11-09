@@ -14,7 +14,7 @@ Toros should make handoffs observable, resumable, and safe without attempting to
 - A commercial multi-tenant product.
 - General remote desktop or remote shell access.
 - An unrestricted shell, arbitrary filesystem browser, or arbitrary UI clicker for Hermes.
-  *Proposed (spec AS):* desktop control of any application Node Core can classify is admitted
+  *Accepted 2026-11-09 (spec AS):* desktop control of any application Node Core can classify is admitted
   **only** under spec AS: an operator-issued, task-bound, expiring mission, with every
   application and every mutating action approved by a second, independent agent, or by the
   operator for the operator-only tier. An *unapproved* clicker stays a non-goal for every
@@ -530,7 +530,7 @@ Deliver:
 - immutable `JobEnvelope` and policy engine;
 - Claude and Codex CLI adapters;
 - exactly one operator-selected desktop application adapter;
-  *proposed amendment (spec AS, not in effect until accepted):* plus the spec AR read-only
+  *amendment (spec AS, accepted 2026-11-09):* plus the spec AR read-only
   discovery adapters and the spec AS delegated UI Automation adapter. AS mutation stays disabled on
   every node until the prerequisites in spec AS have cleared, including AR's adversarial security
   review and contract amendment A7;
