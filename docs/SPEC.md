@@ -23,7 +23,7 @@ Toros should make handoffs observable, resumable, and safe without attempting to
 - Automatically committing, pushing, merging, deploying, or marking work accepted.
 - Building a universal workflow engine before the basic relay is proven.
 - Forking or reimplementing Numbat in Phase 1.
-- Requiring vision-based computer-use where an API, plugin, file interface, script, or accessibility action works.
+- Requiring vision-based computer-use where an API, plugin, file interface, script, or accessibility action works. Vision may locate controls and check outcomes under spec AU; it never acts.
 - Adding JanBot/CUDA, speech, 3D generation, gbrain, or UltraSwarm to the initial implementation.
 
 ## 3. Core principles

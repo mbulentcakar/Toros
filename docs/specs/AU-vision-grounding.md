@@ -2,11 +2,11 @@
 
 **Read `00-CONTRACTS.md` first.** It is short and it is binding.
 
-**Status: proposed, draft 1 (2026-11-08, Claude). Not accepted.**
+**Status: accepted by the operator 2026-11-09 (draft 1 of 2026-11-08, Claude).** The decisions in the appendix are still open and remain the operator's. AU0 can start once decision 1 (the target applications) is made. AU1 and later wait on their gates in "Delivery slices".
 
 **Builds on:**
 - **AR** (read-only discovery): shipped, gate cleared in mbulentcakar/Toros#18.
-- **AS** (delegated desktop control): proposed, mbulentcakar/Toros#1, rev 6.
+- **AS** (delegated desktop control): accepted 2026-11-09, mbulentcakar/Toros#1, rev 6.
 - **AS revision / slice AF** (agreement-first accept): merged #24.
 - **AM** (the API-adapter rules): proposed.
 
