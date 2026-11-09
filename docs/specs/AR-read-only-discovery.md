@@ -135,7 +135,7 @@ Concretely:
 `allowed_capabilities`/`forbidden`. It is an operator + envelope decision, never a caller argument.
 
 Default omissions, always, regardless of scope: password field values, clipboard contents, browser
-cookies, hidden/off-screen document contents, and screenshots. When reliable inspection is
+cookies, hidden/off-screen document contents, and screenshots (except the single-window captures of spec AU's two capabilities, under AU's data-path rules). When reliable inspection is
 impossible, return `unavailable` — never silently broaden scope, and never fall back to vision.
 
 ---
