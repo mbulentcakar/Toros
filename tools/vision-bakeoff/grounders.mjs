@@ -210,15 +210,39 @@ export function parseGenericJsonOutput(rawText, sizeOrWidth, maybeHeight, opts =
     candidate = fenceMatch[1].trim();
   }
 
+  // Recovery for malformed replies that still carry a point. A reply with a point is never "safe"
+  // just because it is badly formatted: a lenient production parser would act on it, so the bakeoff
+  // must score it (and flags it `recovered`). Key names are stripped first so digits in keys like
+  // "x_1" are not read as coordinates. Truly coordinate-free text stays parse_error.
+  const recover = (text) => {
+    if (/"?not_found"?\s*:\s*true/i.test(text) && !/\d/.test(text.replace(/"[A-Za-z_][A-Za-z0-9_]*"\s*:/g, ''))) {
+      return { ok: true, status: 'not_found', not_found: true, point: null, recovered: true };
+    }
+    const numbers = (text.replace(/"[A-Za-z_][A-Za-z0-9_]*"\s*:/g, ' ').match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+    if (numbers.length < 2) {
+      return { ok: false, status: 'parse_error', error: 'Response is not valid JSON and carries no coordinate pair' };
+    }
+    const mapped = mapModelPoint(numbers[0], numbers[1], imageSize ?? { width: 1, height: 1 }, coordMode);
+    if (!mapped) {
+      return { ok: false, status: 'parse_error', error: `Recovered coordinates out of range for ${coordMode}: (${numbers[0]}, ${numbers[1]})` };
+    }
+    return { ok: true, status: 'point', x: mapped.x, y: mapped.y, point: { x: mapped.x, y: mapped.y }, recovered: true };
+  };
+
   let parsed;
   try {
     parsed = JSON.parse(candidate);
   } catch {
-    return { ok: false, status: 'parse_error', error: 'Response is not valid JSON' };
+    return recover(candidate);
   }
 
-  // Strict: coordinates must be JSON numbers. Quoted numbers count as a format failure (parse_error).
-  const num = (n) => (typeof n === 'number' ? n : NaN);
+  // Coordinates should be JSON numbers; quoted numerics are accepted but flagged `recovered`.
+  let quoted = false;
+  const num = (n) => {
+    if (typeof n === 'number') return n;
+    if (typeof n === 'string' && /^\s*-?\d+(\.\d+)?\s*$/.test(n)) { quoted = true; return Number(n); }
+    return NaN;
+  };
   const asPair = (v) => (Array.isArray(v) && v.length === 2 && v.every((n) => Number.isFinite(num(n))) ? [num(v[0]), num(v[1])] : null);
   let pair = null;
   if (asPair(parsed)) pair = asPair(parsed);
@@ -231,11 +255,11 @@ export function parseGenericJsonOutput(rawText, sizeOrWidth, maybeHeight, opts =
     if (!mapped) {
       return { ok: false, status: 'parse_error', error: `Coordinates out of range for ${coordMode}: (${pair[0]}, ${pair[1]})` };
     }
-    return { ok: true, status: 'point', x: mapped.x, y: mapped.y, point: { x: mapped.x, y: mapped.y } };
+    return { ok: true, status: 'point', x: mapped.x, y: mapped.y, point: { x: mapped.x, y: mapped.y }, ...(quoted ? { recovered: true } : {}) };
   }
 
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    return { ok: false, status: 'parse_error', error: 'JSON response must be an object' };
+    return recover(candidate);
   }
 
   if (parsed.not_found === true && parsed.x === undefined && parsed.y === undefined) {
@@ -267,7 +291,7 @@ export function parseGenericJsonOutput(rawText, sizeOrWidth, maybeHeight, opts =
     };
   }
 
-  return { ok: false, status: 'parse_error', error: 'JSON object did not match {"x":<int>,"y":<int>} or {"not_found":true}' };
+  return recover(candidate);
 }
 
 /** Build the prompt for a given prompt_style ('ui-tars' or 'generic'). */
@@ -287,6 +311,19 @@ export function buildGrounderPrompt(promptStyle, description, imageSize) {
       '',
       '## User Instruction',
       `Click on ${description}`,
+    ].join('\n');
+  }
+
+  if (promptStyle === 'generic-norm1000') {
+    return [
+      'You are a UI grounding model. Look at the provided application window screenshot.',
+      `Locate the control described as: ${JSON.stringify(description)}.`,
+      'Return ONLY a strict JSON object with the center of that control in RELATIVE coordinates,',
+      'where (0, 0) is the top-left and (1000, 1000) the bottom-right of the image:',
+      '{"x": <int 0-1000>, "y": <int 0-1000>}',
+      'If the described control is not visible in the window, return ONLY:',
+      '{"not_found": true}',
+      'Emit no prose, no markdown fences, and no extra keys.',
     ].join('\n');
   }
 
@@ -359,8 +396,8 @@ export function buildGrounderTable(config = loadGroundersConfig()) {
       endpoint: openrouterEndpoint,
       model: qwenModel.trim(),
       key_env: 'OPENROUTER_API_KEY',
-      prompt_style: 'generic',
-      // Qwen3-VL grounds in 0–1000 relative coordinates regardless of the pixel prompt.
+      // Qwen3-VL grounds in 0–1000 relative coordinates; ask for exactly that (review finding C).
+      prompt_style: 'generic-norm1000',
       coord_mode: 'norm1000',
       parser: (raw, size) => parseGenericJsonOutput(raw, size, undefined, { coordMode: 'norm1000' }),
       optional: false,

@@ -2,7 +2,8 @@
 
 > **Status:** first live run, one repetition, two fixture apps, a single DPI (150%). The numbers are
 > indicative, not a verdict. Reproduce with `tools/vision-bakeoff/run.mjs`, and re-grade stored replies
-> with `rescore.mjs`. Raw results are local only (`tools/vision-bakeoff/results/`, git-ignored).
+> offline with `rescore.mjs`. Raw results are local only (`tools/vision-bakeoff/results/`, git-ignored).
+> Scores below use the scoring rules after two independent review rounds (Grok).
 
 ## Setup
 
@@ -10,12 +11,18 @@
 - **Fixtures:**
   - Calculator, Standard mode: window 1402×1078 px, 62 UIA elements.
   - Notepad: window 1653×1191 px, 46 UIA elements.
-  - Synthetic content only.
 - **Targets:** 50 labelled targets per app (≥ 10 marked hard). Every target's `expected` selector
   exists verbatim in its committed fixture tree (tested).
 - **Capture:** `PrintWindow(hwnd, PW_RENDERFULLCONTENT)` bound by pid, plus the UIA ControlView tree.
-- **Runs:** 1 repetition, 300 calls in total (150 per app). Total cost was about $1.10 on OpenRouter.
-  The key was loaded from the server-side store into the run's process only.
+- **Runs:** 1 repetition, 300 calls in total. Total cost was about $1.10 on OpenRouter. The key was
+  loaded from the server-side store into the run's process only.
+
+**Data incident (Notepad).** The capture attached to the operator's open Notepad instead of a fresh
+synthetic one. The screenshot sent to the three providers showed only two tab names, an empty
+document and a "path not found" dialog; no file content. The committed fixture now uses synthetic
+tab names (`notes-a.txt`, `notes-b.txt`). Before the next Notepad run the fixture must be recaptured
+from a clean, synthetic Notepad session, and `capture.ps1` should refuse to attach to a running
+instance unless told to.
 
 ## Models
 
@@ -23,7 +30,7 @@
 |---|---|---|---|
 | `ui-tars-1.5-7b` | `bytedance/ui-tars-1.5-7b` | UI-TARS action format | absolute pixels of the Qwen2.5-VL `smart_resize`d image |
 | `claude` | `anthropic/claude-sonnet-5.5` | strict pixel JSON | image pixels |
-| `qwen` | `qwen/qwen3-vl-235b-a22b-instruct` | strict pixel JSON | 0–1000 relative (Qwen3-VL ignores the pixel instruction) |
+| `qwen` | `qwen/qwen3-vl-235b-a22b-instruct` | strict JSON (this run asked for pixels; the next asks for 0–1000) | 0–1000 relative |
 
 ## Results (all targets)
 
@@ -31,45 +38,49 @@
 |---|---|---|---|---|---|---|---|---|
 | claude | calculator | **0 / 50 (0%)** | 100% | 0% | 0% | 0% | 700 / 1348 | 0.45 |
 | claude | notepad | **0 / 50 (0%)** | 98% | 2% | 0% | 0% | 888 / 2125 | 0.56 |
+| qwen | calculator | **0 / 50 (0%)** | 100% | 0% | 0% | 0% | 788 / 2752 | 0.02 |
+| qwen | notepad | **0 / 50 (0%)** | 86% | 0% | 14% | 0% | 667 / 1148 | 0.03 |
 | ui-tars-1.5-7b | calculator | **2 / 50 (4%)** | 96% | 0% | 0% | 0% | 729 / 1381 | 0.02 |
 | ui-tars-1.5-7b | notepad | **2 / 50 (4%)** | 90% | 2% | 0% | 4% | 718 / 1142 | 0.03 |
-| qwen | calculator | **0 / 50 (0%)** | 56% | 0% | 0% | 44% | 788 / 2752 | 0.02 |
-| qwen | notepad | **0 / 50 (0%)** | 68% | 0% | 14% | 18% | 667 / 1148 | 0.03 |
+
+**Qwen's reply format.** About a third of Qwen's replies (31 of 100) were malformed JSON that still
+carried a clear point: quoted numbers, a missing bracket, or a pair packed into `"x"`. The bakeoff
+scores the recovered point, because a click hidden as `parse_error` is not safe. A production
+parser would need the same recovery, or a stricter prompt.
 
 **UI-TARS's wrong elements.** All four landed on an adjacent, look-alike control:
 - Calculator: √x → ÷, and "add to memory" → −.
 - Notepad: "the menu with copy/paste/find" → View, and the window Close → the tab's Close.
 
-**Qwen's parse errors** are format failures: quoted numbers and malformed JSON. A production
-parser would reject them too.
-
 ## What we learned about the harness (kept as tests)
 
 - **Coordinate conventions differ per model.** Reading UI-TARS-1.5 as 0–1000 gave a false 30%
-  wrong-element rate, and reading Qwen3-VL's packed pairs gave 100% parse errors.
-- **UIA trees are not strictly nested.** Hit-testing must take the smallest containing element, as
-  `ElementFromPoint` does, not the deepest selector. A point on a non-clickable overlay inside the
-  target's own rect is a hit (Notepad's scroll viewer over its Document).
-- **Run 1 target labels were wrong.** Four Calculator targets had wrong automation ids. Targets are
-  now generated from, and tested against, the committed fixture tree.
+  wrong-element rate. Qwen3-VL answers 0–1000 even when asked for pixels.
+- **UIA trees overlap; they are not strictly nested.** Hit-testing therefore picks the smallest
+  *actionable* control under the point, then the smallest element of any kind. A click on a
+  non-actionable overlay inside the target's own rect is a hit. A click on another tab's title
+  counts as that tab, so it is `wrong_element`.
+- **Targets must come from the fixture.** Four Calculator targets in run 1 had wrong automation ids.
+  Targets are now generated from, and tested against, the committed fixture tree.
 
 ## Verdict against the AU0 thresholds (wrong_element ≤ 2%, hit ≥ 85%)
 
 | Grounder | Meets both? | Note |
 |---|---|---|
-| Claude Sonnet 5.5 | **yes** on both apps | 0 wrong of 100. About 20× UI-TARS's cost, and the screenshots go to an external provider. |
-| UI-TARS-1.5-7B | **no**: 4% wrong (4 of 100) | Hits are good (90–96%). The errors are adjacent look-alikes, which is exactly the dangerous kind. |
-| Qwen3-VL-235B | **no**: hit 56–68% | Never wrong, but too many format failures as configured. |
+| Claude Sonnet 5.5 | **yes** (0/100 wrong, 98–100% hit) | About 20× the others' cost; external provider only. |
+| Qwen3-VL-235B | **yes** (0/100 wrong, 86–100% hit) | The format is unreliable (31% recovered). It has open weights: the 235B model is too large for JanBot, so test the 8B/30B variants locally. |
+| UI-TARS-1.5-7B | **no**: 4/100 wrong | Hit rate is good, but the errors are look-alikes, the dangerous kind. |
 
 **Indicative conclusion:**
-- **AU1 as specified:** with AU's data rule (local grounder by default, external only for listed
-  apps), no *local* grounder qualifies yet; UI-TARS-1.5-7B is the only local-capable candidate, and
-  it misses the 2% wrong-element bar. AU1 can proceed with Claude only for apps on
+- **AU1:** it can proceed with Claude, or with Qwen behind a recovering parser, for apps on
   `vision.external_apps`.
-- **Before deciding on UI-TARS:**
-  - repeat ×3 to measure variance;
+- **A local grounder:** the Qwen3-VL family is now the lead candidate over UI-TARS.
+- **Before deciding:**
+  - repeat ×3;
   - add the operator's real target apps;
   - test 100% and 200% DPI;
-  - try a self-hosted UI-TARS (a GGUF on JanBot's GTX 1080, or a bigger GPU).
+  - re-run Qwen with the 0–1000 prompt;
+  - try the small Qwen3-VL variants and a self-hosted UI-TARS;
+  - recapture Notepad cleanly.
 
 **Decision:** the operator's.

@@ -152,35 +152,38 @@ export function findDeepestElementAtPoint(tree, screenPoint) {
     ? tree
     : (Array.isArray(tree?.elements) ? tree.elements : []);
 
-  let bestElement = null;
-  let bestDepth = -1;
-  let bestArea = Infinity;
+  // Two passes: the smallest ENABLED ACTIONABLE control containing the point wins (a click on a tab's
+  // title text activates that tab, review finding A); only when no actionable control contains the
+  // point does the smallest element of any kind win.
+  const pick = (acceptFn) => {
+    let bestElement = null;
+    let bestDepth = -1;
+    let bestArea = Infinity;
+    for (let i = 0; i < elements.length; i++) {
+      const el = elements[i];
+      if (!el || typeof el !== 'object') continue;
+      if (el.is_offscreen === true || el.offscreen === true) continue;
+      if (!el.bounding_rect) continue;
+      if (!acceptFn(el)) continue;
 
-  for (let i = 0; i < elements.length; i++) {
-    const el = elements[i];
-    if (!el || typeof el !== 'object') continue;
-    if (el.is_offscreen === true || el.offscreen === true) continue;
-    if (!el.bounding_rect) continue;
+      const r = normalizeRect(el.bounding_rect);
+      if (!rectContainsPoint(r, screenPoint)) continue;
 
-    const r = normalizeRect(el.bounding_rect);
-    if (!rectContainsPoint(r, screenPoint)) continue;
+      const depth = typeof el.depth === 'number'
+        ? el.depth
+        : (Array.isArray(el.selector) ? el.selector.length : 0);
+      const area = r.width * r.height;
 
-    const depth = typeof el.depth === 'number'
-      ? el.depth
-      : (Array.isArray(el.selector) ? el.selector.length : 0);
-    const area = r.width * r.height;
-
-    if (
-      area < bestArea ||
-      (area === bestArea && depth >= bestDepth)
-    ) {
-      bestElement = el;
-      bestDepth = depth;
-      bestArea = area;
+      if (area < bestArea || (area === bestArea && depth >= bestDepth)) {
+        bestElement = el;
+        bestDepth = depth;
+        bestArea = area;
+      }
     }
-  }
+    return bestElement;
+  };
 
-  return bestElement;
+  return pick((el) => el.enabled === true && isActionableControlType(el.control_type)) ?? pick(() => true);
 }
 
 /**

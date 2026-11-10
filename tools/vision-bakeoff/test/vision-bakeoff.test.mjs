@@ -255,7 +255,6 @@ describe('2. Generic strict JSON parser & Qwen packed-pair norm1000 formats', ()
     for (const garbage of [
       '',
       'not json at all',
-      '{"x": "100", "y": 200}',
       '{"x": -5, "y": 10}',
       '{"x": 10}',
       '[]',
@@ -1270,5 +1269,41 @@ describe('9. Hit-test realism on overlapping, non-nested UIA trees', () => {
   });
   it('an adjacent actionable control is still wrong_element', () => {
     assert.equal(__score({ parsed: parsed(925, 20), tree, expected: sel('Close'), meta }).classification, 'wrong_element');
+  });
+});
+
+// Review round 2 (Grok) findings A-C.
+describe('10. Review r2: actionable-first hit-testing, malformed-reply recovery, Qwen prompt', () => {
+  it('A: a click on another tab title (non-actionable Text inside that TabItem) is wrong_element', () => {
+    const tree = parseJsonNoBom(readFileSync(path.join(BAKEOFF_DIR, 'fixtures', 'notepad', 'tree.json'), 'utf8'));
+    const meta = parseJsonNoBom(readFileSync(path.join(BAKEOFF_DIR, 'fixtures', 'notepad', 'meta.json'), 'utf8'));
+    const tabB = tree.find((e) => e.control_type === 'TabItem' && String(e.name).startsWith('notes-b.txt'));
+    const titleA = tree.find((e) => e.control_type === 'Text' && e.name === 'notes-a.txt');
+    assert.ok(tabB && titleA, 'fixture has both tabs');
+    const r = titleA.bounding_rect;
+    const screen = { x: Math.floor((r.left + r.right) / 2), y: Math.floor((r.top + r.bottom) / 2) };
+    const img = { x: screen.x - meta.window_rect.left, y: screen.y - meta.window_rect.top };
+    const scored = __score({ parsed: { ok: true, status: 'point', point: img }, tree, expected: tabB.selector, meta });
+    assert.equal(scored.classification, 'wrong_element');
+    assert.equal(scored.element.control_type, 'TabItem');
+  });
+  it('B: malformed replies that carry a point are recovered and flagged, not hidden as parse_error', () => {
+    const size = { width: 1402, height: 1078 };
+    for (const raw of ['{"x": 914, 20}', '{"x": [247, 727], "y": [727}', '{"x": "89", "y": "727"}', '{"x_1": 500, "y_1": 400}']) {
+      const p = parseGenericJsonOutput(raw, size, undefined, { coordMode: 'norm1000' });
+      assert.equal(p.ok, true, raw);
+      assert.equal(p.recovered, true, raw);
+    }
+    const p = parseGenericJsonOutput('{"x_1": 500, "y_1": 400}', size, undefined, { coordMode: 'norm1000' });
+    assert.deepEqual(p.point, { x: 701, y: 431 }, 'digits inside key names are not read as coordinates');
+    assert.equal(parseGenericJsonOutput('I cannot see it.', size, undefined, { coordMode: 'norm1000' }).status, 'parse_error');
+    assert.equal(parseGenericJsonOutput('{"not_found": true', size, undefined, { coordMode: 'norm1000' }).status, 'not_found');
+  });
+  it('C: Qwen is asked for 0-1000 coordinates and parsed as norm1000; Claude keeps pixels', () => {
+    const table = buildGrounderTable(loadGroundersConfig());
+    assert.equal(table.qwen.prompt_style, 'generic-norm1000');
+    assert.match(buildGrounderPrompt('generic-norm1000', 'the 0 key', { width: 10, height: 10 }), /0-1000/);
+    assert.equal(table.claude.prompt_style, 'generic');
+    assert.equal(table.claude.coord_mode, 'pixels');
   });
 });
