@@ -421,7 +421,14 @@ export function scoreResponse({ parsed, tree, expected, meta }) {
   const expectedEl = Array.isArray(expected) && expected.length > 0
     ? elements.find((el) => el && selectorsEqual(el.selector, expected))
     : null;
-  const insideExpected = Boolean(expectedEl?.bounding_rect) && rectContainsPoint(expectedEl.bounding_rect, screenPoint);
+  // Same window scope: every Window step in the hit element's path must also be in expected's path
+  // at the same position, so content of another window (e.g. a modal dialog laid over the editor)
+  // is never promoted to a hit (review r3 finding 1).
+  const sameWindowScope = Array.isArray(hitElement.selector) && Array.isArray(expected) &&
+    hitElement.selector.every((step, i) => normalizeControlType(step?.control_type) !== 'Window' ||
+      (i < expected.length && selectorsEqual([step], [expected[i]])));
+  const insideExpected = sameWindowScope && Boolean(expectedEl?.bounding_rect) &&
+    rectContainsPoint(expectedEl.bounding_rect, screenPoint);
   const isDescendant = Array.isArray(expected) && expected.length > 0 &&
     Array.isArray(hitElement.selector) && hitElement.selector.length > expected.length &&
     selectorsEqual(hitElement.selector.slice(0, expected.length), expected);

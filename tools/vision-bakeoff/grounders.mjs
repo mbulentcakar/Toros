@@ -218,7 +218,13 @@ export function parseGenericJsonOutput(rawText, sizeOrWidth, maybeHeight, opts =
     if (/"?not_found"?\s*:\s*true/i.test(text) && !/\d/.test(text.replace(/"[A-Za-z_][A-Za-z0-9_]*"\s*:/g, ''))) {
       return { ok: true, status: 'not_found', not_found: true, point: null, recovered: true };
     }
-    const numbers = (text.replace(/"[A-Za-z_][A-Za-z0-9_]*"\s*:/g, ' ').match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+    // Prefer the LAST brace-delimited object that carries ≥ 2 numbers, so an echoed prompt
+    // ("0-1000 ...") before the answer is never read as the point (review r3 finding 3).
+    const stripKeys = (s) => s.replace(/"[A-Za-z_][A-Za-z0-9_]*"\s*:/g, ' ');
+    const numsIn = (s) => (stripKeys(s).match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+    const blocks = text.match(/\{[^{}]*(?:\}|$)/g) ?? [];
+    const lastBlock = [...blocks].reverse().find((b) => numsIn(b).length >= 2);
+    const numbers = lastBlock ? numsIn(lastBlock) : numsIn(text);
     if (numbers.length < 2) {
       return { ok: false, status: 'parse_error', error: 'Response is not valid JSON and carries no coordinate pair' };
     }

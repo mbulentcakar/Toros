@@ -37,11 +37,13 @@ instance unless told to.
 | Grounder | App | **wrong_element** | hit | harmless_miss | not_found | parse_error | p50 / p95 ms | $ / 100 calls |
 |---|---|---|---|---|---|---|---|---|
 | claude | calculator | **0 / 50 (0%)** | 100% | 0% | 0% | 0% | 700 / 1348 | 0.45 |
-| claude | notepad | **0 / 50 (0%)** | 98% | 2% | 0% | 0% | 888 / 2125 | 0.56 |
+| claude | notepad | **0 / 50 (0%)** | 88% | 12% | 0% | 0% | 888 / 2125 | 0.56 |
 | qwen | calculator | **0 / 50 (0%)** | 100% | 0% | 0% | 0% | 788 / 2752 | 0.02 |
-| qwen | notepad | **0 / 50 (0%)** | 86% | 0% | 14% | 0% | 667 / 1148 | 0.03 |
+| qwen | notepad | **0 / 50 (0%)** | 84% | 2% | 14% | 0% | 667 / 1148 | 0.03 |
 | ui-tars-1.5-7b | calculator | **2 / 50 (4%)** | 96% | 0% | 0% | 0% | 729 / 1381 | 0.02 |
-| ui-tars-1.5-7b | notepad | **2 / 50 (4%)** | 90% | 2% | 0% | 4% | 718 / 1142 | 0.03 |
+| ui-tars-1.5-7b | notepad | **2 / 50 (4%)** | 82% | 10% | 0% | 4% | 718 / 1142 | 0.03 |
+
+**Notepad hit rates are depressed by the fixture.** A modal "path not found" dialog covers the middle of the editor. Five editor targets aim there, and a real click would land on the dialog, so those count as misses for every model. A clean recapture without the dialog is needed before Notepad hit rates mean anything.
 
 **Qwen's reply format.** About a third of Qwen's replies (31 of 100) were malformed JSON that still
 carried a clear point: quoted numbers, a missing bracket, or a pair packed into `"x"`. The bakeoff
@@ -67,8 +69,8 @@ parser would need the same recovery, or a stricter prompt.
 
 | Grounder | Meets both? | Note |
 |---|---|---|
-| Claude Sonnet 5.5 | **yes** (0/100 wrong, 98–100% hit) | About 20× the others' cost; external provider only. |
-| Qwen3-VL-235B | **yes** (0/100 wrong, 86–100% hit) | The format is unreliable (31% recovered). It has open weights: the 235B model is too large for JanBot, so test the 8B/30B variants locally. |
+| Claude Sonnet 5.5 | **yes** on Calculator; Notepad at 88% (0/100 wrong in total) | About 20× the others' cost; external provider only. |
+| Qwen3-VL-235B | **yes** on Calculator; Notepad at 84%, below 85% because of the fixture (0/100 wrong in total) | The format is unreliable (31% recovered). It has open weights: the 235B model is too large for JanBot, so test the 8B/30B variants locally. |
 | UI-TARS-1.5-7B | **no**: 4/100 wrong | Hit rate is good, but the errors are look-alikes, the dangerous kind. |
 
 **Indicative conclusion:**

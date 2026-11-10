@@ -1307,3 +1307,40 @@ describe('10. Review r2: actionable-first hit-testing, malformed-reply recovery,
     assert.equal(table.claude.coord_mode, 'pixels');
   });
 });
+
+// Review round 3 (Grok) findings 1-3.
+describe('11. Review r3: window scope, last-pair recovery, sanitized fixture', () => {
+  const tree = parseJsonNoBom(readFileSync(path.join(BAKEOFF_DIR, 'fixtures', 'notepad', 'tree.json'), 'utf8'));
+  const meta = parseJsonNoBom(readFileSync(path.join(BAKEOFF_DIR, 'fixtures', 'notepad', 'meta.json'), 'utf8'));
+  const targets = parseJsonNoBom(readFileSync(path.join(BAKEOFF_DIR, 'targets', 'notepad.json'), 'utf8'));
+  const toImg = (sx, sy) => ({ x: sx - meta.window_rect.left, y: sy - meta.window_rect.top });
+  const center = (el) => ({ x: Math.floor((el.bounding_rect.left + el.bounding_rect.right) / 2), y: Math.floor((el.bounding_rect.top + el.bounding_rect.bottom) / 2) });
+
+  it('1: text of a modal dialog over the editor is not a hit for the editor target', () => {
+    const editor = targets.find((t) => t.id === 'notepad-05');
+    const msg = tree.find((e) => e.control_type === 'Text' && /cannot find the path/i.test(String(e.name)));
+    assert.ok(editor && msg, 'fixture has the editor target and the dialog message');
+    const c = center(msg);
+    const scored = __score({ parsed: { ok: true, status: 'point', point: toImg(c.x, c.y) }, tree, expected: editor.expected, meta });
+    assert.equal(scored.classification, 'harmless_miss');
+  });
+  it('1: the dialog OK button is wrong_element for the editor target', () => {
+    const editor = targets.find((t) => t.id === 'notepad-05');
+    const ok = tree.find((e) => e.control_type === 'Button' && e.name === 'OK');
+    assert.ok(ok, 'fixture has the OK button');
+    const c = center(ok);
+    const scored = __score({ parsed: { ok: true, status: 'point', point: toImg(c.x, c.y) }, tree, expected: editor.expected, meta });
+    assert.equal(scored.classification, 'wrong_element');
+  });
+  it('3: recovery uses the last coordinate object, not an echoed "0-1000"', () => {
+    const p = parseGenericJsonOutput('Coordinates are 0-1000. {"x": 860, "y": 20', { width: 1402, height: 1078 }, undefined, { coordMode: 'norm1000' });
+    assert.equal(p.ok, true);
+    assert.deepEqual(p.point, { x: 1206, y: 22 });
+  });
+  it('2: the committed Notepad fixture and targets contain no real tab names', () => {
+    for (const f of ['fixtures/notepad/tree.json', 'fixtures/notepad/meta.json', 'targets/notepad.json']) {
+      const text = readFileSync(path.join(BAKEOFF_DIR, f), 'utf8');
+      assert.doesNotMatch(text, /note-installed|review-codex/i, f);
+    }
+  });
+});
