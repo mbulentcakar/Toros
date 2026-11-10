@@ -1338,9 +1338,12 @@ describe('11. Review r3: window scope, last-pair recovery, sanitized fixture', (
     assert.deepEqual(p.point, { x: 1206, y: 22 });
   });
   it('2: the committed Notepad fixture and targets contain no real tab names', () => {
-    for (const f of ['fixtures/notepad/tree.json', 'fixtures/notepad/meta.json', 'targets/notepad.json']) {
+    for (const f of ['fixtures/notepad/tree.json', 'fixtures/notepad/meta.json', 'targets/notepad.json', 'IMPLEMENTER-NOTES.md', 'README.md']) {
       const text = readFileSync(path.join(BAKEOFF_DIR, f), 'utf8');
-      assert.doesNotMatch(text, /note-installed|review-codex/i, f);
+      // The operator's real tab names, base64-encoded so the repository never carries them in clear.
+      for (const b64 of ['bm90ZS1pbnN0YWxsZWQ=', 'cmV2aWV3LWNvZGV4']) {
+        assert.ok(!text.toLowerCase().includes(Buffer.from(b64, 'base64').toString('utf8')), f);
+      }
     }
   });
 });
