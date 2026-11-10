@@ -1,0 +1,598 @@
+[
+  {
+    "id": "calc-01",
+    "description": "the 0 key",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Button", "automation_id": "num0Button", "name": "Zero", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-02",
+    "description": "the 1 key",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Button", "automation_id": "num1Button", "name": "One", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-03",
+    "description": "the 2 key",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Button", "automation_id": "num2Button", "name": "Two", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-04",
+    "description": "the 3 key",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Button", "automation_id": "num3Button", "name": "Three", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-05",
+    "description": "the 4 key",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Button", "automation_id": "num4Button", "name": "Four", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-06",
+    "description": "the 5 key",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Button", "automation_id": "num5Button", "name": "Five", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-07",
+    "description": "the 6 key",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Button", "automation_id": "num6Button", "name": "Six", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-08",
+    "description": "the 7 key",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Button", "automation_id": "num7Button", "name": "Seven", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-09",
+    "description": "the 8 key",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Button", "automation_id": "num8Button", "name": "Eight", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-10",
+    "description": "the 9 key",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Button", "automation_id": "num9Button", "name": "Nine", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-11",
+    "description": "the decimal point button",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Button", "automation_id": "decimalSeparatorButton", "name": "Decimal separator", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-12",
+    "description": "the plus/minus (+/-) sign toggle button",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Button", "automation_id": "negateButton", "name": "Positive negative", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-13",
+    "description": "the equals button",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
+      { "control_type": "Button", "automation_id": "equalButton", "name": "Equals", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-14",
+    "description": "the plus (+) button",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
+      { "control_type": "Button", "automation_id": "plusButton", "name": "Plus", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-15",
+    "description": "the minus (-) button",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
+      { "control_type": "Button", "automation_id": "minusButton", "name": "Minus", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-16",
+    "description": "the multiply (×) button",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
+      { "control_type": "Button", "automation_id": "multiplyButton", "name": "Multiply by", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-17",
+    "description": "the divide (÷) button",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
+      { "control_type": "Button", "automation_id": "divideButton", "name": "Divide by", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-18",
+    "description": "the percent (%) button",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "DisplayControls", "name": "Display controls", "index": 0 },
+      { "control_type": "Button", "automation_id": "percentButton", "name": "Percent", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-19",
+    "description": "the square root (√x) button",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "StandardFunctions", "name": "Standard functions", "index": 0 },
+      { "control_type": "Button", "automation_id": "squareRootButton", "name": "Square root", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-20",
+    "description": "the x squared (x²) button",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "StandardFunctions", "name": "Standard functions", "index": 0 },
+      { "control_type": "Button", "automation_id": "xpower2Button", "name": "Square", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-21",
+    "description": "the 1/x reciprocal button",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "StandardFunctions", "name": "Standard functions", "index": 0 },
+      { "control_type": "Button", "automation_id": "invertButton", "name": "Reciprocal", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-22",
+    "description": "the CE (Clear Entry) button",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "DisplayControls", "name": "Display controls", "index": 0 },
+      { "control_type": "Button", "automation_id": "clearEntryButton", "name": "Clear entry", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-23",
+    "description": "the C (Clear) button",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "DisplayControls", "name": "Display controls", "index": 0 },
+      { "control_type": "Button", "automation_id": "clearButton", "name": "Clear", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-24",
+    "description": "the Backspace key",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "DisplayControls", "name": "Display controls", "index": 0 },
+      { "control_type": "Button", "automation_id": "backSpaceButton", "name": "Backspace", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-25",
+    "description": "the MS (Memory Store) button",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "MemoryPanel", "name": "Memory controls", "index": 0 },
+      { "control_type": "Button", "automation_id": "memButton", "name": "Memory store", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-26",
+    "description": "the M+ (Memory Add) button",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "MemoryPanel", "name": "Memory controls", "index": 0 },
+      { "control_type": "Button", "automation_id": "MemPlus", "name": "Memory add", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-27",
+    "description": "the M- (Memory Subtract) button",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "MemoryPanel", "name": "Memory controls", "index": 0 },
+      { "control_type": "Button", "automation_id": "MemMinus", "name": "Memory subtract", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-28",
+    "description": "the navigation menu button in the top-left corner",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Button", "automation_id": "TogglePaneButton", "name": "Open Navigation", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-29",
+    "description": "the Keep on top pin button next to Standard",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Button", "automation_id": "NormalAlwaysOnTopButton", "name": "Keep on top", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-30",
+    "description": "the History button in the upper-right area",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "DockPanel", "name": "History and Memory lists", "index": 0 },
+      { "control_type": "Tab", "automation_id": "DockPivot", "name": null, "index": 0 },
+      { "control_type": "TabItem", "automation_id": "HistoryLabel", "name": "There\u2019s no history yet. History", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-31",
+    "description": "the Minimize window button",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": "TitleBar", "name": "Calculator", "index": 0 },
+      { "control_type": "Button", "automation_id": "Minimize", "name": "Minimize Calculator", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-32",
+    "description": "the Maximize window button",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": "TitleBar", "name": "Calculator", "index": 0 },
+      { "control_type": "Button", "automation_id": "Maximize", "name": "Maximize Calculator", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-33",
+    "description": "the Close window button in the top-right corner",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": "TitleBar", "name": "Calculator", "index": 0 },
+      { "control_type": "Button", "automation_id": "Close", "name": "Close Calculator", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-34",
+    "description": "the button that flips the sign of the current number between positive and negative",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Button", "automation_id": "negateButton", "name": "Positive negative", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-35",
+    "description": "the multiplicative inverse button (one over x)",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "StandardFunctions", "name": "Standard functions", "index": 0 },
+      { "control_type": "Button", "automation_id": "invertButton", "name": "Reciprocal", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-36",
+    "description": "the button that deletes only the last typed digit",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "DisplayControls", "name": "Display controls", "index": 0 },
+      { "control_type": "Button", "automation_id": "backSpaceButton", "name": "Backspace", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-37",
+    "description": "the button that clears only the current entry without resetting the whole calculation",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "DisplayControls", "name": "Display controls", "index": 0 },
+      { "control_type": "Button", "automation_id": "clearEntryButton", "name": "Clear entry", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-38",
+    "description": "the button that stores the displayed number into memory without adding to existing memory",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "MemoryPanel", "name": "Memory controls", "index": 0 },
+      { "control_type": "Button", "automation_id": "memButton", "name": "Memory store", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-39",
+    "description": "the button that adds the current number to the value stored in memory",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "MemoryPanel", "name": "Memory controls", "index": 0 },
+      { "control_type": "Button", "automation_id": "MemPlus", "name": "Memory add", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-40",
+    "description": "the button that subtracts the current number from the value stored in memory",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "MemoryPanel", "name": "Memory controls", "index": 0 },
+      { "control_type": "Button", "automation_id": "MemMinus", "name": "Memory subtract", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-41",
+    "description": "the addition key",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
+      { "control_type": "Button", "automation_id": "plusButton", "name": "Plus", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-42",
+    "description": "the subtraction key",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
+      { "control_type": "Button", "automation_id": "minusButton", "name": "Minus", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-43",
+    "description": "the multiplication key",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
+      { "control_type": "Button", "automation_id": "multiplyButton", "name": "Multiply by", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-44",
+    "description": "the division key",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
+      { "control_type": "Button", "automation_id": "divideButton", "name": "Divide by", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-45",
+    "description": "the digit five button in the center of the number pad",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Button", "automation_id": "num5Button", "name": "Five", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-46",
+    "description": "the digit zero button at the bottom of the number pad",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Button", "automation_id": "num0Button", "name": "Zero", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-47",
+    "description": "the dot key for entering a decimal fraction",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Button", "automation_id": "decimalSeparatorButton", "name": "Decimal separator", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-48",
+    "description": "the button that squares the current number",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "StandardFunctions", "name": "Standard functions", "index": 0 },
+      { "control_type": "Button", "automation_id": "xpower2Button", "name": "Square", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-49",
+    "description": "the radical button for computing a square root",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "StandardFunctions", "name": "Standard functions", "index": 0 },
+      { "control_type": "Button", "automation_id": "squareRootButton", "name": "Square root", "index": 0 }
+    ]
+  },
+  {
+    "id": "calc-50",
+    "description": "the hamburger menu button to switch calculator modes",
+    "expected": [
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Button", "automation_id": "TogglePaneButton", "name": "Open Navigation", "index": 0 }
+    ]
+  }
+]

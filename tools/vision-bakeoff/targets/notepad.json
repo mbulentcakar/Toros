@@ -1,0 +1,535 @@
+[
+  {
+    "id": "notepad-01",
+    "description": "the File menu item",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "File", "automation_id": "File", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-02",
+    "description": "the Edit menu item",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "Edit", "automation_id": "Edit", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-03",
+    "description": "the View menu item",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "View", "automation_id": "View", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-04",
+    "description": "the Settings gear icon",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Button", "name": "Settings", "automation_id": "SettingsButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-05",
+    "description": "the main text editing area",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 1 },
+      { "control_type": "Document", "name": "Text editor", "automation_id": null, "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-06",
+    "description": "the What's new button next to the Settings gear",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Button", "name": "What's new", "automation_id": "FREButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-07",
+    "description": "the Add new tab (+) button in the tab bar",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 2 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Tab", "name": null, "automation_id": "Tabs", "index": 0 },
+      { "control_type": "Button", "name": "Add New Tab", "automation_id": "AddButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-08",
+    "description": "the Close Tab button on the active tab",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 2 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Tab", "name": null, "automation_id": "Tabs", "index": 0 },
+      { "control_type": "List", "name": null, "automation_id": "TabListView", "index": 0 },
+      { "control_type": "TabItem", "name": "notes-b.txt. Unmodified.", "automation_id": null, "index": 0 },
+      { "control_type": "Button", "name": "Close Tab", "automation_id": "CloseButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-09",
+    "description": "the Minimize window button",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "TitleBar", "name": "notes-b.txt - Notepad", "automation_id": "TitleBar", "index": 0 },
+      { "control_type": "Button", "name": "Minimize", "automation_id": "Minimize", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-10",
+    "description": "the Maximize window button",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "TitleBar", "name": "notes-b.txt - Notepad", "automation_id": "TitleBar", "index": 0 },
+      { "control_type": "Button", "name": "Maximize", "automation_id": "Maximize", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-11",
+    "description": "the Close window button in the top-right corner",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "TitleBar", "name": "notes-b.txt - Notepad", "automation_id": "TitleBar", "index": 0 },
+      { "control_type": "Button", "name": "Close", "automation_id": "Close", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-12",
+    "description": "the File menu button in the menu bar",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "File", "automation_id": "File", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-13",
+    "description": "the Edit menu button in the menu bar",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "Edit", "automation_id": "Edit", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-14",
+    "description": "the View menu button in the menu bar",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "View", "automation_id": "View", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-15",
+    "description": "the Settings button on the right side of the menu bar",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Button", "name": "Settings", "automation_id": "SettingsButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-16",
+    "description": "the blank document text area",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 1 },
+      { "control_type": "Document", "name": "Text editor", "automation_id": null, "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-17",
+    "description": "the plus icon next to the tab to open a new tab",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 2 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Tab", "name": null, "automation_id": "Tabs", "index": 0 },
+      { "control_type": "Button", "name": "Add New Tab", "automation_id": "AddButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-18",
+    "description": "the small X inside the active tab that closes just that tab",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 2 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Tab", "name": null, "automation_id": "Tabs", "index": 0 },
+      { "control_type": "List", "name": null, "automation_id": "TabListView", "index": 0 },
+      { "control_type": "TabItem", "name": "notes-b.txt. Unmodified.", "automation_id": null, "index": 0 },
+      { "control_type": "Button", "name": "Close Tab", "automation_id": "CloseButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-19",
+    "description": "the cogwheel icon for application preferences",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Button", "name": "Settings", "automation_id": "SettingsButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-20",
+    "description": "the menu item you click to save or open a file",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "File", "automation_id": "File", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-21",
+    "description": "the menu item you click to copy, paste, or find text",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "Edit", "automation_id": "Edit", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-22",
+    "description": "the menu item you click to change zoom or word wrap",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "View", "automation_id": "View", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-23",
+    "description": "the button that creates a second document tab",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 2 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Tab", "name": null, "automation_id": "Tabs", "index": 0 },
+      { "control_type": "Button", "name": "Add New Tab", "automation_id": "AddButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-24",
+    "description": "the window-level close X button at the far top-right (not the tab close button)",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "TitleBar", "name": "notes-b.txt - Notepad", "automation_id": "TitleBar", "index": 0 },
+      { "control_type": "Button", "name": "Close", "automation_id": "Close", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-25",
+    "description": "the square maximize icon in the window caption bar",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "TitleBar", "name": "notes-b.txt - Notepad", "automation_id": "TitleBar", "index": 0 },
+      { "control_type": "Button", "name": "Maximize", "automation_id": "Maximize", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-26",
+    "description": "the horizontal dash icon that minimizes the window",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "TitleBar", "name": "notes-b.txt - Notepad", "automation_id": "TitleBar", "index": 0 },
+      { "control_type": "Button", "name": "Minimize", "automation_id": "Minimize", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-27",
+    "description": "the button that opens font and theme settings",
+    "hard": true,
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Button", "name": "Settings", "automation_id": "SettingsButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-28",
+    "description": "the first menu item on the left (File)",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "File", "automation_id": "File", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-29",
+    "description": "the middle menu item (Edit)",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "Edit", "automation_id": "Edit", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-30",
+    "description": "the third menu item (View)",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "View", "automation_id": "View", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-31",
+    "description": "the OK button in the Notepad dialog",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Window", "name": "Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Button", "name": "OK", "automation_id": "CloseButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-32",
+    "description": "the new tab button",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 2 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Tab", "name": null, "automation_id": "Tabs", "index": 0 },
+      { "control_type": "Button", "name": "Add New Tab", "automation_id": "AddButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-33",
+    "description": "the text editor canvas where notes are typed",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 1 },
+      { "control_type": "Document", "name": "Text editor", "automation_id": null, "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-34",
+    "description": "the File menu",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "File", "automation_id": "File", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-35",
+    "description": "the Edit menu",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "Edit", "automation_id": "Edit", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-36",
+    "description": "the View menu",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "View", "automation_id": "View", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-37",
+    "description": "the Settings icon in the top-right below the title bar",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Button", "name": "Settings", "automation_id": "SettingsButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-38",
+    "description": "the document editing pane",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 1 },
+      { "control_type": "Document", "name": "Text editor", "automation_id": null, "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-39",
+    "description": "the System menu icon in the top-left corner of the title bar",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "TitleBar", "name": "notes-b.txt - Notepad", "automation_id": "TitleBar", "index": 0 },
+      { "control_type": "MenuBar", "name": "System Menu Bar", "automation_id": "SystemMenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "System", "automation_id": "Item 1", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-40",
+    "description": "the Add new tab button",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 2 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Tab", "name": null, "automation_id": "Tabs", "index": 0 },
+      { "control_type": "Button", "name": "Add New Tab", "automation_id": "AddButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-41",
+    "description": "the Close Tab button",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 2 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Tab", "name": null, "automation_id": "Tabs", "index": 0 },
+      { "control_type": "List", "name": null, "automation_id": "TabListView", "index": 0 },
+      { "control_type": "TabItem", "name": "notes-b.txt. Unmodified.", "automation_id": null, "index": 0 },
+      { "control_type": "Button", "name": "Close Tab", "automation_id": "CloseButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-42",
+    "description": "the Minimize button in the title bar",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "TitleBar", "name": "notes-b.txt - Notepad", "automation_id": "TitleBar", "index": 0 },
+      { "control_type": "Button", "name": "Minimize", "automation_id": "Minimize", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-43",
+    "description": "the Maximize button in the title bar",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "TitleBar", "name": "notes-b.txt - Notepad", "automation_id": "TitleBar", "index": 0 },
+      { "control_type": "Button", "name": "Maximize", "automation_id": "Maximize", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-44",
+    "description": "the Close button in the title bar",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "TitleBar", "name": "notes-b.txt - Notepad", "automation_id": "TitleBar", "index": 0 },
+      { "control_type": "Button", "name": "Close", "automation_id": "Close", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-45",
+    "description": "the File dropdown on the menu bar",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "File", "automation_id": "File", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-46",
+    "description": "the Edit dropdown on the menu bar",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "Edit", "automation_id": "Edit", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-47",
+    "description": "the View dropdown on the menu bar",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "MenuBar", "name": null, "automation_id": "MenuBar", "index": 0 },
+      { "control_type": "MenuItem", "name": "View", "automation_id": "View", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-48",
+    "description": "the Settings gear button",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 3 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Button", "name": "Settings", "automation_id": "SettingsButton", "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-49",
+    "description": "the text input area of Notepad",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 1 },
+      { "control_type": "Document", "name": "Text editor", "automation_id": null, "index": 0 }
+    ]
+  },
+  {
+    "id": "notepad-50",
+    "description": "the active tab in the top tab bar",
+    "expected": [
+      { "control_type": "Window", "name": "notes-b.txt - Notepad", "automation_id": null, "index": 0 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 2 },
+      { "control_type": "Pane", "name": null, "automation_id": null, "index": 0 },
+      { "control_type": "Tab", "name": null, "automation_id": "Tabs", "index": 0 },
+      { "control_type": "List", "name": null, "automation_id": "TabListView", "index": 0 },
+      { "control_type": "TabItem", "name": "notes-b.txt. Unmodified.", "automation_id": null, "index": 0 }
+    ]
+  }
+]

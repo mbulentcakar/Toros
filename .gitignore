@@ -36,3 +36,8 @@ build/
 .idea/
 .vscode/
 
+# Vision grounding bakeoff (AU0): raw window captures and local run outputs
+tools/vision-bakeoff/results/
+tools/vision-bakeoff/fixtures/*/window.png
+
+

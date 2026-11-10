@@ -1,0 +1,13 @@
+{
+  "openrouter_endpoint": "https://openrouter.ai/api/v1",
+  "models": {
+    "claude": "anthropic/claude-sonnet-5.5",
+    "qwen": "qwen/qwen3-vl-235b-a22b-instruct"
+  },
+  "local": {
+    "endpoint": "http://127.0.0.1:8080/v1",
+    "model": "ui-tars-1.5-7b",
+    "key_env": "",
+    "prompt_style": "ui-tars"
+  }
+}
