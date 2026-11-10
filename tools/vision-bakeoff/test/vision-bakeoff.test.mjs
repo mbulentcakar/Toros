@@ -5,6 +5,7 @@
  * access and no Windows desktop session, with zero skipped tests.
  */
 import assert from 'node:assert/strict';
+import { findDeepestElementAtPoint as __findAt, scoreResponse as __score } from '../score.mjs';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1238,5 +1239,36 @@ describe('8. Run harness: CLI flags, resume accounting, deadline/transport_error
     } finally {
       rmSync(tmpRoot, { recursive: true, force: true });
     }
+  });
+});
+
+// Orchestrator round 2b: hit-testing mirrors UIA ElementFromPoint on non-nested trees.
+describe('9. Hit-test realism on overlapping, non-nested UIA trees', () => {
+  const win = { control_type: 'Window', automation_id: null, name: 'App', index: 0 };
+  const meta = { window_rect: { left: 0, top: 0, right: 1000, bottom: 800 }, image_size: { width: 1000, height: 800 }, dpi: 96 };
+  const tree = [
+    { control_type: 'Window', automation_id: null, name: 'App', enabled: true, is_offscreen: false, bounding_rect: { left: 0, top: 0, right: 1000, bottom: 800 }, selector: [win] },
+    // a full-window overlay in another branch, deeper by selector length
+    { control_type: 'Window', automation_id: null, name: '', enabled: true, is_offscreen: false, bounding_rect: { left: 0, top: 0, right: 1000, bottom: 800 }, selector: [win, { control_type: 'Pane', automation_id: 'host', name: null, index: 0 }, { control_type: 'Window', automation_id: null, name: '', index: 0 }] },
+    { control_type: 'Button', automation_id: 'Close', name: 'Close', enabled: true, is_offscreen: false, bounding_rect: { left: 950, top: 0, right: 1000, bottom: 40 }, selector: [win, { control_type: 'Button', automation_id: 'Close', name: 'Close', index: 0 }] },
+    { control_type: 'Button', automation_id: 'Max', name: 'Maximize', enabled: true, is_offscreen: false, bounding_rect: { left: 900, top: 0, right: 950, bottom: 40 }, selector: [win, { control_type: 'Button', automation_id: 'Max', name: 'Maximize', index: 0 }] },
+    { control_type: 'Document', automation_id: 'Doc', name: 'Text', enabled: true, is_offscreen: false, bounding_rect: { left: 0, top: 100, right: 1000, bottom: 800 }, selector: [win, { control_type: 'Document', automation_id: 'Doc', name: 'Text', index: 0 }] },
+    // overlay pane over the document, NOT its child
+    { control_type: 'Pane', automation_id: 'Scroll', name: null, enabled: true, is_offscreen: false, bounding_rect: { left: 0, top: 120, right: 980, bottom: 780 }, selector: [win, { control_type: 'Pane', automation_id: 'Scroll', name: null, index: 0 }] },
+  ];
+  const sel = (id) => tree.find((e) => e.automation_id === id).selector;
+  const parsed = (x, y) => ({ ok: true, status: 'point', point: { x, y } });
+
+  it('picks the smallest containing element, not the deepest overlay', () => {
+    assert.equal(__findAt(tree, { x: 975, y: 20 }).automation_id, 'Close');
+  });
+  it('a caption-button click is a hit even under a deeper full-window overlay', () => {
+    assert.equal(__score({ parsed: parsed(975, 20), tree, expected: sel('Close'), meta }).classification, 'hit');
+  });
+  it('a click on a non-actionable overlay inside the target rect is a hit', () => {
+    assert.equal(__score({ parsed: parsed(500, 500), tree, expected: sel('Doc'), meta }).classification, 'hit');
+  });
+  it('an adjacent actionable control is still wrong_element', () => {
+    assert.equal(__score({ parsed: parsed(925, 20), tree, expected: sel('Close'), meta }).classification, 'wrong_element');
   });
 });

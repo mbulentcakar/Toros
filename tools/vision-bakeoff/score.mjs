@@ -139,12 +139,13 @@ export function rectContainsPoint(rect, point) {
 }
 
 /**
- * Find the deepest on-screen element in `tree` whose `bounding_rect` contains
- * `screenPoint`. Offscreen elements (`is_offscreen: true`) are ignored.
+ * Find the on-screen element in `tree` that a click at `screenPoint` would land on.
+ * Offscreen elements (`is_offscreen: true`) are ignored.
  *
- * Depth is determined by `element.depth ?? element.selector.length`. When two
- * elements at the same depth both contain the point, the smaller bounding box
- * area wins; ties break in favor of the later element in tree order.
+ * Mirrors UIA `ElementFromPoint`: the SMALLEST containing element wins, because UIA trees are not
+ * strictly nested (a full-window `Window`/`Pane` in another branch can be deeper than a caption
+ * button it overlaps). Ties on area go to the deeper element, then to later tree order.
+ * (Selector depth alone mis-attributed Notepad's caption buttons to an overlay `Window`.)
  */
 export function findDeepestElementAtPoint(tree, screenPoint) {
   const elements = Array.isArray(tree)
@@ -170,8 +171,8 @@ export function findDeepestElementAtPoint(tree, screenPoint) {
     const area = r.width * r.height;
 
     if (
-      depth > bestDepth ||
-      (depth === bestDepth && area <= bestArea)
+      area < bestArea ||
+      (area === bestArea && depth >= bestDepth)
     ) {
       bestElement = el;
       bestDepth = depth;
@@ -397,6 +398,31 @@ export function scoreResponse({ parsed, tree, expected, meta }) {
   }
 
   if (matchesExpectedSelector(hitElement, expected, elements)) {
+    return {
+      classification: 'hit',
+      screen_point: screenPoint,
+      element: {
+        control_type: hitElement.control_type,
+        automation_id: hitElement.automation_id ?? null,
+        name: hitElement.name ?? null,
+        selector: hitElement.selector,
+      },
+    };
+  }
+
+  // A click on a NON-actionable part of the target (e.g. the scroll viewer inside a Document, a text
+  // run inside a button) activates the target itself, so it is a hit. An actionable descendant is a
+  // different control and falls through to wrong_element below.
+  // Same for a non-actionable element that merely overlaps the target inside the target's own rect
+  // (UIA trees are not strictly nested: Notepad's ContentScrollViewer overlays its Document).
+  const expectedEl = Array.isArray(expected) && expected.length > 0
+    ? elements.find((el) => el && selectorsEqual(el.selector, expected))
+    : null;
+  const insideExpected = Boolean(expectedEl?.bounding_rect) && rectContainsPoint(expectedEl.bounding_rect, screenPoint);
+  const isDescendant = Array.isArray(expected) && expected.length > 0 &&
+    Array.isArray(hitElement.selector) && hitElement.selector.length > expected.length &&
+    selectorsEqual(hitElement.selector.slice(0, expected.length), expected);
+  if ((isDescendant || insideExpected) && !isActionableControlType(hitElement.control_type)) {
     return {
       classification: 'hit',
       screen_point: screenPoint,
