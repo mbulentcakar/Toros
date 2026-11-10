@@ -52,23 +52,72 @@ function resolveImageSize(sizeOrWidth, maybeHeight) {
   return null;
 }
 
+/** Python-style round-half-to-even, as used by Qwen2.5-VL's `smart_resize`. */
+function roundHalfEven(value) {
+  const floor = Math.floor(value);
+  const diff = value - floor;
+  if (diff > 0.5) return floor + 1;
+  if (diff < 0.5) return floor;
+  return floor % 2 === 0 ? floor : floor + 1;
+}
+
 /**
- * Parse UI-TARS-1.5 output into pixel coordinates in the given image size.
+ * Qwen2.5-VL `smart_resize` (UI-TARS-1.5 is built on it): the image the model actually sees is
+ * rescaled so both sides are multiples of `factor` and the area lies within [minPixels, maxPixels].
+ * UI-TARS-1.5 answers in absolute pixels of THAT resized image (UI-TARS README, coordinate
+ * processing), not 0–1000 like UI-TARS v1.
+ */
+export function smartResize(width, height, { factor = 28, minPixels = 100 * 28 * 28, maxPixels = 16384 * 28 * 28 } = {}) {
+  let hBar = Math.max(factor, roundHalfEven(height / factor) * factor);
+  let wBar = Math.max(factor, roundHalfEven(width / factor) * factor);
+  if (hBar * wBar > maxPixels) {
+    const beta = Math.sqrt((height * width) / maxPixels);
+    hBar = Math.max(factor, Math.floor(height / beta / factor) * factor);
+    wBar = Math.max(factor, Math.floor(width / beta / factor) * factor);
+  } else if (hBar * wBar < minPixels) {
+    const beta = Math.sqrt(minPixels / (height * width));
+    hBar = Math.ceil((height * beta) / factor) * factor;
+    wBar = Math.ceil((width * beta) / factor) * factor;
+  }
+  return { width: wBar, height: hBar };
+}
+
+/**
+ * Map a model coordinate pair to image pixels.
+ *   - `norm1000`: 0–1000 relative (UI-TARS v1, Qwen3-VL);
+ *   - `smart_resize`: absolute pixels in the Qwen2.5-VL smart-resized image (UI-TARS-1.5);
+ *   - `pixels`: already image pixels (generic prompt answered literally).
+ * Returns null when the pair is outside the coordinate space.
+ */
+export function mapModelPoint(mx, my, imageSize, coordMode = 'pixels') {
+  if (!Number.isFinite(mx) || !Number.isFinite(my) || mx < 0 || my < 0) return null;
+  if (coordMode === 'norm1000') {
+    if (mx > 1000 || my > 1000) return null;
+    return { x: Math.round((mx / 1000) * imageSize.width), y: Math.round((my / 1000) * imageSize.height) };
+  }
+  if (coordMode === 'smart_resize') {
+    const resized = smartResize(imageSize.width, imageSize.height);
+    if (mx > resized.width || my > resized.height) return null;
+    return { x: Math.round((mx / resized.width) * imageSize.width), y: Math.round((my / resized.height) * imageSize.height) };
+  }
+  return { x: Math.round(mx), y: Math.round(my) };
+}
+
+/**
+ * Parse UI-TARS output into pixel coordinates in the given image size.
  *
  * Handles both:
  *   - `Action: click(start_box='(x,y)')` (or 4-tuple bounding box `(x1,y1,x2,y2)`)
  *   - `<point>x y</point>` (or `<point>x, y</point>`)
- * where coordinates are normalized to 0–1000.
+ * Coordinate convention per `opts.coordMode`: `norm1000` (UI-TARS v1, default for backward
+ * compatibility) or `smart_resize` (UI-TARS-1.5).
  *
  * Free text is discarded; only the scaled pixel coordinates survive.
  */
-export function parseUiTarsOutput(rawText, sizeOrWidth, maybeHeight) {
+export function parseUiTarsOutput(rawText, sizeOrWidth, maybeHeight, opts = {}) {
+  const coordMode = opts.coordMode ?? 'norm1000';
   if (typeof rawText !== 'string' || rawText.trim().length === 0) {
     return { ok: false, status: 'parse_error', error: 'Empty or non-string UI-TARS response' };
-  }
-  const imageSize = resolveImageSize(sizeOrWidth, maybeHeight);
-  if (!imageSize || imageSize.width <= 0 || imageSize.height <= 0) {
-    return { ok: false, status: 'parse_error', error: 'Valid imageSize { width, height } is required for UI-TARS scaling' };
   }
 
   let normX = null;
@@ -99,16 +148,35 @@ export function parseUiTarsOutput(rawText, sizeOrWidth, maybeHeight) {
     }
   }
 
+  // 3. Explicit UI-TARS decline: finished(content='not_found') (and only this form) when no coordinates are present
+  if (normX === null && normY === null) {
+    const hasCoordinateAttempt = /start_box\s*=|<point>/i.test(rawText);
+    const finishedNotFoundMatch = /\bfinished\s*\(\s*content\s*=\s*(['"])not_found\1\s*\)/.exec(rawText);
+    if (!hasCoordinateAttempt && finishedNotFoundMatch) {
+      return {
+        ok: true,
+        status: 'not_found',
+        not_found: true,
+        point: null,
+      };
+    }
+    return { ok: false, status: 'parse_error', error: 'No valid UI-TARS coordinates found in response' };
+  }
+
   if (normX === null || normY === null || !Number.isFinite(normX) || !Number.isFinite(normY)) {
     return { ok: false, status: 'parse_error', error: 'No valid UI-TARS coordinates found in response' };
   }
 
-  if (normX < 0 || normX > 1000 || normY < 0 || normY > 1000) {
-    return { ok: false, status: 'parse_error', error: `UI-TARS normalized coordinates out of 0–1000 range: (${normX}, ${normY})` };
+  const imageSize = resolveImageSize(sizeOrWidth, maybeHeight);
+  if (!imageSize || imageSize.width <= 0 || imageSize.height <= 0) {
+    return { ok: false, status: 'parse_error', error: 'Valid imageSize { width, height } is required for UI-TARS scaling' };
   }
 
-  const x = Math.round((normX / 1000) * imageSize.width);
-  const y = Math.round((normY / 1000) * imageSize.height);
+  const mapped = mapModelPoint(normX, normY, imageSize, coordMode);
+  if (!mapped) {
+    return { ok: false, status: 'parse_error', error: `UI-TARS coordinates out of range for ${coordMode}: (${normX}, ${normY})` };
+  }
+  const { x, y } = mapped;
 
   return {
     ok: true,
@@ -121,9 +189,17 @@ export function parseUiTarsOutput(rawText, sizeOrWidth, maybeHeight) {
 
 /**
  * Parse generic strict JSON output:
- *   `{"x": <int>, "y": <int>}` in image pixels, or `{"not_found": true}`.
+ *   `{"x": <int>, "y": <int>}`, or `{"not_found": true}`.
+ * Also accepts the pair shapes vision models actually emit: `{"point_2d": [x, y]}`,
+ * `{"x": [x, y]}` (pair packed into "x"), and a bare `[x, y]`.
+ * Coordinates are interpreted per `opts.coordMode` (`pixels` by default; `norm1000` for Qwen3-VL).
  */
-export function parseGenericJsonOutput(rawText) {
+export function parseGenericJsonOutput(rawText, sizeOrWidth, maybeHeight, opts = {}) {
+  const coordMode = opts.coordMode ?? 'pixels';
+  const imageSize = resolveImageSize(sizeOrWidth, maybeHeight);
+  if (coordMode !== 'pixels' && !imageSize) {
+    return { ok: false, status: 'parse_error', error: `Valid imageSize { width, height } is required for ${coordMode}` };
+  }
   if (typeof rawText !== 'string' || rawText.trim().length === 0) {
     return { ok: false, status: 'parse_error', error: 'Empty or non-string JSON response' };
   }
@@ -139,6 +215,23 @@ export function parseGenericJsonOutput(rawText) {
     parsed = JSON.parse(candidate);
   } catch {
     return { ok: false, status: 'parse_error', error: 'Response is not valid JSON' };
+  }
+
+  // Strict: coordinates must be JSON numbers. Quoted numbers count as a format failure (parse_error).
+  const num = (n) => (typeof n === 'number' ? n : NaN);
+  const asPair = (v) => (Array.isArray(v) && v.length === 2 && v.every((n) => Number.isFinite(num(n))) ? [num(v[0]), num(v[1])] : null);
+  let pair = null;
+  if (asPair(parsed)) pair = asPair(parsed);
+  else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    pair = asPair(parsed.point_2d) ?? asPair(parsed.point) ?? asPair(parsed.x);
+    if (!pair && Number.isFinite(num(parsed.x)) && Number.isFinite(num(parsed.y))) pair = [num(parsed.x), num(parsed.y)];
+  }
+  if (pair && !(parsed && parsed.not_found === true)) {
+    const mapped = coordMode === 'pixels' ? mapModelPoint(pair[0], pair[1], imageSize ?? { width: 1, height: 1 }, 'pixels') : mapModelPoint(pair[0], pair[1], imageSize, coordMode);
+    if (!mapped) {
+      return { ok: false, status: 'parse_error', error: `Coordinates out of range for ${coordMode}: (${pair[0]}, ${pair[1]})` };
+    }
+    return { ok: true, status: 'point', x: mapped.x, y: mapped.y, point: { x: mapped.x, y: mapped.y } };
   }
 
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
@@ -190,6 +283,7 @@ export function buildGrounderPrompt(promptStyle, description, imageSize) {
       '',
       '## Action Space',
       "click(start_box='<|box_start|>(x1,y1)<|box_end|>')",
+      "finished(content='not_found')",
       '',
       '## User Instruction',
       `Click on ${description}`,
@@ -246,7 +340,8 @@ export function buildGrounderTable(config = loadGroundersConfig()) {
       model: 'bytedance/ui-tars-1.5-7b',
       key_env: 'OPENROUTER_API_KEY',
       prompt_style: 'ui-tars',
-      parser: parseUiTarsOutput,
+      coord_mode: 'smart_resize',
+      parser: (raw, size) => parseUiTarsOutput(raw, size, undefined, { coordMode: 'smart_resize' }),
       optional: false,
     },
     claude: {
@@ -255,6 +350,7 @@ export function buildGrounderTable(config = loadGroundersConfig()) {
       model: claudeModel.trim(),
       key_env: 'OPENROUTER_API_KEY',
       prompt_style: 'generic',
+      coord_mode: 'pixels',
       parser: parseGenericJsonOutput,
       optional: false,
     },
@@ -264,7 +360,9 @@ export function buildGrounderTable(config = loadGroundersConfig()) {
       model: qwenModel.trim(),
       key_env: 'OPENROUTER_API_KEY',
       prompt_style: 'generic',
-      parser: parseGenericJsonOutput,
+      // Qwen3-VL grounds in 0–1000 relative coordinates regardless of the pixel prompt.
+      coord_mode: 'norm1000',
+      parser: (raw, size) => parseGenericJsonOutput(raw, size, undefined, { coordMode: 'norm1000' }),
       optional: false,
     },
     local: {
@@ -273,7 +371,10 @@ export function buildGrounderTable(config = loadGroundersConfig()) {
       model: localCfg.model ?? 'local-model',
       key_env: localCfg.key_env ?? '',
       prompt_style: localPromptStyle,
-      parser: localPromptStyle === 'generic' ? parseGenericJsonOutput : parseUiTarsOutput,
+      coord_mode: localCfg.coord_mode ?? (localPromptStyle === 'generic' ? 'pixels' : 'smart_resize'),
+      parser: localPromptStyle === 'generic'
+        ? (raw, size) => parseGenericJsonOutput(raw, size, undefined, { coordMode: localCfg.coord_mode ?? 'pixels' })
+        : (raw, size) => parseUiTarsOutput(raw, size, undefined, { coordMode: localCfg.coord_mode ?? 'smart_resize' }),
       optional: true,
     },
   };
@@ -472,6 +573,7 @@ export async function callGrounder({
     const latencyMs = Math.round(performance.now() - startedAt);
     const safeMsg = scrubSecrets(err?.message ?? String(err), [apiKey]);
     const wrapped = new Error(`Grounder "${grounder.id}" request failed after ${latencyMs}ms: ${safeMsg}`);
+    wrapped.code = 'E_TRANSPORT_ERROR';
     wrapped.latency_ms = latencyMs;
     throw wrapped;
   }
@@ -481,11 +583,22 @@ export async function callGrounder({
     const errText = await response.text().catch(() => '');
     const safeDetail = scrubSecrets(errText.slice(0, 300), [apiKey]);
     const wrapped = new Error(`Grounder "${grounder.id}" HTTP ${response.status}${safeDetail ? `: ${safeDetail}` : ''}`);
+    wrapped.code = 'E_TRANSPORT_ERROR';
+    wrapped.status = response.status;
     wrapped.latency_ms = latencyMs;
     throw wrapped;
   }
 
-  const payload = await response.json();
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (err) {
+    const safeMsg = scrubSecrets(err?.message ?? String(err), [apiKey]);
+    const wrapped = new Error(`Grounder "${grounder.id}" invalid HTTP JSON body: ${safeMsg}`);
+    wrapped.code = 'E_TRANSPORT_ERROR';
+    wrapped.latency_ms = latencyMs;
+    throw wrapped;
+  }
   const rawContent = payload?.choices?.[0]?.message?.content;
   const rawReply = typeof rawContent === 'string'
     ? scrubSecrets(rawContent, [apiKey])

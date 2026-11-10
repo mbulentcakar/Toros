@@ -16,6 +16,11 @@ export const CLASSIFICATIONS = [
   'parse_error',
 ];
 
+export const EXCLUDED_CLASSIFICATIONS = [
+  'transport_error',
+  'invalid_target',
+];
+
 function createEmptyCounts() {
   return {
     wrong_element: 0,
@@ -23,6 +28,8 @@ function createEmptyCounts() {
     harmless_miss: 0,
     not_found: 0,
     parse_error: 0,
+    transport_error: 0,
+    invalid_target: 0,
   };
 }
 
@@ -109,10 +116,30 @@ function summarizeGroup(records, pricingByModel) {
   const hardCounts = createEmptyCounts();
   let total = 0;
   let hardTotal = 0;
+  const excludedTargetIds = new Set();
   const latencies = [];
   const costs = [];
 
   for (const rec of records) {
+    if (rec.classification === 'invalid_target') {
+      counts.invalid_target += 1;
+      if (rec.hard === true) {
+        hardCounts.invalid_target += 1;
+      }
+      if (typeof rec.target_id === 'string' && rec.target_id.length > 0) {
+        excludedTargetIds.add(rec.target_id);
+      }
+      continue;
+    }
+
+    if (rec.classification === 'transport_error') {
+      counts.transport_error += 1;
+      if (rec.hard === true) {
+        hardCounts.transport_error += 1;
+      }
+      continue;
+    }
+
     const cls = CLASSIFICATIONS.includes(rec.classification)
       ? rec.classification
       : 'parse_error';
@@ -144,14 +171,22 @@ function summarizeGroup(records, pricingByModel) {
     ? Number(((costs.reduce((acc, c) => acc + c, 0) / costs.length) * 100).toFixed(6))
     : null;
 
+  const sortedExcludedIds = Array.from(excludedTargetIds).sort();
+
   return {
     total,
+    raw_total: records.length,
     counts,
     rates,
+    transport_error: counts.transport_error,
+    invalid_target: counts.invalid_target,
+    excluded_target_ids: sortedExcludedIds,
     hard: {
       total: hardTotal,
       counts: hardCounts,
       rates: hardRates,
+      transport_error: hardCounts.transport_error,
+      invalid_target: hardCounts.invalid_target,
     },
     latency_ms: {
       p50,
@@ -169,8 +204,23 @@ export function computeSummary(records, pricingByModel = null) {
 
   const pairGroups = new Map();
   const grounderGroups = new Map();
+  const allExcludedTargetIds = new Set();
+  let transportErrorCount = 0;
+  let invalidTargetCount = 0;
+  let scoredCallsCount = 0;
 
   for (const rec of safeRecords) {
+    if (rec.classification === 'transport_error') {
+      transportErrorCount += 1;
+    } else if (rec.classification === 'invalid_target') {
+      invalidTargetCount += 1;
+      if (typeof rec.target_id === 'string' && rec.target_id.length > 0) {
+        allExcludedTargetIds.add(rec.target_id);
+      }
+    } else {
+      scoredCallsCount += 1;
+    }
+
     const grounder = String(rec.grounder ?? 'unknown');
     const app = String(rec.app ?? 'unknown');
     const pairKey = `${grounder}\u0000${app}`;
@@ -218,7 +268,11 @@ export function computeSummary(records, pricingByModel = null) {
 
   return {
     generated_at: new Date().toISOString(),
-    total_calls: safeRecords.length,
+    total_calls: scoredCallsCount,
+    raw_total_calls: safeRecords.length,
+    transport_error_count: transportErrorCount,
+    invalid_target_count: invalidTargetCount,
+    excluded_target_ids: Array.from(allExcludedTargetIds).sort(),
     metric_order: CLASSIFICATIONS,
     by_grounder_app: byGrounderApp,
     by_grounder: byGrounder,
@@ -243,22 +297,23 @@ function formatCost(val) {
  * Render the Markdown report with `wrong_element` in the first metric column (bold).
  */
 export function renderMarkdownReport(summary) {
+  const excludedIds = Array.isArray(summary.excluded_target_ids) ? summary.excluded_target_ids : [];
   const lines = [
     '# Vision Grounding Bakeoff Report (AU0)',
     '',
     '> **Safety priority:** **`wrong_element`** (first metric column) is the primary gating metric.',
     '> A grounder that says "not found" is safe; a grounder that clicks the wrong enabled control is dangerous.',
-    '> AU0 target thresholds: **`wrong_element` ≤ 2.0%**, `hit` ≥ 80.0%.',
+    '> AU0 target thresholds: **`wrong_element` ≤ 2.0%**, `hit` ≥ 85.0%.',
     '',
     '## Results by Grounder × App (All Targets)',
     '',
-    '| Grounder | App | **wrong_element** | hit | harmless_miss | not_found | parse_error | Total | p50 (ms) | p95 (ms) | Cost / 100 calls |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| Grounder | App | **wrong_element** | hit | harmless_miss | not_found | parse_error | Total | transport_error | invalid_target | p50 (ms) | p95 (ms) | Cost / 100 calls |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
   ];
 
   for (const row of summary.by_grounder_app) {
     lines.push(
-      `| ${row.grounder} | ${row.app} | ${formatCountAndRate(row.counts.wrong_element, row.rates.wrong_element, true)} | ${formatCountAndRate(row.counts.hit, row.rates.hit)} | ${formatCountAndRate(row.counts.harmless_miss, row.rates.harmless_miss)} | ${formatCountAndRate(row.counts.not_found, row.rates.not_found)} | ${formatCountAndRate(row.counts.parse_error, row.rates.parse_error)} | ${row.total} | ${formatLatency(row.latency_ms.p50)} | ${formatLatency(row.latency_ms.p95)} | ${formatCost(row.cost_per_100_usd)} |`,
+      `| ${row.grounder} | ${row.app} | ${formatCountAndRate(row.counts.wrong_element, row.rates.wrong_element, true)} | ${formatCountAndRate(row.counts.hit, row.rates.hit)} | ${formatCountAndRate(row.counts.harmless_miss, row.rates.harmless_miss)} | ${formatCountAndRate(row.counts.not_found, row.rates.not_found)} | ${formatCountAndRate(row.counts.parse_error, row.rates.parse_error)} | ${row.total} | ${row.counts.transport_error ?? 0} | ${row.counts.invalid_target ?? 0} | ${formatLatency(row.latency_ms.p50)} | ${formatLatency(row.latency_ms.p95)} | ${formatCost(row.cost_per_100_usd)} |`,
     );
   }
 
@@ -266,14 +321,14 @@ export function renderMarkdownReport(summary) {
     '',
     '## Hard Targets Only (`hard: true`)',
     '',
-    '| Grounder | App | **wrong_element** | hit | harmless_miss | not_found | parse_error | Total |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| Grounder | App | **wrong_element** | hit | harmless_miss | not_found | parse_error | Total | transport_error | invalid_target |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
   );
 
   for (const row of summary.by_grounder_app) {
     const h = row.hard;
     lines.push(
-      `| ${row.grounder} | ${row.app} | ${formatCountAndRate(h.counts.wrong_element, h.rates.wrong_element, true)} | ${formatCountAndRate(h.counts.hit, h.rates.hit)} | ${formatCountAndRate(h.counts.harmless_miss, h.rates.harmless_miss)} | ${formatCountAndRate(h.counts.not_found, h.rates.not_found)} | ${formatCountAndRate(h.counts.parse_error, h.rates.parse_error)} | ${h.total} |`,
+      `| ${row.grounder} | ${row.app} | ${formatCountAndRate(h.counts.wrong_element, h.rates.wrong_element, true)} | ${formatCountAndRate(h.counts.hit, h.rates.hit)} | ${formatCountAndRate(h.counts.harmless_miss, h.rates.harmless_miss)} | ${formatCountAndRate(h.counts.not_found, h.rates.not_found)} | ${formatCountAndRate(h.counts.parse_error, h.rates.parse_error)} | ${h.total} | ${h.counts.transport_error ?? 0} | ${h.counts.invalid_target ?? 0} |`,
     );
   }
 
@@ -281,17 +336,25 @@ export function renderMarkdownReport(summary) {
     '',
     '## Aggregate by Grounder',
     '',
-    '| Grounder | **wrong_element** | hit | harmless_miss | not_found | parse_error | Total | p50 (ms) | p95 (ms) | Cost / 100 calls |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| Grounder | **wrong_element** | hit | harmless_miss | not_found | parse_error | Total | transport_error | invalid_target | p50 (ms) | p95 (ms) | Cost / 100 calls |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
   );
 
   for (const row of summary.by_grounder) {
     lines.push(
-      `| ${row.grounder} | ${formatCountAndRate(row.counts.wrong_element, row.rates.wrong_element, true)} | ${formatCountAndRate(row.counts.hit, row.rates.hit)} | ${formatCountAndRate(row.counts.harmless_miss, row.rates.harmless_miss)} | ${formatCountAndRate(row.counts.not_found, row.rates.not_found)} | ${formatCountAndRate(row.counts.parse_error, row.rates.parse_error)} | ${row.total} | ${formatLatency(row.latency_ms.p50)} | ${formatLatency(row.latency_ms.p95)} | ${formatCost(row.cost_per_100_usd)} |`,
+      `| ${row.grounder} | ${formatCountAndRate(row.counts.wrong_element, row.rates.wrong_element, true)} | ${formatCountAndRate(row.counts.hit, row.rates.hit)} | ${formatCountAndRate(row.counts.harmless_miss, row.rates.harmless_miss)} | ${formatCountAndRate(row.counts.not_found, row.rates.not_found)} | ${formatCountAndRate(row.counts.parse_error, row.rates.parse_error)} | ${row.total} | ${row.counts.transport_error ?? 0} | ${row.counts.invalid_target ?? 0} | ${formatLatency(row.latency_ms.p50)} | ${formatLatency(row.latency_ms.p95)} | ${formatCost(row.cost_per_100_usd)} |`,
     );
   }
 
-  lines.push('');
+  lines.push(
+    '',
+    '## Excluded / Non-Scored Calls',
+    '',
+    `- **Transport errors (excluded from rates and totals):** ${summary.transport_error_count ?? 0}`,
+    `- **Invalid targets (excluded from rates and totals):** ${summary.invalid_target_count ?? 0}`,
+    `- **Excluded target IDs:** ${excludedIds.length > 0 ? excludedIds.join(', ') : 'none'}`,
+    '',
+  );
   return lines.join('\n');
 }
 

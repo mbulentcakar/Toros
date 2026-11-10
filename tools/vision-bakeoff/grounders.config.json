@@ -1,7 +1,7 @@
 {
   "openrouter_endpoint": "https://openrouter.ai/api/v1",
   "models": {
-    "claude": "anthropic/claude-sonnet-4",
+    "claude": "anthropic/claude-sonnet-5.5",
     "qwen": "qwen/qwen3-vl-235b-a22b-instruct"
   },
   "local": {

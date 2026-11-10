@@ -17,9 +17,9 @@
 
 | Grounder ID | Endpoint | Pinned Model ID | Prompt Style | Notes |
 |---|---|---|---|---|
-| `ui-tars-1.5-7b` | `https://openrouter.ai/api/v1` | `bytedance/ui-tars-1.5-7b` | `ui-tars` (0–1000 normalized) | _TBD_ |
+| `ui-tars-1.5-7b` | `https://openrouter.ai/api/v1` | `bytedance/ui-tars-1.5-7b` | `ui-tars` (`smart_resize` pixels) | _TBD_ |
 | `claude` | `https://openrouter.ai/api/v1` | _TBD (from `grounders.config.json`)_ | `generic` (pixel JSON) | _TBD_ |
-| `qwen` | `https://openrouter.ai/api/v1` | _TBD (from `grounders.config.json`)_ | `generic` (pixel JSON) | _TBD_ |
+| `qwen` | `https://openrouter.ai/api/v1` | _TBD (from `grounders.config.json`)_ | `generic` (`norm1000` JSON) | _TBD_ |
 | `local` _(optional)_ | `http://127.0.0.1:8080/v1` | _TBD_ | _TBD_ | _TBD_ |
 
 ## Results

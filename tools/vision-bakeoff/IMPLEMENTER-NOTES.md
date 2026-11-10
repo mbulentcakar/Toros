@@ -41,3 +41,54 @@
 ## Verification Status
 
 - Per instructions in `.au0-brief.md` ("Do not run shell commands... The orchestrator (Claude) builds and runs the tests natively on Windows after you finish"), no shell commands or git commits were executed.
+
+---
+
+## Round 2
+
+Mapping of every Round 2 finding (`.au0-brief-r2.md` and `.au0-review-grok.md`) to the changes implemented:
+
+### Orchestrator Live-Run Findings
+
+- **Orchestrator A — Model coordinate conventions (`tools/vision-bakeoff/grounders.mjs`, `tools/vision-bakeoff/grounders.config.json`, `tools/vision-bakeoff/test/vision-bakeoff.test.mjs`, `docs/finding-vision-bakeoff.md`):**
+  - Kept `smartResize` (Qwen2.5-VL round-half-to-even `factor = 28`, `minPixels = 100 * 28 * 28`, `maxPixels = 16384 * 28 * 28`) and `mapModelPoint` (`smart_resize`, `norm1000`, `pixels`) in `grounders.mjs`.
+  - Kept `ui-tars-1.5-7b` configured with `coord_mode: 'smart_resize'` (whilst `parseUiTarsOutput` defaults `opts.coordMode` to `'norm1000'` for backward compatibility) and `qwen` (`qwen/qwen3-vl-235b-a22b-instruct`) configured with `coord_mode: 'norm1000'`.
+  - Kept packed-pair JSON formats (`{"x":[x,y],"y":[y]}`, `{"point_2d":[x,y]}`, `{"point":[x,y]}`, `[x,y]`) in `parseGenericJsonOutput`.
+  - Added unit tests in `test/vision-bakeoff.test.mjs` covering `smartResize(1402, 1078) -> { width: 1400, height: 1064 }`, `>maxPixels` downscaling, `<minPixels` upscaling, the live UI-TARS-1.5 `(351,996)` example mapping into `num0Button` (`{ x: 378, y: 1160 }`) in `fixtures/calculator/tree.json`, Qwen packed-pair shapes under `coordMode: 'norm1000'`, and out-of-range coordinate rejection (`>1000` in `norm1000`, `>smart_resize` in `smart_resize`, `<0`).
+- **Orchestrator B — Targets whose element is absent from the fixture tree (`tools/vision-bakeoff/score.mjs`, `tools/vision-bakeoff/report.mjs`, `tools/vision-bakeoff/test/vision-bakeoff.test.mjs`):**
+  - Added `targetExistsInTree` in `score.mjs`; when a target's `expected` selector cannot be located on any on-screen element in `tree` (neither verbatim nor via unique on-screen leaf `automation_id`), `scoreResponse` returns `classification: 'invalid_target'`.
+  - Updated `report.mjs` (`computeSummary`, `summarizeGroup`, `renderMarkdownReport`) to exclude `invalid_target` from `total`, `hard.total`, and all rate denominators, report `invalid_target` counts separately, and list `excluded_target_ids` in `summary.json` and `report.md`.
+- **Orchestrator C — Offline re-score tool (`tools/vision-bakeoff/rescore.mjs`, `tools/vision-bakeoff/test/vision-bakeoff.test.mjs`, `tools/vision-bakeoff/README.md`):**
+  - Created `tools/vision-bakeoff/rescore.mjs` (`node tools/vision-bakeoff/rescore.mjs --in <results dir>`) and exported `rescoreBakeoffDir`.
+  - Re-parses each call record's stored `raw_reply` with the current grounder parser (`coord_mode`), re-scores against the current fixture (`tree.json`, `meta.json`) and `targets/<app>.json`, rewrites `parsed_point`, `screen_point`, `classification`, and `hit_element` while preserving the original `classification` once as `classification_v1` for audit, and regenerates `report.md` and `summary.json` without network calls or API keys.
+
+### Grok R1 Findings
+
+- **Grok #1 (HIGH) — Target selector alignment with captured fixtures & unique leaf fallback (`tools/vision-bakeoff/targets/calculator.json`, `tools/vision-bakeoff/targets/notepad.json`, `tools/vision-bakeoff/score.mjs`):**
+  - Rewrote all 50 `expected` selectors in `targets/calculator.json` (12 hard) and all 50 `expected` selectors in `targets/notepad.json` (12 hard) verbatim from on-screen elements in `fixtures/calculator/tree.json` and `fixtures/notepad/tree.json`.
+  - Updated Calculator targets whose automation IDs differed in the Windows 11 capture (`xpower2Button` for `calc-20`/`calc-48`, `NormalAlwaysOnTopButton` for `calc-29`, and `HistoryLabel` for `calc-30`).
+  - Replaced the Notepad targets that referenced the non-existent `"Untitled"` tab in the captured fixture (`notepad-06` -> `FREButton` `"What's new"`, `notepad-18` -> active tab `CloseButton` `"Close Tab"`, `notepad-31` -> dialog `CloseButton` `"OK"`, `notepad-39` -> `SystemMenuBar` `Item 1` `"System"`, `notepad-50` -> active `TabItem` `"review-codex-pr154-round2.log. Unmodified."`).
+  - Restricted leaf fallback in `matchesExpectedSelector` (`score.mjs`) to fire only when no on-screen element matches the full selector verbatim AND `leaf.automation_id` is non-empty and unique among on-screen elements of that `control_type` in `tree` (preventing collisions such as duplicate `CloseButton` or `ContentTextBlock` controls in Notepad).
+- **Grok #2 (MEDIUM) — No name-only leaf matching (`tools/vision-bakeoff/score.mjs`):**
+  - Removed the `leaf.name` fallback branch from `matchesExpectedSelector`. Elements without a non-empty `automation_id` must match by full `selectorsEqual`.
+- **Grok #3 (MEDIUM) — Separate `transport_error` from `parse_error` (`tools/vision-bakeoff/grounders.mjs`, `tools/vision-bakeoff/score.mjs`, `tools/vision-bakeoff/run.mjs`, `tools/vision-bakeoff/report.mjs`):**
+  - Tagged network/deadline failures, non-2xx HTTP responses, and invalid HTTP JSON bodies with `err.code = 'E_TRANSPORT_ERROR'` in `callGrounder` (`grounders.mjs`).
+  - Mapped `callGrounder` errors to `status: 'transport_error'` in `run.mjs` and `classification: 'transport_error'` in `scoreResponse` (`score.mjs`).
+  - Excluded `transport_error` from `total`, `hard.total`, and all rate denominators in `report.mjs`, reporting `transport_error` counts separately.
+  - Updated `run.mjs` (`main`) to exit with code `1` when `transport_error` exceeds 10% of calls.
+- **Grok #4 (MEDIUM) — Missing Calculator & Notepad targets (`tools/vision-bakeoff/targets/calculator.json`, `tools/vision-bakeoff/targets/notepad.json`, `tools/vision-bakeoff/score.mjs`):**
+  - Resolved together with Grok #1 and Orchestrator B: all 50 Calculator and 50 Notepad targets match on-screen elements in `fixtures/<app>/tree.json` verbatim, and any hypothetical missing target is classified as `invalid_target`.
+- **Grok #5 (MEDIUM) — Unit test coverage for real fixtures, leaf fallback, resume, and transport/deadline (`tools/vision-bakeoff/test/vision-bakeoff.test.mjs`):**
+  - Added unit tests verifying verbatim `selectorsEqual` alignment of all 50 Calculator and 50 Notepad targets against `fixtures/<app>/tree.json`, leaf-fallback uniqueness and name-only rejection, resume skipping and `resumedRecords` accounting, deadline/HTTP `transport_error` handling and `>10%` non-zero exit code, and `rescoreBakeoffDir`.
+- **Grok #6 (MEDIUM) — UI-TARS explicit decline action (`tools/vision-bakeoff/grounders.mjs`, `tools/vision-bakeoff/test/vision-bakeoff.test.mjs`):**
+  - Added `finished(content='not_found')` to the UI-TARS prompt action space in `buildGrounderPrompt` and updated `parseUiTarsOutput` to map `finished(content='not_found')` (and only that form when no coordinates are present) to `{ ok: true, status: 'not_found', not_found: true, point: null }`, keeping free text without coordinates as `parse_error`.
+- **Grok #7 (LOW) — Threshold copy alignment (`tools/vision-bakeoff/report.mjs`, `tools/vision-bakeoff/README.md`):**
+  - Updated threshold copy from `hit ≥ 80.0%` to `hit ≥ 85.0%` (matching `docs/specs/AU-vision-grounding.md` and `docs/finding-vision-bakeoff.md`).
+- **Grok #8 (LOW) — `capture.ps1` cleanup kills only launched process tree (`tools/vision-bakeoff/capture.ps1`):**
+  - Replaced `$procName`-wide `Get-Process` termination with `$startedPid` tracking (`Start-Process -PassThru`) and `Add-DescendantPids` (`Win32_Process` `ParentProcessId` traversal) so `finally` stops only `$startedPid` and its descendant PIDs.
+- **Grok #9 (LOW) — Half-open hit-test intervals (`tools/vision-bakeoff/score.mjs`, `tools/vision-bakeoff/test/vision-bakeoff.test.mjs`):**
+  - Updated `rectContainsPoint` to use half-open intervals (`left <= x < right` and `top <= y < bottom`) and added an edge-pixel boundary unit test.
+- **Grok #10 (LOW) — `resumedRecords` counts only current run plan (`tools/vision-bakeoff/run.mjs`, `tools/vision-bakeoff/test/vision-bakeoff.test.mjs`):**
+  - Changed `resumedRecords` to count only `existingByKey.has(key)` hits within the current `apps × activeGrounders × targets × repeat` plan rather than `existingByKey.size`.
+- **Grok #11 (LOW) — CLI `--concurrency` and `--deadline-ms` flags (`tools/vision-bakeoff/run.mjs`, `tools/vision-bakeoff/README.md`, `tools/vision-bakeoff/test/vision-bakeoff.test.mjs`):**
+  - Added `--concurrency <N>` and `--deadline-ms <ms>` flags to `parseRunArgs` and wired them through `main()` to `runBakeoff()`.

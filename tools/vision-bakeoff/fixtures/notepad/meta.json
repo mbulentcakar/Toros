@@ -1,0 +1,23 @@
+{
+  "app": "notepad",
+  "executable": "C:\\Windows\\System32\\notepad.exe",
+  "scale_factor": 1.5,
+  "window_rect": {
+    "left": 482,
+    "bottom": 1427,
+    "top": 236,
+    "right": 2135,
+    "height": 1191,
+    "width": 1653
+  },
+  "image_size": {
+    "width": 1653,
+    "height": 1191
+  },
+  "captured_at": "2026-11-10T08:04:33.749Z",
+  "element_count": 46,
+  "dpi": 144,
+  "pid": 21608,
+  "hwnd": 5966128,
+  "image_sha256": "1224d388ff5a857f6c90da159285edc9070be4dc9fc39d071bdafbeac40d4bb0"
+}

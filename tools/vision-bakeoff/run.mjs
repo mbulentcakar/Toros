@@ -45,6 +45,15 @@ function defaultTimestampSlug() {
 
 /** Parse CLI arguments for run.mjs. */
 export function parseRunArgs(argv) {
+  const args = (
+    Array.isArray(argv) &&
+    argv.length >= 2 &&
+    !String(argv[0]).startsWith('-') &&
+    !String(argv[1]).startsWith('-')
+  )
+    ? argv.slice(2)
+    : argv;
+
   const opts = {
     apps: ['notepad', 'calculator'],
     grounders: ['ui-tars-1.5-7b', 'claude', 'qwen'],
@@ -59,36 +68,44 @@ export function parseRunArgs(argv) {
     help: false,
   };
 
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === '--apps' || arg === '--app') {
-      const val = argv[++i] ?? '';
+      const val = args[++i] ?? '';
       opts.apps = val.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
     } else if (arg.startsWith('--apps=')) {
       opts.apps = arg.slice('--apps='.length).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
     } else if (arg === '--grounders' || arg === '--grounder') {
-      const val = argv[++i] ?? '';
+      const val = args[++i] ?? '';
       opts.grounders = val.split(',').map((s) => s.trim()).filter(Boolean);
     } else if (arg.startsWith('--grounders=')) {
       opts.grounders = arg.slice('--grounders='.length).split(',').map((s) => s.trim()).filter(Boolean);
     } else if (arg === '--repeat') {
-      opts.repeat = Number.parseInt(argv[++i], 10);
+      opts.repeat = Number.parseInt(args[++i], 10);
     } else if (arg.startsWith('--repeat=')) {
       opts.repeat = Number.parseInt(arg.slice('--repeat='.length), 10);
     } else if (arg === '--limit') {
-      opts.limit = Number.parseInt(argv[++i], 10);
+      opts.limit = Number.parseInt(args[++i], 10);
     } else if (arg.startsWith('--limit=')) {
       opts.limit = Number.parseInt(arg.slice('--limit='.length), 10);
+    } else if (arg === '--concurrency') {
+      opts.concurrency = Number.parseInt(args[++i], 10);
+    } else if (arg.startsWith('--concurrency=')) {
+      opts.concurrency = Number.parseInt(arg.slice('--concurrency='.length), 10);
+    } else if (arg === '--deadline-ms') {
+      opts.deadlineMs = Number.parseInt(args[++i], 10);
+    } else if (arg.startsWith('--deadline-ms=')) {
+      opts.deadlineMs = Number.parseInt(arg.slice('--deadline-ms='.length), 10);
     } else if (arg === '--out') {
-      opts.outDir = path.resolve(argv[++i]);
+      opts.outDir = path.resolve(args[++i]);
     } else if (arg.startsWith('--out=')) {
       opts.outDir = path.resolve(arg.slice('--out='.length));
     } else if (arg === '--fixtures') {
-      opts.fixturesDir = path.resolve(argv[++i]);
+      opts.fixturesDir = path.resolve(args[++i]);
     } else if (arg === '--targets') {
-      opts.targetsDir = path.resolve(argv[++i]);
+      opts.targetsDir = path.resolve(args[++i]);
     } else if (arg === '--config') {
-      opts.configPath = path.resolve(argv[++i]);
+      opts.configPath = path.resolve(args[++i]);
     } else if (arg === '--help' || arg === '-h') {
       opts.help = true;
     } else {
@@ -101,6 +118,12 @@ export function parseRunArgs(argv) {
   }
   if (opts.limit !== null && (!Number.isInteger(opts.limit) || opts.limit < 1)) {
     throw new Error(`Invalid --limit value: ${opts.limit}`);
+  }
+  if (!Number.isInteger(opts.concurrency) || opts.concurrency < 1) {
+    throw new Error(`Invalid --concurrency value: ${opts.concurrency}`);
+  }
+  if (!Number.isInteger(opts.deadlineMs) || opts.deadlineMs < 1) {
+    throw new Error(`Invalid --deadline-ms value: ${opts.deadlineMs}`);
   }
   if (opts.apps.length === 0) {
     throw new Error('At least one app must be specified via --apps');
@@ -238,14 +261,18 @@ export async function runBakeoff({
   concurrency = DEFAULT_CONCURRENCY,
   deadlineMs = DEFAULT_DEADLINE_MS,
   outDir = path.join(RESULTS_ROOT, defaultTimestampSlug()),
-  fixturesDir = FIXTURES_DIR,
-  targetsDir = TARGETS_DIR,
+  fixturesDir,
+  fixturesRoot,
+  targetsDir,
+  targetsRoot,
   configPath = DEFAULT_CONFIG_PATH,
   env = process.env,
   fetchFn = globalThis.fetch,
   captureFn = captureAppFixture,
   logger = console,
 } = {}) {
+  const resolvedFixturesDir = fixturesDir ?? fixturesRoot ?? FIXTURES_DIR;
+  const resolvedTargetsDir = targetsDir ?? targetsRoot ?? TARGETS_DIR;
   const config = loadGroundersConfig(configPath);
   const grounderTable = buildGrounderTable(config);
 
@@ -290,8 +317,8 @@ export async function runBakeoff({
   // 3. Load targets and fixtures for each requested app
   const appBundles = new Map();
   for (const app of apps) {
-    const targets = await loadTargetsForApp(app, targetsDir, limit);
-    const fixture = await loadOrCaptureFixture(app, fixturesDir, captureFn);
+    const targets = await loadTargetsForApp(app, resolvedTargetsDir, limit);
+    const fixture = await loadOrCaptureFixture(app, resolvedFixturesDir, captureFn);
     appBundles.set(app, { targets, fixture });
   }
 
@@ -302,6 +329,7 @@ export async function runBakeoff({
 
   const allRecords = [];
   const pendingTasks = [];
+  let resumedCount = 0;
 
   for (const app of apps) {
     const { targets, fixture } = appBundles.get(app);
@@ -311,6 +339,7 @@ export async function runBakeoff({
           const key = makeCallKey(grounder.id, app, target.id, r);
           if (existingByKey.has(key)) {
             allRecords.push(existingByKey.get(key));
+            resumedCount += 1;
             continue;
           }
 
@@ -339,7 +368,7 @@ export async function runBakeoff({
             } catch (err) {
               errorText = scrubSecrets(err?.message ?? String(err), [secretVal]);
               latencyMs = typeof err?.latency_ms === 'number' ? err.latency_ms : null;
-              parsed = { ok: false, status: 'parse_error', error: errorText };
+              parsed = { ok: false, status: 'transport_error', error: errorText };
             }
 
             const scored = scoreResponse({
@@ -381,12 +410,19 @@ export async function runBakeoff({
   allRecords.push(...freshRecords);
 
   const reportInfo = await writeReport(outDir, allRecords, pricingByModel);
+  const transportErrorCount = allRecords.filter((rec) => rec.classification === 'transport_error').length;
+  const transportErrorRate = allRecords.length > 0 ? transportErrorCount / allRecords.length : 0;
+  const exitCode = transportErrorRate > 0.1 ? 1 : 0;
 
   return {
     outDir,
     totalRecords: allRecords.length,
-    resumedRecords: existingByKey.size,
+    resumedRecords: resumedCount,
     executedRecords: freshRecords.length,
+    newRecords: freshRecords.length,
+    transportErrorCount,
+    transportErrorRate,
+    exitCode,
     ...reportInfo,
   };
 }
@@ -397,13 +433,22 @@ const USAGE = [
   '  --grounders <ui-tars-1.5-7b,claude,qwen>   Grounders to run (default: ui-tars-1.5-7b,claude,qwen)',
   '  --repeat <N>                               Repetitions per target (default: 1)',
   '  --limit <N>                                Limit targets per app (optional)',
+  '  --concurrency <N>                          Max concurrent calls (default: 2)',
+  '  --deadline-ms <ms>                         Per-call timeout in ms (default: 60000)',
   '  --out <dir>                                Output directory (default: tools/vision-bakeoff/results/<stamp>)',
 ].join('\n');
 
-export async function main(argv = process.argv.slice(2), env = process.env) {
+export async function main(argv = process.argv.slice(2), envOrOverrides = process.env) {
+  const isOverridesObj =
+    envOrOverrides &&
+    typeof envOrOverrides === 'object' &&
+    ('fetchFn' in envOrOverrides || 'logger' in envOrOverrides || 'fixturesRoot' in envOrOverrides || 'fixturesDir' in envOrOverrides);
+  const env = isOverridesObj ? (envOrOverrides.env ?? process.env) : envOrOverrides;
+  const logger = isOverridesObj && envOrOverrides.logger ? envOrOverrides.logger : console;
+
   const opts = parseRunArgs(argv);
   if (opts.help) {
-    console.log(USAGE);
+    logger.log(USAGE);
     return 0;
   }
 
@@ -416,15 +461,24 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     concurrency: opts.concurrency,
     deadlineMs: opts.deadlineMs,
     outDir,
-    fixturesDir: opts.fixturesDir,
-    targetsDir: opts.targetsDir,
+    fixturesDir: (isOverridesObj ? (envOrOverrides.fixturesDir ?? envOrOverrides.fixturesRoot) : null) ?? opts.fixturesDir,
+    targetsDir: (isOverridesObj ? (envOrOverrides.targetsDir ?? envOrOverrides.targetsRoot) : null) ?? opts.targetsDir,
     configPath: opts.configPath,
     env,
+    ...(isOverridesObj && envOrOverrides.fetchFn ? { fetchFn: envOrOverrides.fetchFn } : {}),
+    ...(isOverridesObj && envOrOverrides.captureFn ? { captureFn: envOrOverrides.captureFn } : {}),
+    logger,
   });
 
-  console.log(
+  logger.log(
     `Bakeoff complete (${result.executedRecords} new calls, ${result.resumedRecords} resumed) -> ${result.reportPath}`,
   );
+  if (result.exitCode !== 0) {
+    logger.error(
+      `Transport errors exceeded 10% budget (${result.transportErrorCount}/${result.totalRecords} = ${(result.transportErrorRate * 100).toFixed(1)}%).`,
+    );
+    return result.exitCode;
+  }
   return 0;
 }
 

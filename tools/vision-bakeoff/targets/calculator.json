@@ -5,6 +5,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
       { "control_type": "Button", "automation_id": "num0Button", "name": "Zero", "index": 0 }
     ]
@@ -15,6 +17,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
       { "control_type": "Button", "automation_id": "num1Button", "name": "One", "index": 0 }
     ]
@@ -25,6 +29,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
       { "control_type": "Button", "automation_id": "num2Button", "name": "Two", "index": 0 }
     ]
@@ -35,6 +41,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
       { "control_type": "Button", "automation_id": "num3Button", "name": "Three", "index": 0 }
     ]
@@ -45,6 +53,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
       { "control_type": "Button", "automation_id": "num4Button", "name": "Four", "index": 0 }
     ]
@@ -55,6 +65,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
       { "control_type": "Button", "automation_id": "num5Button", "name": "Five", "index": 0 }
     ]
@@ -65,6 +77,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
       { "control_type": "Button", "automation_id": "num6Button", "name": "Six", "index": 0 }
     ]
@@ -75,6 +89,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
       { "control_type": "Button", "automation_id": "num7Button", "name": "Seven", "index": 0 }
     ]
@@ -85,6 +101,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
       { "control_type": "Button", "automation_id": "num8Button", "name": "Eight", "index": 0 }
     ]
@@ -95,6 +113,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
       { "control_type": "Button", "automation_id": "num9Button", "name": "Nine", "index": 0 }
     ]
@@ -105,6 +125,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
       { "control_type": "Button", "automation_id": "decimalSeparatorButton", "name": "Decimal separator", "index": 0 }
     ]
@@ -115,7 +137,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
-      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Button", "automation_id": "negateButton", "name": "Positive negative", "index": 0 }
     ]
   },
@@ -125,6 +148,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
       { "control_type": "Button", "automation_id": "equalButton", "name": "Equals", "index": 0 }
     ]
@@ -135,6 +160,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
       { "control_type": "Button", "automation_id": "plusButton", "name": "Plus", "index": 0 }
     ]
@@ -145,6 +172,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
       { "control_type": "Button", "automation_id": "minusButton", "name": "Minus", "index": 0 }
     ]
@@ -155,6 +184,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
       { "control_type": "Button", "automation_id": "multiplyButton", "name": "Multiply by", "index": 0 }
     ]
@@ -165,6 +196,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
       { "control_type": "Button", "automation_id": "divideButton", "name": "Divide by", "index": 0 }
     ]
@@ -175,7 +208,9 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
-      { "control_type": "Group", "automation_id": "StandardFunctions", "name": "Standard functions", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "DisplayControls", "name": "Display controls", "index": 0 },
       { "control_type": "Button", "automation_id": "percentButton", "name": "Percent", "index": 0 }
     ]
   },
@@ -185,6 +220,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "StandardFunctions", "name": "Standard functions", "index": 0 },
       { "control_type": "Button", "automation_id": "squareRootButton", "name": "Square root", "index": 0 }
     ]
@@ -195,8 +232,10 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "StandardFunctions", "name": "Standard functions", "index": 0 },
-      { "control_type": "Button", "automation_id": "powerButton", "name": "Square", "index": 0 }
+      { "control_type": "Button", "automation_id": "xpower2Button", "name": "Square", "index": 0 }
     ]
   },
   {
@@ -205,6 +244,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "StandardFunctions", "name": "Standard functions", "index": 0 },
       { "control_type": "Button", "automation_id": "invertButton", "name": "Reciprocal", "index": 0 }
     ]
@@ -215,6 +256,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "DisplayControls", "name": "Display controls", "index": 0 },
       { "control_type": "Button", "automation_id": "clearEntryButton", "name": "Clear entry", "index": 0 }
     ]
@@ -225,6 +268,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "DisplayControls", "name": "Display controls", "index": 0 },
       { "control_type": "Button", "automation_id": "clearButton", "name": "Clear", "index": 0 }
     ]
@@ -235,6 +280,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "DisplayControls", "name": "Display controls", "index": 0 },
       { "control_type": "Button", "automation_id": "backSpaceButton", "name": "Backspace", "index": 0 }
     ]
@@ -246,6 +293,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "MemoryPanel", "name": "Memory controls", "index": 0 },
       { "control_type": "Button", "automation_id": "memButton", "name": "Memory store", "index": 0 }
     ]
@@ -257,6 +306,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "MemoryPanel", "name": "Memory controls", "index": 0 },
       { "control_type": "Button", "automation_id": "MemPlus", "name": "Memory add", "index": 0 }
     ]
@@ -268,6 +319,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "MemoryPanel", "name": "Memory controls", "index": 0 },
       { "control_type": "Button", "automation_id": "MemMinus", "name": "Memory subtract", "index": 0 }
     ]
@@ -278,6 +331,7 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
       { "control_type": "Button", "automation_id": "TogglePaneButton", "name": "Open Navigation", "index": 0 }
     ]
   },
@@ -288,7 +342,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
-      { "control_type": "Button", "automation_id": "AlwaysOnTopButton", "name": "Keep on top", "index": 0 }
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Button", "automation_id": "NormalAlwaysOnTopButton", "name": "Keep on top", "index": 0 }
     ]
   },
   {
@@ -298,7 +353,11 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
-      { "control_type": "Button", "automation_id": "HistoryButton", "name": "History", "index": 0 }
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": "DockPanel", "name": "History and Memory lists", "index": 0 },
+      { "control_type": "Tab", "automation_id": "DockPivot", "name": null, "index": 0 },
+      { "control_type": "TabItem", "automation_id": "HistoryLabel", "name": "There\u2019s no history yet. History", "index": 0 }
     ]
   },
   {
@@ -306,7 +365,7 @@
     "description": "the Minimize window button",
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
-      { "control_type": "TitleBar", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Window", "automation_id": "TitleBar", "name": "Calculator", "index": 0 },
       { "control_type": "Button", "automation_id": "Minimize", "name": "Minimize Calculator", "index": 0 }
     ]
   },
@@ -315,7 +374,7 @@
     "description": "the Maximize window button",
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
-      { "control_type": "TitleBar", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Window", "automation_id": "TitleBar", "name": "Calculator", "index": 0 },
       { "control_type": "Button", "automation_id": "Maximize", "name": "Maximize Calculator", "index": 0 }
     ]
   },
@@ -324,7 +383,7 @@
     "description": "the Close window button in the top-right corner",
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
-      { "control_type": "TitleBar", "automation_id": null, "name": null, "index": 0 },
+      { "control_type": "Window", "automation_id": "TitleBar", "name": "Calculator", "index": 0 },
       { "control_type": "Button", "automation_id": "Close", "name": "Close Calculator", "index": 0 }
     ]
   },
@@ -335,7 +394,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
-      { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Button", "automation_id": "negateButton", "name": "Positive negative", "index": 0 }
     ]
   },
@@ -346,6 +406,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "StandardFunctions", "name": "Standard functions", "index": 0 },
       { "control_type": "Button", "automation_id": "invertButton", "name": "Reciprocal", "index": 0 }
     ]
@@ -357,6 +419,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "DisplayControls", "name": "Display controls", "index": 0 },
       { "control_type": "Button", "automation_id": "backSpaceButton", "name": "Backspace", "index": 0 }
     ]
@@ -368,6 +432,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "DisplayControls", "name": "Display controls", "index": 0 },
       { "control_type": "Button", "automation_id": "clearEntryButton", "name": "Clear entry", "index": 0 }
     ]
@@ -379,6 +445,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "MemoryPanel", "name": "Memory controls", "index": 0 },
       { "control_type": "Button", "automation_id": "memButton", "name": "Memory store", "index": 0 }
     ]
@@ -390,6 +458,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "MemoryPanel", "name": "Memory controls", "index": 0 },
       { "control_type": "Button", "automation_id": "MemPlus", "name": "Memory add", "index": 0 }
     ]
@@ -401,6 +471,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "MemoryPanel", "name": "Memory controls", "index": 0 },
       { "control_type": "Button", "automation_id": "MemMinus", "name": "Memory subtract", "index": 0 }
     ]
@@ -411,6 +483,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
       { "control_type": "Button", "automation_id": "plusButton", "name": "Plus", "index": 0 }
     ]
@@ -421,6 +495,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
       { "control_type": "Button", "automation_id": "minusButton", "name": "Minus", "index": 0 }
     ]
@@ -431,6 +507,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
       { "control_type": "Button", "automation_id": "multiplyButton", "name": "Multiply by", "index": 0 }
     ]
@@ -441,6 +519,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "StandardOperators", "name": "Standard operators", "index": 0 },
       { "control_type": "Button", "automation_id": "divideButton", "name": "Divide by", "index": 0 }
     ]
@@ -451,6 +531,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
       { "control_type": "Button", "automation_id": "num5Button", "name": "Five", "index": 0 }
     ]
@@ -461,6 +543,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
       { "control_type": "Button", "automation_id": "num0Button", "name": "Zero", "index": 0 }
     ]
@@ -471,6 +555,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "NumberPad", "name": "Number pad", "index": 0 },
       { "control_type": "Button", "automation_id": "decimalSeparatorButton", "name": "Decimal separator", "index": 0 }
     ]
@@ -481,8 +567,10 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "StandardFunctions", "name": "Standard functions", "index": 0 },
-      { "control_type": "Button", "automation_id": "powerButton", "name": "Square", "index": 0 }
+      { "control_type": "Button", "automation_id": "xpower2Button", "name": "Square", "index": 0 }
     ]
   },
   {
@@ -491,6 +579,8 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
+      { "control_type": "Group", "automation_id": null, "name": null, "index": 0 },
       { "control_type": "Group", "automation_id": "StandardFunctions", "name": "Standard functions", "index": 0 },
       { "control_type": "Button", "automation_id": "squareRootButton", "name": "Square root", "index": 0 }
     ]
@@ -501,6 +591,7 @@
     "expected": [
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
       { "control_type": "Window", "automation_id": null, "name": "Calculator", "index": 0 },
+      { "control_type": "Custom", "automation_id": "NavView", "name": null, "index": 0 },
       { "control_type": "Button", "automation_id": "TogglePaneButton", "name": "Open Navigation", "index": 0 }
     ]
   }

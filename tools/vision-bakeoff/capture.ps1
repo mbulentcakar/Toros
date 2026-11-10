@@ -183,8 +183,29 @@ function Find-TopLevelWindowByPids([int[]]$targetPids) {
 
 $launchedByUs = $false
 $startedProcess = $null
+$startedPid = 0
 $beforePids = Get-CandidatePids $candidateNames.ToArray()
+# Holds strictly the PID returned by Start-Process and its descendant PIDs (by ParentProcessId).
 $spawnedPids = New-Object 'System.Collections.Generic.List[int]'
+
+function Add-DescendantPids([System.Collections.Generic.List[int]]$ownedPids) {
+  if ($null -eq $ownedPids -or $ownedPids.Count -eq 0) { return }
+  try {
+    $allProcs = @(Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue)
+    $added = $true
+    while ($added) {
+      $added = $false
+      foreach ($proc in $allProcs) {
+        $procId = [int]$proc.ProcessId
+        $parentId = [int]$proc.ParentProcessId
+        if ($procId -gt 0 -and $ownedPids.Contains($parentId) -and -not $ownedPids.Contains($procId) -and ($beforePids -notcontains $procId)) {
+          [void]$ownedPids.Add($procId)
+          $added = $true
+        }
+      }
+    }
+  } catch { }
+}
 
 try {
   $found = Find-TopLevelWindowByPids $beforePids
@@ -192,17 +213,27 @@ try {
     $launchedByUs = $true
     $startedProcess = Start-Process -FilePath $executable -PassThru
     if ($null -ne $startedProcess -and [int]$startedProcess.Id -gt 0) {
-      [void]$spawnedPids.Add([int]$startedProcess.Id)
+      $startedPid = [int]$startedProcess.Id
+      [void]$spawnedPids.Add($startedPid)
     }
     $deadline = [DateTime]::UtcNow.AddMilliseconds($timeoutMs)
     while ([DateTime]::UtcNow -lt $deadline) {
-      $currentPids = Get-CandidatePids $candidateNames.ToArray()
-      foreach ($cp in $currentPids) {
-        if ($beforePids -notcontains $cp -and -not $spawnedPids.Contains($cp)) {
-          [void]$spawnedPids.Add($cp)
+      Add-DescendantPids $spawnedPids
+      $found = Find-TopLevelWindowByPids $spawnedPids.ToArray()
+      if ($null -eq $found) {
+        # Packaged UWP apps may be activated via DCOM/AppX under svchost rather than as a direct child;
+        # allow window lookup on newly appeared candidate PIDs without adding them to $spawnedPids.
+        $currentPids = Get-CandidatePids $candidateNames.ToArray()
+        $newCandidatePids = New-Object 'System.Collections.Generic.List[int]'
+        foreach ($cp in $currentPids) {
+          if ($beforePids -notcontains $cp) {
+            [void]$newCandidatePids.Add($cp)
+          }
+        }
+        if ($newCandidatePids.Count -gt 0) {
+          $found = Find-TopLevelWindowByPids $newCandidatePids.ToArray()
         }
       }
-      $found = Find-TopLevelWindowByPids $spawnedPids.ToArray()
       if ($null -ne $found) {
         Start-Sleep -Milliseconds 600
         break
@@ -409,9 +440,12 @@ try {
   Write-JsonFile $metaPath $meta
 }
 finally {
-  # Close the app ONLY if this script launched it.
-  if ($launchedByUs) {
-    foreach ($spid in $spawnedPids) {
+  # Close ONLY the PID started by Start-Process and its descendants.
+  if ($launchedByUs -and $startedPid -gt 0) {
+    Add-DescendantPids $spawnedPids
+    $pidsToClose = $spawnedPids.ToArray()
+    [Array]::Reverse($pidsToClose)
+    foreach ($spid in $pidsToClose) {
       if ($beforePids -notcontains $spid) {
         try {
           $p = Get-Process -Id $spid -ErrorAction SilentlyContinue

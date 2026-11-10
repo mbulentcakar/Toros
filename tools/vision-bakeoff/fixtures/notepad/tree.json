@@ -1,0 +1,1888 @@
+[
+  {
+    "is_offscreen": false,
+    "name": "review-codex-pr154-round2.log - Notepad",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Window",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 482,
+      "bottom": 1427,
+      "top": 236,
+      "right": 2135,
+      "height": 1191,
+      "width": 1653
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Pane",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 491,
+      "bottom": 1418,
+      "top": 236,
+      "right": 2126,
+      "height": 1182,
+      "width": 1635
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Pane",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 491,
+      "bottom": 1418,
+      "top": 236,
+      "right": 2126,
+      "height": 1182,
+      "width": 1635
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Popup",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Popup",
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Window",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 491,
+      "bottom": 1418,
+      "top": 236,
+      "right": 2126,
+      "height": 1182,
+      "width": 1635
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Notepad",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Notepad",
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Window",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 491,
+      "bottom": 1418,
+      "top": 236,
+      "right": 2126,
+      "height": 1182,
+      "width": 1635
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": "ContentScrollViewer",
+        "index": 0
+      }
+    ],
+    "control_type": "Pane",
+    "automation_id": "ContentScrollViewer",
+    "bounding_rect": {
+      "left": 1071,
+      "bottom": 861,
+      "top": 673,
+      "right": 1547,
+      "height": 188,
+      "width": 476
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Notepad",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": "ContentScrollViewer",
+        "index": 0
+      },
+      {
+        "control_type": "Text",
+        "name": "Notepad",
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Text",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 1107,
+      "bottom": 749,
+      "top": 709,
+      "right": 1227,
+      "height": 40,
+      "width": 120
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "The system cannot find the path specified.\r\n",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": "ContentScrollViewer",
+        "index": 0
+      },
+      {
+        "control_type": "Text",
+        "name": "The system cannot find the path specified.\r\n",
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Text",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 1107,
+      "bottom": 823,
+      "top": 767,
+      "right": 1498,
+      "height": 56,
+      "width": 391
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "OK",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": "Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "OK",
+        "automation_id": "CloseButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "CloseButton",
+    "bounding_rect": {
+      "left": 1315,
+      "bottom": 945,
+      "top": 897,
+      "right": 1510,
+      "height": 48,
+      "width": 195
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 1
+      }
+    ],
+    "control_type": "Pane",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 491,
+      "bottom": 1370,
+      "top": 348,
+      "right": 2126,
+      "height": 1022,
+      "width": 1635
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Text editor",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 1
+      },
+      {
+        "control_type": "Document",
+        "name": "Text editor",
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Document",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 491,
+      "bottom": 1370,
+      "top": 348,
+      "right": 2126,
+      "height": 1022,
+      "width": 1635
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 2
+      }
+    ],
+    "control_type": "Pane",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 551,
+      "bottom": 298,
+      "top": 250,
+      "right": 1342,
+      "height": 48,
+      "width": 791
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 2
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Pane",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 551,
+      "bottom": 298,
+      "top": 250,
+      "right": 1342,
+      "height": 48,
+      "width": 791
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 2
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Tab",
+        "name": null,
+        "automation_id": "Tabs",
+        "index": 0
+      }
+    ],
+    "control_type": "Tab",
+    "automation_id": "Tabs",
+    "bounding_rect": {
+      "left": 551,
+      "bottom": 298,
+      "top": 250,
+      "right": 1342,
+      "height": 48,
+      "width": 791
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 2
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Tab",
+        "name": null,
+        "automation_id": "Tabs",
+        "index": 0
+      },
+      {
+        "control_type": "List",
+        "name": null,
+        "automation_id": "TabListView",
+        "index": 0
+      }
+    ],
+    "control_type": "List",
+    "automation_id": "TabListView",
+    "bounding_rect": {
+      "left": 554,
+      "bottom": 298,
+      "top": 250,
+      "right": 1285,
+      "height": 48,
+      "width": 731
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "note-installed.txt. Unmodified.",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 2
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Tab",
+        "name": null,
+        "automation_id": "Tabs",
+        "index": 0
+      },
+      {
+        "control_type": "List",
+        "name": null,
+        "automation_id": "TabListView",
+        "index": 0
+      },
+      {
+        "control_type": "TabItem",
+        "name": "note-installed.txt. Unmodified.",
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "TabItem",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 563,
+      "bottom": 298,
+      "top": 250,
+      "right": 921,
+      "height": 48,
+      "width": 358
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "note-installed.txt",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 2
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Tab",
+        "name": null,
+        "automation_id": "Tabs",
+        "index": 0
+      },
+      {
+        "control_type": "List",
+        "name": null,
+        "automation_id": "TabListView",
+        "index": 0
+      },
+      {
+        "control_type": "TabItem",
+        "name": "note-installed.txt. Unmodified.",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Text",
+        "name": "note-installed.txt",
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Text",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 576,
+      "bottom": 285,
+      "top": 262,
+      "right": 713,
+      "height": 23,
+      "width": 137
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "review-codex-pr154-round2.log. Unmodified.",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 2
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Tab",
+        "name": null,
+        "automation_id": "Tabs",
+        "index": 0
+      },
+      {
+        "control_type": "List",
+        "name": null,
+        "automation_id": "TabListView",
+        "index": 0
+      },
+      {
+        "control_type": "TabItem",
+        "name": "review-codex-pr154-round2.log. Unmodified.",
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "TabItem",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 915,
+      "bottom": 298,
+      "top": 250,
+      "right": 1285,
+      "height": 48,
+      "width": 370
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "review-codex-pr154-round2.log",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 2
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Tab",
+        "name": null,
+        "automation_id": "Tabs",
+        "index": 0
+      },
+      {
+        "control_type": "List",
+        "name": null,
+        "automation_id": "TabListView",
+        "index": 0
+      },
+      {
+        "control_type": "TabItem",
+        "name": "review-codex-pr154-round2.log. Unmodified.",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Text",
+        "name": "review-codex-pr154-round2.log",
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Text",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 934,
+      "bottom": 285,
+      "top": 262,
+      "right": 1198,
+      "height": 23,
+      "width": 264
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Close Tab",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 2
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Tab",
+        "name": null,
+        "automation_id": "Tabs",
+        "index": 0
+      },
+      {
+        "control_type": "List",
+        "name": null,
+        "automation_id": "TabListView",
+        "index": 0
+      },
+      {
+        "control_type": "TabItem",
+        "name": "review-codex-pr154-round2.log. Unmodified.",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Close Tab",
+        "automation_id": "CloseButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "CloseButton",
+    "bounding_rect": {
+      "left": 1224,
+      "bottom": 292,
+      "top": 256,
+      "right": 1272,
+      "height": 36,
+      "width": 48
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Add New Tab",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 2
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Tab",
+        "name": null,
+        "automation_id": "Tabs",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Add New Tab",
+        "automation_id": "AddButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "AddButton",
+    "bounding_rect": {
+      "left": 1290,
+      "bottom": 295,
+      "top": 259,
+      "right": 1338,
+      "height": 36,
+      "width": 48
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 3
+      }
+    ],
+    "control_type": "Pane",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 491,
+      "bottom": 348,
+      "top": 298,
+      "right": 2126,
+      "height": 50,
+      "width": 1635
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 3
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Pane",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 491,
+      "bottom": 348,
+      "top": 298,
+      "right": 2126,
+      "height": 50,
+      "width": 1635
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 3
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "MenuBar",
+        "name": null,
+        "automation_id": "MenuBar",
+        "index": 0
+      }
+    ],
+    "control_type": "MenuBar",
+    "automation_id": "MenuBar",
+    "bounding_rect": {
+      "left": 491,
+      "bottom": 346,
+      "top": 298,
+      "right": 730,
+      "height": 48,
+      "width": 239
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "File",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 3
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "MenuBar",
+        "name": null,
+        "automation_id": "MenuBar",
+        "index": 0
+      },
+      {
+        "control_type": "MenuItem",
+        "name": "File",
+        "automation_id": "File",
+        "index": 0
+      }
+    ],
+    "control_type": "MenuItem",
+    "automation_id": "File",
+    "bounding_rect": {
+      "left": 497,
+      "bottom": 346,
+      "top": 298,
+      "right": 559,
+      "height": 48,
+      "width": 62
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Edit",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 3
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "MenuBar",
+        "name": null,
+        "automation_id": "MenuBar",
+        "index": 0
+      },
+      {
+        "control_type": "MenuItem",
+        "name": "Edit",
+        "automation_id": "Edit",
+        "index": 0
+      }
+    ],
+    "control_type": "MenuItem",
+    "automation_id": "Edit",
+    "bounding_rect": {
+      "left": 571,
+      "bottom": 346,
+      "top": 298,
+      "right": 637,
+      "height": 48,
+      "width": 66
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "View",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 3
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "MenuBar",
+        "name": null,
+        "automation_id": "MenuBar",
+        "index": 0
+      },
+      {
+        "control_type": "MenuItem",
+        "name": "View",
+        "automation_id": "View",
+        "index": 0
+      }
+    ],
+    "control_type": "MenuItem",
+    "automation_id": "View",
+    "bounding_rect": {
+      "left": 649,
+      "bottom": 346,
+      "top": 298,
+      "right": 724,
+      "height": 48,
+      "width": 75
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "What's new",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 3
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "What's new",
+        "automation_id": "FREButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "FREButton",
+    "bounding_rect": {
+      "left": 2018,
+      "bottom": 345,
+      "top": 300,
+      "right": 2063,
+      "height": 45,
+      "width": 45
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Settings",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 3
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Settings",
+        "automation_id": "SettingsButton",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "SettingsButton",
+    "bounding_rect": {
+      "left": 2069,
+      "bottom": 346,
+      "top": 298,
+      "right": 2114,
+      "height": 48,
+      "width": 45
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": true,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 3
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Window",
+        "name": null,
+        "automation_id": "PrivacyTeachingTip",
+        "index": 0
+      }
+    ],
+    "control_type": "Window",
+    "automation_id": "PrivacyTeachingTip",
+    "bounding_rect": {
+      "left": 0,
+      "bottom": 0,
+      "top": 0,
+      "right": 0,
+      "height": 0,
+      "width": 0
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": true,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 3
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": "PsDownloadDetailTeachingTip",
+        "index": 0
+      }
+    ],
+    "control_type": "Pane",
+    "automation_id": "PsDownloadDetailTeachingTip",
+    "bounding_rect": {
+      "left": 0,
+      "bottom": 0,
+      "top": 0,
+      "right": 0,
+      "height": 0,
+      "width": 0
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": true,
+    "name": "Local AI model must complete downloading to use this feature while signed out.",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 3
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": "Local AI model must complete downloading to use this feature while signed out.",
+        "automation_id": "PsDownloadLightTeachingTip",
+        "index": 0
+      }
+    ],
+    "control_type": "Pane",
+    "automation_id": "PsDownloadLightTeachingTip",
+    "bounding_rect": {
+      "left": 0,
+      "bottom": 0,
+      "top": 0,
+      "right": 0,
+      "height": 0,
+      "width": 0
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 4
+      }
+    ],
+    "control_type": "Pane",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 491,
+      "bottom": 1418,
+      "top": 1370,
+      "right": 2126,
+      "height": 48,
+      "width": 1635
+    },
+    "enabled": false
+  },
+  {
+    "is_offscreen": false,
+    "name": null,
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 4
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      }
+    ],
+    "control_type": "Pane",
+    "automation_id": null,
+    "bounding_rect": {
+      "left": 491,
+      "bottom": 1418,
+      "top": 1370,
+      "right": 2126,
+      "height": 48,
+      "width": 1635
+    },
+    "enabled": false
+  },
+  {
+    "is_offscreen": false,
+    "name": "Line 1,\nColumn 1",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 4
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Text",
+        "name": "Line 1,\nColumn 1",
+        "automation_id": "ContentTextBlock",
+        "index": 0
+      }
+    ],
+    "control_type": "Text",
+    "automation_id": "ContentTextBlock",
+    "bounding_rect": {
+      "left": 515,
+      "bottom": 1406,
+      "top": 1382,
+      "right": 603,
+      "height": 24,
+      "width": 88
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "0 characters",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 4
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Text",
+        "name": "0 characters",
+        "automation_id": "ContentTextBlock",
+        "index": 0
+      }
+    ],
+    "control_type": "Text",
+    "automation_id": "ContentTextBlock",
+    "bounding_rect": {
+      "left": 649,
+      "bottom": 1406,
+      "top": 1382,
+      "right": 747,
+      "height": 24,
+      "width": 98
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Plain text",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 4
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Text",
+        "name": "Plain text",
+        "automation_id": "ContentTextBlock",
+        "index": 0
+      }
+    ],
+    "control_type": "Text",
+    "automation_id": "ContentTextBlock",
+    "bounding_rect": {
+      "left": 952,
+      "bottom": 1418,
+      "top": 1370,
+      "right": 1045,
+      "height": 48,
+      "width": 93
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Zoom",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 4
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Text",
+        "name": "Zoom",
+        "automation_id": "ContentTextBlock",
+        "index": 0
+      }
+    ],
+    "control_type": "Text",
+    "automation_id": "ContentTextBlock",
+    "bounding_rect": {
+      "left": 1570,
+      "bottom": 1406,
+      "top": 1382,
+      "right": 1617,
+      "height": 24,
+      "width": 47
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": " Windows (CRLF)",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 4
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Text",
+        "name": " Windows (CRLF)",
+        "automation_id": "ContentTextBlock",
+        "index": 0
+      }
+    ],
+    "control_type": "Text",
+    "automation_id": "ContentTextBlock",
+    "bounding_rect": {
+      "left": 1672,
+      "bottom": 1406,
+      "top": 1382,
+      "right": 1808,
+      "height": 24,
+      "width": 136
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": " UTF-8",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 4
+      },
+      {
+        "control_type": "Pane",
+        "name": null,
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "Text",
+        "name": " UTF-8",
+        "automation_id": "ContentTextBlock",
+        "index": 0
+      }
+    ],
+    "control_type": "Text",
+    "automation_id": "ContentTextBlock",
+    "bounding_rect": {
+      "left": 1924,
+      "bottom": 1406,
+      "top": 1382,
+      "right": 1978,
+      "height": 24,
+      "width": 54
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "review-codex-pr154-round2.log - Notepad",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "TitleBar",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": "TitleBar",
+        "index": 0
+      }
+    ],
+    "control_type": "TitleBar",
+    "automation_id": "TitleBar",
+    "bounding_rect": {
+      "left": 493,
+      "bottom": 281,
+      "top": 247,
+      "right": 2124,
+      "height": 34,
+      "width": 1631
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "System Menu Bar",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "TitleBar",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": "TitleBar",
+        "index": 0
+      },
+      {
+        "control_type": "MenuBar",
+        "name": "System Menu Bar",
+        "automation_id": "SystemMenuBar",
+        "index": 0
+      }
+    ],
+    "control_type": "MenuBar",
+    "automation_id": "SystemMenuBar",
+    "bounding_rect": {
+      "left": 493,
+      "bottom": 280,
+      "top": 247,
+      "right": 526,
+      "height": 33,
+      "width": 33
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "System",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "TitleBar",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": "TitleBar",
+        "index": 0
+      },
+      {
+        "control_type": "MenuBar",
+        "name": "System Menu Bar",
+        "automation_id": "SystemMenuBar",
+        "index": 0
+      },
+      {
+        "control_type": "MenuItem",
+        "name": "System",
+        "automation_id": "Item 1",
+        "index": 0
+      }
+    ],
+    "control_type": "MenuItem",
+    "automation_id": "Item 1",
+    "bounding_rect": {
+      "left": 493,
+      "bottom": 280,
+      "top": 247,
+      "right": 526,
+      "height": 33,
+      "width": 33
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Minimize",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "TitleBar",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": "TitleBar",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Minimize",
+        "automation_id": "Minimize",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "Minimize",
+    "bounding_rect": {
+      "left": 1915,
+      "bottom": 281,
+      "top": 237,
+      "right": 1986,
+      "height": 44,
+      "width": 71
+    },
+    "enabled": true
+  },
+  {
+    "is_offscreen": false,
+    "name": "Maximize",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "TitleBar",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": "TitleBar",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Maximize",
+        "automation_id": "Maximize",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "Maximize",
+    "bounding_rect": {
+      "left": 1986,
+      "bottom": 281,
+      "top": 237,
+      "right": 2056,
+      "height": 44,
+      "width": 70
+    },
+    "enabled": false
+  },
+  {
+    "is_offscreen": false,
+    "name": "Close",
+    "selector": [
+      {
+        "control_type": "Window",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": null,
+        "index": 0
+      },
+      {
+        "control_type": "TitleBar",
+        "name": "review-codex-pr154-round2.log - Notepad",
+        "automation_id": "TitleBar",
+        "index": 0
+      },
+      {
+        "control_type": "Button",
+        "name": "Close",
+        "automation_id": "Close",
+        "index": 0
+      }
+    ],
+    "control_type": "Button",
+    "automation_id": "Close",
+    "bounding_rect": {
+      "left": 2056,
+      "bottom": 281,
+      "top": 237,
+      "right": 2127,
+      "height": 44,
+      "width": 71
+    },
+    "enabled": true
+  }
+]
