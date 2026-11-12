@@ -360,17 +360,31 @@ describe('Migrations and lifecycle', () => {
     assert.ok(elapsed >= 1_000, `openStore returned before the lock was released (${elapsed}ms)`);
   });
 
-  it('retries fast SQLITE_BUSY failures beyond the former 750ms ceiling', async () => {
-    const started = Date.now();
-    let attempts = 0;
-    await retrySqliteBusy(() => {
-      attempts += 1;
-      if (Date.now() - started < 800) throw new Error('database is locked');
-    }, 2_500);
+  it('retries fast SQLITE_BUSY failures beyond the former 750ms ceiling', async (t) => {
+    // Drive the backoff on a mocked clock. On the real clock a loaded machine
+    // stretches each sleep, so the attempt that lands near 750ms could already
+    // be past 800ms and succeed early, which made the attempt count depend on
+    // machine speed rather than on the retry schedule.
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+    const attemptTimes: number[] = [];
+    let settled = false;
+    const retry = retrySqliteBusy(() => {
+      attemptTimes.push(Date.now());
+      if (Date.now() < 800) throw new Error('database is locked');
+      return 'written';
+    }, 2_500).finally(() => { settled = true; });
 
-    const elapsed = Date.now() - started;
-    assert.ok(elapsed >= 800, `retry stopped after ${elapsed}ms`);
-    assert.ok(attempts >= 6, `expected at least six attempts, saw ${attempts}`);
+    // setImmediate is not mocked, so each turn lets the retry loop schedule
+    // its next sleep before the clock moves on.
+    for (let elapsed = 0; !settled && elapsed <= 2_600; elapsed += 10) {
+      await new Promise((resolve) => setImmediate(resolve));
+      if (!settled) t.mock.timers.tick(10);
+    }
+
+    assert.equal(await retry, 'written');
+    const last = attemptTimes.at(-1) ?? 0;
+    assert.ok(last >= 800, `retry stopped after ${last}ms`);
+    assert.ok(attemptTimes.length >= 6, `expected at least six attempts, saw ${attemptTimes.length} at ${attemptTimes.join(', ')}ms`);
   });
 });
 
